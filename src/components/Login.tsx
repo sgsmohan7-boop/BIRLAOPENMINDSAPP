@@ -425,15 +425,11 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
     const matchedPassClean = (matched.password || "").trim();
     const isPassValid = 
       pClean === matchedPassClean ||
-      pClean.toLowerCase() === matchedPassClean.toLowerCase() ||
-      pClean === "Password@123" ||
-      pClean === "Admin@123456" ||
-      pClean === "123456" ||
-      pClean === "admin";
+      (matchedPassClean.length > 0 && pClean.toLowerCase() === matchedPassClean.toLowerCase());
 
     if (!isPassValid) {
       setIsLoading(false);
-      setError(`Incorrect passcode for IT Person account "${matched.name}". Authorized passcode is "${matchedPassClean || "Password@123"}".`);
+      setError(`Incorrect passcode for IT Person account "${matched.name}". Please enter the correct account password.`);
       return;
     }
 
@@ -524,16 +520,10 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
       const matchedPass = (mgmtFound.password || "").trim();
       const isPassValid = 
         mPassClean === matchedPass || 
-        mPassClean.toLowerCase() === matchedPass.toLowerCase() ||
-        mPassClean === "birla@2026" || 
-        mPassClean === "1234" || 
-        mPassClean === "radhika" || 
-        mPassClean === "Password@111" ||
-        mPassClean === "Password@123" ||
-        mgmtFound.username.toLowerCase() === "radhika";
+        (matchedPass.length > 0 && mPassClean.toLowerCase() === matchedPass.toLowerCase());
 
       if (!isPassValid) {
-        setError(`Incorrect Password for ${mgmtFound.name}! Authorized password is "${matchedPass || "birla@2026"}".`);
+        setError(`Incorrect Password for ${mgmtFound.name}! Please enter the correct password for this account.`);
         return;
       }
     }
@@ -694,17 +684,10 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
     const matchedPass = (found.password || "").trim();
     const isPassValid = 
       enteredPass === matchedPass || 
-      enteredPass.toLowerCase() === matchedPass.toLowerCase() ||
-      enteredPass === "1234" || 
-      enteredPass === "radhika" || 
-      enteredPass === "Password@111" || 
-      enteredPass === "Password@101" ||
-      enteredPass === "Password@123" ||
-      enteredPass === "admin" ||
-      found.username.toLowerCase() === "radhika";
+      (matchedPass.length > 0 && enteredPass.toLowerCase() === matchedPass.toLowerCase());
 
     if (!isPassValid) {
-      setError(`Incorrect Password for ${found.name}! Authorized password is "${matchedPass || "Password@111"}". Please enter this password.`);
+      setError(`Incorrect Password for ${found.name}! Please enter the correct password set for this account.`);
       return;
     }
 
