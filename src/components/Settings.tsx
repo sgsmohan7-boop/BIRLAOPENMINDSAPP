@@ -1054,7 +1054,7 @@ export default function SettingsView({
                     </span>
                   </h3>
                   <p className="text-[11px] text-slate-500 font-medium">
-                    మరొక IT పర్సన్‌కి సైడ్‌బార్‌లో మనకు నచ్చిన ఫీచర్లు మాత్రమే ఎంచుకొని access ఇచ్చే పర్మిషన్ కంట్రోల్
+                    Granular feature access control manager for assigning specific sidebar permissions to secondary IT personnel
                   </p>
                 </div>
               </div>
@@ -1520,7 +1520,7 @@ export default function SettingsView({
                     Create New IT Person Account & Select Allowed Features
                   </h3>
                   <p className="text-xs text-slate-500 font-medium">
-                    మరొక IT పర్సన్‌కి మనం ఎంచుకున్న సైడ్‌బార్ ఫీచర్లు మాత్రమే access ఇవ్వండి
+                    Configure individual staff login credentials and grant custom sidebar feature permissions
                   </p>
                 </div>
               </div>

@@ -2403,7 +2403,7 @@ pause
                       ⚡ Option 1: One-Click Local Ping Bridge (Keep using this Cloud UI!)
                     </p>
                     <p className="text-[11px] text-slate-700 dark:text-slate-300 font-semibold leading-relaxed">
-                      యాప్లో కూడా స్కూల్ లేదా LAN లో ఉన్న నిజమైన కెమెరాలను ఫిజికల్గా పింగ్ చేయాలనుకుంటే, మీ కంప్యూటర్లో <code className="font-mono text-indigo-600 dark:text-indigo-400 font-bold">local-bridge.js</code> అనే ఫైల్ క్రియేట్ చేసి ఈ కోడ్ పెట్టండి:
+                      To ping physical cameras located on your local school network/LAN directly from this web portal, create a file named <code className="font-mono text-indigo-600 dark:text-indigo-400 font-bold">local-bridge.js</code> on your local computer and paste the following code:
                     </p>
 
                     <pre className="p-3 bg-slate-900 text-emerald-400 rounded-xl text-[10.5px] font-mono overflow-x-auto select-all max-h-48 custom-scrollbar">

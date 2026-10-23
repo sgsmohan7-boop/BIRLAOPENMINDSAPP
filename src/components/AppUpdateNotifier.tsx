@@ -125,7 +125,7 @@ export default function AppUpdateNotifier() {
                   </span>
                 </div>
                 <p className="text-[11px] text-slate-300 leading-tight mt-0.5">
-                  కొత్త ఫీచర్స్ సిద్ధంగా ఉన్నాయి. తక్షణమే అప్‌డేట్ చేసుకోండి.
+                  New system features and performance enhancements are ready.
                 </p>
               </div>
             </div>
@@ -153,7 +153,7 @@ export default function AppUpdateNotifier() {
               onClick={() => setShowDetailsModal(true)}
               className="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-bold transition-all cursor-pointer border border-slate-700"
             >
-              What's New?
+              What&apos;s New?
             </button>
           </div>
         </div>
@@ -194,10 +194,10 @@ export default function AppUpdateNotifier() {
               <div className="p-3 bg-emerald-950/40 border border-emerald-800/40 rounded-xl text-emerald-200">
                 <p className="font-bold text-emerald-300 mb-1 flex items-center gap-1.5">
                   <CheckCircle2 size={15} />
-                  <span>ఆటోమేటిక్ అప్‌డేట్ విధానం (Seamless Update):</span>
+                  <span>Seamless Automatic Application Update:</span>
                 </p>
                 <p className="leading-relaxed">
-                  ఈ అప్‌డేట్ కోసం మీరు Play Store నుంచి మళ్లీ డౌన్‌లోడ్ చేయాల్సిన పనిలేదు. మీ డేటా లేదా లాగిన్ సెషన్ ఏదీ కోల్పోరు. క్రింది బటన్ నొక్కగానే కేవలం 1 సెకనులో కొత్త ఫీచర్లు లోడ్ అవుతాయి.
+                  No re-installation is required. Your saved data, user profiles, and active login sessions remain intact. Clicking below will instantly refresh the client application with the latest features.
                 </p>
               </div>
 

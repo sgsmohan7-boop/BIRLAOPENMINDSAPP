@@ -309,7 +309,7 @@ export default function PortalLinksModal({ isOpen, onClose, theme = "light", isE
           className="text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer"
         >
           <HelpCircle size={14} />
-          <span>{showDomainGuide ? "Hide Setup Guide" : "How to connect your .com domain? (ఎలా సెట్ చేయాలి?)"}</span>
+          <span>{showDomainGuide ? "Hide Setup Guide" : "How to connect your custom .com or Vercel domain?"}</span>
           {showDomainGuide ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
         </button>
       </div>
@@ -318,7 +318,7 @@ export default function PortalLinksModal({ isOpen, onClose, theme = "light", isE
       {linkStyle === "vercel" && (
         <div className="px-6 py-2.5 bg-cyan-950/40 border-b border-cyan-800/40 flex items-center justify-between gap-3 text-xs">
           <div className="flex items-center gap-2">
-            <span className="font-bold text-cyan-300">▲ Your Vercel Domain Name:</span>
+            <span className="font-bold text-cyan-300">▲ Your Vercel App Domain:</span>
             <input
               type="text"
               value={vercelDomain}
@@ -328,7 +328,7 @@ export default function PortalLinksModal({ isOpen, onClose, theme = "light", isE
             />
           </div>
           <span className="text-[11px] text-cyan-200/80 font-medium">
-            (Change this to your actual deployed vercel.app app URL)
+            (Enter your deployed vercel.app URL to customize links below)
           </span>
         </div>
       )}
@@ -339,7 +339,7 @@ export default function PortalLinksModal({ isOpen, onClose, theme = "light", isE
           <div className="flex items-center justify-between border-b border-indigo-800/50 pb-2">
             <h4 className="font-bold text-white text-sm flex items-center gap-2">
               <Globe className="text-cyan-400 w-4 h-4" />
-              <span>షార్ట్ లింక్స్ &amp; Vercel.app సెట్ చేసుకునే విధానం:</span>
+              <span>Domain Setup &amp; Deployment Guide:</span>
             </h4>
             <div className="flex gap-1.5">
               <button
@@ -381,7 +381,7 @@ export default function PortalLinksModal({ isOpen, onClose, theme = "light", isE
           {guideTab === "vercel" && (
             <div className="space-y-2 leading-relaxed">
               <p className="text-cyan-300 font-bold">
-                ▲ Vercel.app లో ఉచితంగా హోస్ట్ చేసి ప్రెట్టీ షార్ట్ లింక్స్ పొందడం ఎలా?
+                ▲ How to host for free on Vercel with custom clean URLs:
               </p>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 pt-1 text-slate-300">
                 <div className="p-3 bg-slate-900/90 rounded-xl border border-slate-800 space-y-1">
@@ -390,27 +390,27 @@ export default function PortalLinksModal({ isOpen, onClose, theme = "light", isE
                     1-Click Vercel Import
                   </p>
                   <p className="text-slate-400 text-[11px]">
-                    <a href="https://vercel.com/new" target="_blank" rel="noreferrer" className="text-cyan-400 underline font-bold">vercel.com/new</a> లో మీ GitHub repo ఎంచుకుని <strong>Deploy</strong> క్లిక్ చేయండి.
+                    Go to <a href="https://vercel.com/new" target="_blank" rel="noreferrer" className="text-cyan-400 underline font-bold">vercel.com/new</a>, select your GitHub repository, and click <strong>Deploy</strong>.
                   </p>
                 </div>
 
                 <div className="p-3 bg-slate-900/90 rounded-xl border border-slate-800 space-y-1">
                   <p className="font-bold text-white flex items-center gap-1.5">
                     <span className="w-5 h-5 rounded-full bg-cyan-600 text-white font-bold flex items-center justify-center text-[10px]">2</span>
-                    కాన్ఫిగరేషన్ ఫైల్
+                    Configuration Included
                   </p>
                   <p className="text-slate-400 text-[11px]">
-                    మనం ప్రాజెక్ట్ లో <code className="text-emerald-400 font-mono">vercel.json</code> సిద్ధం చేశాము. అన్ని subpaths (<code className="text-cyan-300 font-mono">/counselling</code>, <code className="text-indigo-300 font-mono">/admin</code>) నేరుగా పని చేస్తాయి.
+                    The project includes <code className="text-emerald-400 font-mono">vercel.json</code> pre-configured for clean SPA subpath routing (<code className="text-cyan-300 font-mono">/counselling</code>, <code className="text-indigo-300 font-mono">/admin</code>).
                   </p>
                 </div>
 
                 <div className="p-3 bg-slate-900/90 rounded-xl border border-slate-800 space-y-1">
                   <p className="font-bold text-white flex items-center gap-1.5">
                     <span className="w-5 h-5 rounded-full bg-cyan-600 text-white font-bold flex items-center justify-center text-[10px]">3</span>
-                    షార్ట్ Vercel URL
+                    Instant Live Subdomains
                   </p>
                   <p className="text-slate-400 text-[11px]">
-                    మీరు కోరుకున్న పేరుతో <code className="text-cyan-300 font-mono">your-school.vercel.app</code> వంటి షార్ట్ యుఆర్‌ఎల్ వస్తుంది!
+                    Your portal will immediately go live at <code className="text-cyan-300 font-mono">your-school.vercel.app</code> with zero manual server setup!
                   </p>
                 </div>
               </div>
@@ -420,26 +420,26 @@ export default function PortalLinksModal({ isOpen, onClose, theme = "light", isE
           {guideTab === "customDomain" && (
             <div className="space-y-2 leading-relaxed">
               <p className="text-emerald-300 font-bold">
-                ✓ అవును, ఖచ్చితంగా సెట్ చేయవచ్చు! దీనికి కావలసిన స్టెప్స్:
+                ✓ Connecting a Custom Domain (e.g., birlaopenminds.com):
               </p>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 pt-1 text-slate-300">
                 <div className="p-3 bg-slate-900/90 rounded-xl border border-slate-800 space-y-1">
                   <p className="font-bold text-white flex items-center gap-1.5">
                     <span className="w-5 h-5 rounded-full bg-indigo-600 text-white font-bold flex items-center justify-center text-[10px]">1</span>
-                    డొమైన్ రిజిస్టర్ చేసుకోండి
+                    Register Custom Domain
                   </p>
                   <p className="text-slate-400 text-[11px]">
-                    GoDaddy, Hostinger లేదా Namecheap లో <strong>birlaopenmindscounselling.com</strong> లేదా <strong>birlaopenminds.com</strong> కొనుగోలు చేయండి (వార్షిక రుసుము ~₹499).
+                    Purchase <strong>birlaopenminds.com</strong> on GoDaddy, Namecheap, or Google Domains.
                   </p>
                 </div>
 
                 <div className="p-3 bg-slate-900/90 rounded-xl border border-slate-800 space-y-1">
                   <p className="font-bold text-white flex items-center gap-1.5">
                     <span className="w-5 h-5 rounded-full bg-indigo-600 text-white font-bold flex items-center justify-center text-[10px]">2</span>
-                    DNS లో CNAME పాయింట్ చేయండి
+                    Configure DNS CNAME Record
                   </p>
                   <p className="text-slate-400 text-[11px]">
-                    మీ Domain DNS Settings లో CNAME Record యాడ్ చేసి, Target గా ఈ క్రింది లైవ్ హోస్ట్ ఇవ్వండి:<br />
+                    Add a CNAME record in your domain DNS management pointing to your deployment target:<br />
                     <code className="text-emerald-400 font-mono text-[10px] break-all">{cleanHost}</code>
                   </p>
                 </div>
@@ -447,10 +447,10 @@ export default function PortalLinksModal({ isOpen, onClose, theme = "light", isE
                 <div className="p-3 bg-slate-900/90 rounded-xl border border-slate-800 space-y-1">
                   <p className="font-bold text-white flex items-center gap-1.5">
                     <span className="w-5 h-5 rounded-full bg-indigo-600 text-white font-bold flex items-center justify-center text-[10px]">3</span>
-                    ఆటోమేటిక్ డిటెక్షన్
+                    Automatic Department Detection
                   </p>
                   <p className="text-slate-400 text-[11px]">
-                    ఈ యాప్‌లో డొమైన్ బేస్డ్ రూటింగ్ ఇప్పటికే సిద్ధం చేయబడింది. ఎవరైనా <code className="text-orange-300 font-mono">birlaopenmindscounselling.com</code> ఓపెన్ చేస్తే నేరుగా కౌన్సెలింగ్ పోర్టల్ లోకి వెళతారు!
+                    Domain-based routing automatically redirects requests to <code className="text-orange-300 font-mono">counselling.birlaopenminds.com</code> directly into the admissions desk portal.
                   </p>
                 </div>
               </div>
@@ -460,11 +460,11 @@ export default function PortalLinksModal({ isOpen, onClose, theme = "light", isE
           {guideTab === "shortener" && (
             <div className="space-y-2 leading-relaxed">
               <p className="text-amber-300 font-bold">
-                ✂️ ఖర్చు లేకుండా 30 సెకన్లలో షార్ట్ లింక్స్ (Bitly / TinyURL) తయారు చేసుకునే విధానం:
+                ✂️ Free Custom Short Links via Bitly or TinyURL:
               </p>
               <div className="p-3 bg-slate-900/90 rounded-xl border border-slate-800 space-y-2">
                 <p className="text-slate-300">
-                  మీరు డొమైన్ కొనకుండానే ఉచితంగా <strong>bit.ly</strong> లేదా <strong>tinyurl.com</strong> ద్వారా మీ స్కూల్ పేరుతో బ్రాండెడ్ షార్ట్ లింక్స్ తయారు చేసుకోవచ్చు:
+                  Generate free branded short links via <strong>bit.ly</strong> or <strong>tinyurl.com</strong> pointing directly to department subpaths:
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 font-mono text-xs">
                   <div className="p-2 bg-slate-950 rounded-lg border border-slate-800 text-emerald-300 flex items-center justify-between">
@@ -495,7 +495,7 @@ export default function PortalLinksModal({ isOpen, onClose, theme = "light", isE
         <Lock className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
         <div className="leading-relaxed">
           <span className="font-bold">Role-Isolated Security: </span>
-          సిబ్బందికి వారి కేటాయించిన లింక్ (ఉదాహరణకు <strong>/counselling</strong>) మాత్రమే పంపండి. ఆ లింక్ ద్వారా లాగిన్ అయితే వారు ఇతర పోర్టల్స్ లేదా అడ్మిన్ టూల్స్ లోకి ప్రవేశించలేరు.
+          Provide staff members with their dedicated department link (e.g. <strong>/counselling</strong>). Users authenticated via department links cannot access administrative settings or other portal modules.
         </div>
       </div>
 

@@ -229,25 +229,25 @@ export default function AppInstallModal({ isOpen, onClose }: AppInstallModalProp
                 <div className="space-y-3 flex-1 text-xs text-slate-300">
                   <div className="p-2.5 rounded-lg bg-emerald-950/40 border border-emerald-800/40 text-emerald-200 font-medium">
                     <p className="font-bold text-emerald-300 mb-1">
-                      💡 Android Phone లో యాప్ గా ఎలా ఇన్స్టాల్ చేయాలి? (3 Simple Steps):
+                      💡 How to Install as an App on Android (3 Simple Steps):
                     </p>
                     <p className="leading-relaxed">
-                      మీ మొబైల్ లో Google Chrome బ్రౌజర్ లో ఈ లింక్ ఓపెన్ చేయండి. వెంటనే &quot;Install App&quot; ఆప్షన్ వస్తుంది. ఇన్స్టాల్ చేశాక ఇది సాధారణ Play Store యాప్ లాగే మీ ఫోన్ హోమ్ స్క్రీన్ పై Icon తో కనిపిస్తుంది.
+                      Open this portal link using Google Chrome on your mobile device. Tap &quot;Install App&quot; to add it directly to your home screen, functioning like a native Play Store application.
                     </p>
                   </div>
 
                   <div className="space-y-2">
                     <div className="flex items-start gap-2">
                       <span className="w-5 h-5 rounded-full bg-indigo-600 text-white font-bold flex items-center justify-center text-[10px] shrink-0 mt-0.5">1</span>
-                      <p>ఫోన్ కెమెరాతో పక్కన ఉన్న <strong>QR Code</strong> స్కాన్ చేయండి లేదా క్రోమ్ లో లింక్ ఓపెన్ చేయండి.</p>
+                      <p>Scan the adjacent <strong>QR Code</strong> with your phone camera or open the link in Chrome.</p>
                     </div>
                     <div className="flex items-start gap-2">
                       <span className="w-5 h-5 rounded-full bg-indigo-600 text-white font-bold flex items-center justify-center text-[10px] shrink-0 mt-0.5">2</span>
-                      <p>Chrome టాప్ రైట్ కార్నర్ లోని <strong>మూడు చుక్కలు (⋮ Menu)</strong> పై క్లిక్ చేయండి.</p>
+                      <p>Tap the <strong>overflow menu (⋮ Menu)</strong> at the top right corner of Chrome.</p>
                     </div>
                     <div className="flex items-start gap-2">
                       <span className="w-5 h-5 rounded-full bg-indigo-600 text-white font-bold flex items-center justify-center text-[10px] shrink-0 mt-0.5">3</span>
-                      <p><strong>&quot;Install App&quot;</strong> లేదా <strong>&quot;Add to Home Screen&quot;</strong> పై ట్యాప్ చేయండి. అయిపోయింది!</p>
+                      <p>Tap <strong>&quot;Install App&quot;</strong> or <strong>&quot;Add to Home Screen&quot;</strong>. Setup complete!</p>
                     </div>
                   </div>
 
@@ -257,7 +257,7 @@ export default function AppInstallModal({ isOpen, onClose }: AppInstallModalProp
                       className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                     >
                       {copied ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
-                      <span>{copied ? "Link Copied!" : "Copy Portal Link for WhatsApp"}</span>
+                      <span>{copied ? "Link Copied!" : "Copy Portal Link for Sharing"}</span>
                     </button>
                     <a
                       href={targetPublicUrl}
@@ -280,38 +280,38 @@ export default function AppInstallModal({ isOpen, onClose }: AppInstallModalProp
               <div className="p-4 bg-slate-950/60 rounded-xl border border-slate-800 text-xs text-slate-300 space-y-3">
                 <div className="p-3 bg-sky-950/40 border border-sky-800/40 rounded-lg text-sky-200">
                   <h4 className="font-bold text-sky-300 mb-1 flex items-center gap-1.5">
-                    <Laptop size={15} /> Windows PC & Laptop లో డెస్క్టాప్ యాప్ గా ఎలా ఇన్స్టాల్ చేయాలి?
+                    <Laptop size={15} /> How to Install as a Desktop Application on Windows / Mac?
                   </h4>
                   <p className="leading-relaxed">
-                    Google Chrome లేదా Microsoft Edge బ్రౌజర్ ద్వారా ఈ పోర్టల్ ని ఒక క్లిక్ తో ఇండిపెండెంట్ డెస్క్టాప్ సాఫ్ట్వేర్ (.exe లాగే) ఇన్స్టాల్ చేసుకోవచ్చు. ఇది బ్రౌజర్ URL బార్ లేకుండా సొంత విండోలో నడుస్తుంది మరియు డెస్క్టాప్ పై Birla BOMIS ఐకాన్ క్రియేట్ అవుతుంది.
+                    Install this portal as an independent desktop application via Google Chrome or Microsoft Edge. It runs in its own dedicated window without browser navigation bars and creates a desktop shortcut.
                   </p>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
                   <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 space-y-2">
                     <p className="font-bold text-white flex items-center gap-1.5">
-                      <span className="text-indigo-400">Method A:</span> URL Bar Icon తో 1-Click
+                      <span className="text-indigo-400">Method A:</span> 1-Click URL Bar Icon
                     </p>
                     <p className="text-slate-400 leading-relaxed">
-                      ఈ పేజీలో Chrome / Edge పైభాగంలో URL చివర (Right side) ఒక చిన్న <strong>కంప్యూటర్ ఐకాన్ (Install app)</strong> లేదా <strong>ప్లస్ గుర్తు (+)</strong> కనిపిస్తుంది. దానిపై క్లిక్ చేసి <strong>&quot;Install&quot;</strong> కొట్టండి.
+                      Look for a small <strong>Desktop Icon (Install App)</strong> or <strong>Plus (+) symbol</strong> on the right side of the address bar in Chrome/Edge, then click <strong>&quot;Install&quot;</strong>.
                     </p>
                   </div>
 
                   <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 space-y-2">
                     <p className="font-bold text-white flex items-center gap-1.5">
-                      <span className="text-indigo-400">Method B:</span> Browser Menu ద్వారా
+                      <span className="text-indigo-400">Method B:</span> Via Browser Menu
                     </p>
                     <p className="text-slate-400 leading-relaxed">
-                      Chrome మెనూ (⋮) క్లిక్ చేసి <strong>&quot;Save and share&quot;</strong> &gt; <strong>&quot;Install Birla BOMIS...&quot;</strong> లేదా Edge లో <strong>&quot;Apps&quot; &gt; &quot;Install this site as an app&quot;</strong> ఎంచుకోండి.
+                      Click the Chrome menu (⋮) &gt; <strong>&quot;Save and share&quot;</strong> &gt; <strong>&quot;Install Birla BOMIS...&quot;</strong> or in Edge go to <strong>&quot;Apps&quot; &gt; &quot;Install this site as an app&quot;</strong>.
                     </p>
                   </div>
                 </div>
 
                 <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 flex items-center justify-between">
                   <div>
-                    <p className="font-bold text-white text-xs">డెస్క్టాప్ ఫీచర్స్:</p>
+                    <p className="font-bold text-white text-xs">Desktop Application Features:</p>
                     <p className="text-[11px] text-slate-400">
-                      టాస్క్‌బార్ కి పిన్ చేసుకోవచ్చు, ఫుల్ స్క్రీన్ ఆడియో రికార్డింగ్, ఆటోమేటిక్ క్యాష్ & వేగవంతమైన పనితీరు.
+                      Taskbar pinning, full-screen audio recording support, automatic caching, and enhanced responsiveness.
                     </p>
                   </div>
                   <button
@@ -331,10 +331,10 @@ export default function AppInstallModal({ isOpen, onClose }: AppInstallModalProp
               <div className="p-4 bg-slate-950/60 rounded-xl border border-slate-800 space-y-3">
                 <div className="p-3 bg-amber-950/40 border border-amber-800/40 rounded-lg text-amber-200">
                   <h4 className="font-bold text-amber-300 mb-1 flex items-center gap-1.5">
-                    <Layers size={15} /> Play Store లేదా WhatsApp ద్వారా పంపే డైరెక్ట్ .APK ఫైల్ ఎలా తయారు చేయాలి?
+                    <Layers size={15} /> How to Build a Direct .APK for Play Store or WhatsApp Distribution?
                   </h4>
                   <p className="leading-relaxed">
-                    ఈ వెబ్ యాప్ లో ఇప్పటికే <strong>manifest.json</strong>, <strong>Service Worker (sw.js)</strong>, మరియు హై-రెసొల్యూషన్ <strong>192px/512px Icons</strong> కాన్ఫిగర్ చేయబడి ఉన్నాయి. కాబట్టి ఉచితంగా 2 నిమిషాల్లో .APK లేదా .AAB ఫైల్ డౌన్లోడ్ చేసుకోవచ్చు:
+                    This web application is pre-configured with a valid <strong>manifest.json</strong>, <strong>Service Worker (sw.js)</strong>, and high-resolution <strong>192px/512px app icons</strong> for instant native packaging:
                   </p>
                 </div>
 
@@ -342,18 +342,18 @@ export default function AppInstallModal({ isOpen, onClose }: AppInstallModalProp
                   <div className="p-3.5 bg-slate-900 rounded-xl border border-slate-800 space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="font-bold text-white text-sm flex items-center gap-1.5">
-                        <span className="text-amber-400">Option 1 (ఉచితం & సులువు):</span> PWABuilder (Microsoft Official)
+                        <span className="text-amber-400">Option 1 (Recommended):</span> PWABuilder (Microsoft Official)
                       </span>
                       <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[10px] font-bold">
                         100% Free
                       </span>
                     </div>
                     <ol className="list-decimal pl-4 space-y-1 text-slate-400">
-                      <li>మీ బ్రౌజర్ లో <strong>https://www.pwabuilder.com</strong> వెబ్‌సైట్ ఓపెన్ చేయండి.</li>
-                      <li>ఈ యాప్ యొక్క లైవ్ URL లింక్ ని అక్కడ పేస్ట్ చేసి <strong>&quot;Start&quot;</strong> క్లిక్ చేయండి.</li>
-                      <li>అది PWA స్కోర్ ని వెరిఫై చేసి (100% Ready) చూపిస్తుంది.</li>
-                      <li><strong>&quot;Package for Stores&quot;</strong> పై క్లిక్ చేసి <strong>&quot;Android&quot;</strong> ఎంచుకోండి.</li>
-                      <li>వెంటనే మీకు <strong>Signed APK</strong> మరియు Google Play Store కోసం <strong>.AAB (Android App Bundle)</strong> ఫైల్స్ డౌన్లోడ్ అవుతాయి!</li>
+                      <li>Open <strong>https://www.pwabuilder.com</strong> in your browser.</li>
+                      <li>Paste this application&apos;s live URL and click <strong>&quot;Start&quot;</strong>.</li>
+                      <li>Verify the PWA capability score (100% Ready).</li>
+                      <li>Click <strong>&quot;Package for Stores&quot;</strong> and select <strong>&quot;Android&quot;</strong>.</li>
+                      <li>Download your <strong>Signed APK</strong> and Google Play Store <strong>.AAB (Android App Bundle)</strong> files!</li>
                     </ol>
                     <div className="pt-1">
                       <a 
@@ -370,10 +370,10 @@ export default function AppInstallModal({ isOpen, onClose }: AppInstallModalProp
 
                   <div className="p-3.5 bg-slate-900 rounded-xl border border-slate-800 space-y-2">
                     <span className="font-bold text-white text-sm flex items-center gap-1.5">
-                      <span className="text-indigo-400">Option 2 (డెవలపర్ పద్ధతి):</span> Capacitor Native Build
+                      <span className="text-indigo-400">Option 2 (Developer Mode):</span> Capacitor Native Build
                     </span>
                     <p className="text-slate-400">
-                      Android Studio ద్వారా బిల్డ్ చేయాలనుకుంటే కమాండ్ లైన్ లో ఈ క్రింది కమాండ్స్ రన్ చేయండి:
+                      To build via Android Studio locally, run the following CLI commands:
                     </p>
                     <div className="bg-slate-950 p-2.5 rounded-lg font-mono text-[11px] text-emerald-400 overflow-x-auto">
                       npm install @capacitor/core @capacitor/cli @capacitor/android<br />
@@ -394,23 +394,23 @@ export default function AppInstallModal({ isOpen, onClose }: AppInstallModalProp
               <div className="p-4 bg-slate-950/60 rounded-xl border border-slate-800 space-y-3">
                 <div className="p-3 bg-purple-950/40 border border-purple-800/40 rounded-lg text-purple-200">
                   <h4 className="font-bold text-purple-300 mb-1 flex items-center gap-1.5">
-                    <Terminal size={15} /> Windows డెస్క్టాప్ .EXE ఇన్స్టాలర్ తయారు చేయడం ఎలా?
+                    <Terminal size={15} /> How to Build a Windows Desktop .EXE Installer?
                   </h4>
                   <p className="leading-relaxed">
-                    ప్యాకేజీలో ఇప్పటికే <strong>Electron</strong> మరియు <strong>electron-builder</strong> స్క్రిప్ట్ లు పొందుపరచబడ్డాయి:
+                    The package includes pre-configured <strong>Electron</strong> and <strong>electron-builder</strong> deployment scripts:
                   </p>
                 </div>
 
                 <div className="p-3.5 bg-slate-900 rounded-xl border border-slate-800 space-y-2">
-                  <p className="font-bold text-white">కమాండ్ లైన్ లో రన్ చేయడానికి:</p>
+                  <p className="font-bold text-white">Command Line Execution:</p>
                   <div className="bg-slate-950 p-3 rounded-lg font-mono text-xs text-purple-300 space-y-1">
-                    <p className="text-slate-500"># డెస్క్టాప్ యాప్ ని లోకల్ గా టెస్ట్ చేయడానికి:</p>
+                    <p className="text-slate-500"># Test desktop app locally:</p>
                     <p className="text-emerald-400">npm run electron:dev</p>
-                    <p className="text-slate-500 mt-2"># Windows .exe ఇన్స్టాలర్ ని బిల్డ్ చేయడానికి:</p>
+                    <p className="text-slate-500 mt-2"># Build Windows .exe installer:</p>
                     <p className="text-emerald-400">npm run electron:build</p>
                   </div>
                   <p className="text-slate-400 text-[11px]">
-                    ఇది రన్ చేసిన తర్వాత <strong>electron-app/</strong> ఫోల్డర్ లో <strong>Birla CCTV Monitor Setup.exe</strong> ఫైల్ క్రియేట్ అవుతుంది. దాన్ని డబుల్ క్లిక్ చేసి ఏ Windows కంప్యూటర్ లోనైనా ఇన్స్టాల్ చేసుకోవచ్చు.
+                    After execution, the standalone installer <strong>Birla CCTV Monitor Setup.exe</strong> will be generated inside the <strong>electron-app/</strong> directory for installation on any Windows PC.
                   </p>
                 </div>
               </div>
@@ -423,10 +423,10 @@ export default function AppInstallModal({ isOpen, onClose }: AppInstallModalProp
               <div className="p-4 bg-slate-950/60 rounded-xl border border-slate-800 space-y-3">
                 <div className="p-3 bg-pink-950/40 border border-pink-800/40 rounded-lg text-pink-200">
                   <h4 className="font-bold text-pink-300 mb-1 flex items-center gap-1.5">
-                    <Apple size={15} /> iPhone / iPad (Safari) లో ఎలా ఇన్స్టాల్ చేయాలి?
+                    <Apple size={15} /> How to Install on iPhone / iPad (Safari PWA)?
                   </h4>
                   <p className="leading-relaxed">
-                    Apple iOS లో Safari బ్రౌజర్ ద్వారా నేరుగా హోమ్ స్క్రీన్ కి యాప్ ని యాడ్ చేసుకోవచ్చు:
+                    Install directly to your iOS Home Screen via Safari web application features:
                   </p>
                 </div>
 
@@ -434,24 +434,24 @@ export default function AppInstallModal({ isOpen, onClose }: AppInstallModalProp
                   <div className="flex items-start gap-2.5 p-2 bg-slate-900 rounded-lg border border-slate-800">
                     <span className="w-6 h-6 rounded-full bg-pink-600 text-white font-bold flex items-center justify-center text-xs shrink-0 mt-0.5">1</span>
                     <div>
-                      <p className="font-bold text-white">Safari బ్రౌజర్ లో ఓపెన్ చేయండి</p>
-                      <p className="text-slate-400">మీ iPhone లో డీఫాల్ట్ Safari బ్రౌజర్ లో ఈ పోర్టల్ లింక్ ఓపెన్ చేయండి.</p>
+                      <p className="font-bold text-white">Open in Safari</p>
+                      <p className="text-slate-400">Open this portal link using the default Safari web browser on your iPhone.</p>
                     </div>
                   </div>
 
                   <div className="flex items-start gap-2.5 p-2 bg-slate-900 rounded-lg border border-slate-800">
                     <span className="w-6 h-6 rounded-full bg-pink-600 text-white font-bold flex items-center justify-center text-xs shrink-0 mt-0.5">2</span>
                     <div>
-                      <p className="font-bold text-white">Share బటన్ ట్యాప్ చేయండి</p>
-                      <p className="text-slate-400">స్క్రీన్ కింద కనిపించే <strong>Share ఐకాన్</strong> (బాణం గుర్తుతో ఉన్న చతురస్రం) పై ట్యాప్ చేయండి.</p>
+                      <p className="font-bold text-white">Tap Share Button</p>
+                      <p className="text-slate-400">Tap the <strong>Share Icon</strong> (square with an upward arrow) at the bottom toolbar.</p>
                     </div>
                   </div>
 
                   <div className="flex items-start gap-2.5 p-2 bg-slate-900 rounded-lg border border-slate-800">
                     <span className="w-6 h-6 rounded-full bg-pink-600 text-white font-bold flex items-center justify-center text-xs shrink-0 mt-0.5">3</span>
                     <div>
-                      <p className="font-bold text-white">&quot;Add to Home Screen&quot; ఎంచుకోండి</p>
-                      <p className="text-slate-400">కిందకి స్క్రోల్ చేసి <strong>&quot;Add to Home Screen&quot;</strong> నొక్కండి, ఆపై టాప్ రైట్ లో <strong>&quot;Add&quot;</strong> కొట్టండి.</p>
+                      <p className="font-bold text-white">Select &quot;Add to Home Screen&quot;</p>
+                      <p className="text-slate-400">Scroll down and tap <strong>&quot;Add to Home Screen&quot;</strong>, then confirm by tapping <strong>&quot;Add&quot;</strong>.</p>
                     </div>
                   </div>
                 </div>
