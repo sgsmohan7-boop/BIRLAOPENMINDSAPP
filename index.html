@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="application-name" content="Birla BOMIS" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="icon" type="image/png" href="/birla_open_minds_logo.png" />
+    <link rel="shortcut icon" type="image/png" href="/birla_open_minds_logo.png" />
+    <link rel="apple-touch-icon" href="/birla_open_minds_logo.png" />
+    <meta name="theme-color" content="#4f46e5" />
+    <title>Birla Institute IT Helpdesk</title>
+    <meta name="description" content="A comprehensive IT command center for managing assets, tickets, rooms, AI-powered IT troubleshooting, and Birla Institute CCTV dynamic attendance monitoring." />
+    <meta property="og:title" content="Birla Institute IT Helpdesk" />
+    <meta property="og:description" content="A comprehensive IT command center for managing assets, tickets, rooms, AI-powered IT troubleshooting, and Birla Institute CCTV dynamic attendance monitoring." />
+    <meta property="og:type" content="website" />
+    
+    <!-- Instant Theme Match Script to Prevent White Flash -->
+    <script>
+      (function() {
+        try {
+          const theme = localStorage.getItem("santinostech_theme") || "light";
+          if (theme === "dark") {
+            document.documentElement.classList.add("dark");
+            document.addEventListener("DOMContentLoaded", () => {
+              document.body.classList.add("dark");
+            });
+          }
+        } catch (e) {}
+      })();
+    </script>
+
+    <!-- Sleek Pre-Loader Styling -->
+    <style>
+      html, body {
+        background-color: #f8fafc;
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        min-height: 100%;
+        overflow-x: hidden;
+      }
+      html.dark, body.dark {
+        background-color: #0f172a;
+      }
+      #root {
+        width: 100%;
+        min-height: 100%;
+      }
+      
+      #splash-screen {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 999999;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      }
+      
+      .splash-logo {
+        width: 72px;
+        height: 72px;
+        margin-bottom: 16px;
+        border-radius: 12px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.06);
+        animation: pulse-logo 2s infinite ease-in-out;
+      }
+      
+      .splash-title {
+        font-size: 1.15rem;
+        font-weight: 700;
+        letter-spacing: -0.025em;
+        margin-bottom: 4px;
+        color: #1e293b;
+        text-align: center;
+      }
+      
+      .splash-subtitle {
+        font-size: 0.8rem;
+        font-weight: 500;
+        color: #64748b;
+        margin-bottom: 24px;
+        text-align: center;
+      }
+      
+      .spinner {
+        width: 22px;
+        height: 22px;
+        border: 2px solid #e2e8f0;
+        border-top: 2px solid #4f46e5;
+        border-radius: 50%;
+        animation: spin-loader 0.8s linear infinite;
+      }
+      
+      html.dark .splash-title {
+        color: #f8fafc;
+      }
+      html.dark .splash-subtitle {
+        color: #94a3b8;
+      }
+      html.dark .spinner {
+        border-color: #334155;
+        border-top-color: #6366f1;
+      }
+      
+      @keyframes spin-loader {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+      @keyframes pulse-logo {
+        0%, 100% { transform: scale(1); opacity: 0.9; }
+        50% { transform: scale(1.04); opacity: 1; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <!-- Splash screen inside #root (automatically unmounted once React loads) -->
+      <div id="splash-screen">
+        <img src="/it_pwa_icon.png" alt="BOMIS IT Helpdesk" class="splash-logo" onerror="this.style.display='none'" />
+        <div class="splash-title">BOMIS Helpdesk</div>
+        <div class="splash-subtitle">Enterprise Command Center</div>
+        <div class="spinner"></div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+    <script>
+      // Capture PWA installation prompt globally to trigger instantly on click
+      window.deferredPrompt = null;
+      window.addEventListener("beforeinstallprompt", (e) => {
+        // Prevent default browser installation bar from showing automatically
+        e.preventDefault();
+        // Stash the event so it can be triggered directly by clicking buttons!
+        window.deferredPrompt = e;
+        console.log("[PWA] Captured beforeinstallprompt event globally.");
+        // Notify React components to render the install buttons
+        window.dispatchEvent(new CustomEvent("pwa-prompt-available"));
+      });
+
+      // Register Progressive Web App Service Worker for Android & Desktop installability
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').then((reg) => {
+            console.log('[PWA] Service Worker registered successfully:', reg.scope);
+
+            // Check for new updates periodically (every 3 minutes) & on tab focus
+            setInterval(() => {
+              reg.update().catch(() => {});
+            }, 3 * 60 * 1000);
+
+            window.addEventListener('focus', () => {
+              reg.update().catch(() => {});
+            });
+
+            reg.addEventListener('updatefound', () => {
+              const newWorker = reg.installing;
+              if (newWorker) {
+                newWorker.addEventListener('statechange', () => {
+                  if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                    console.log('[PWA] New update detected on server!');
+                    window.dispatchEvent(new CustomEvent('app-new-version-available', {
+                      detail: { registration: reg }
+                    }));
+                  }
+                });
+              }
+            });
+          }).catch((err) => {
+            console.warn('[PWA] Service Worker registration notice:', err);
+          });
+        });
+      }
+    </script>
+  </body>
+</html>
+

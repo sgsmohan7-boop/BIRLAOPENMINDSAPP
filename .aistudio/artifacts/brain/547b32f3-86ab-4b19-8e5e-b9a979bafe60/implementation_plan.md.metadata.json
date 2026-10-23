@@ -1,0 +1,6 @@
+{
+  "summary": "Implementation plan for simplifying and enhancing Admission Data visibility for School Managers in the Management Portal, featuring a clean Executive Admissions Register table, status and counsellor filters, quick search, export to CSV, print slip shortcut, and toggleable grade pipeline matrix.",
+  "updatedAt": "2026-10-15T06:56:30.739025379Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

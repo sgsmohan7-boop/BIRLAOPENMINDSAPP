@@ -1,0 +1,172 @@
+{
+  "entities": {
+    "Ticket": {
+      "title": "Ticket",
+      "description": "IT Support Ticket",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "status": { "type": "string" },
+        "priority": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "issueType": { "type": "string" },
+        "roomOrBuilding": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "branch": { "type": "string" }
+      }
+    },
+    "InventoryItem": {
+      "title": "InventoryItem",
+      "description": "Asset or Inventory Item",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "itemName": { "type": "string" },
+        "category": { "type": "string" }
+      }
+    },
+    "Room": {
+      "title": "Room",
+      "description": "School Room setup",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" }
+      }
+    },
+    "EmployeeAllocation": {
+      "title": "EmployeeAllocation",
+      "description": "Employee Asset Allocation",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" }
+      }
+    },
+    "WarrantyContract": {
+      "title": "WarrantyContract",
+      "description": "Warranty or AMC contract",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" }
+      }
+    },
+    "SystemMetadata": {
+      "title": "SystemMetadata",
+      "description": "System operational metadata",
+      "type": "object",
+      "properties": {
+        "lastWipedAt": { "type": "number" }
+      }
+    },
+    "TestConnection": {
+      "title": "TestConnection",
+      "description": "Health check connection document",
+      "type": "object",
+      "properties": {
+        "status": { "type": "string" }
+      }
+    },
+    "CounsellingEnquiry": {
+      "title": "CounsellingEnquiry",
+      "description": "Parent admissions counselling inquiry and registration document",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "enquiryNo": { "type": "string" },
+        "studentName": { "type": "string" },
+        "applyingForClass": { "type": "string" },
+        "counsellorId": { "type": "string" },
+        "counsellorName": { "type": "string" },
+        "admissionStatus": { "type": "string" },
+        "contactNo": { "type": "string" }
+      }
+    },
+    "DeletedCounsellingForm": {
+      "title": "DeletedCounsellingForm",
+      "description": "Tombstone record of deleted admissions inquiry form",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "enquiryNo": { "type": "string" },
+        "deletedAt": { "type": "number" }
+      }
+    },
+    "CounsellorAccount": {
+      "title": "CounsellorAccount",
+      "description": "Counsellor staff login account profile",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "username": { "type": "string" },
+        "roleTitle": { "type": "string" }
+      }
+    },
+    "DeletedCounsellorAccount": {
+      "title": "DeletedCounsellorAccount",
+      "description": "Tombstone record of deleted counsellor staff account",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "username": { "type": "string" },
+        "deletedAt": { "type": "number" }
+      }
+    }
+  },
+  "firestore": {
+    "/test/{testId}": {
+      "schema": "TestConnection",
+      "description": "Health check ping endpoint"
+    },
+    "/counselling_forms/{formId}": {
+      "schema": "CounsellingEnquiry",
+      "description": "Live admissions counselling enquiries"
+    },
+    "/counselling/{formId}": {
+      "schema": "CounsellingEnquiry",
+      "description": "Mirrored admissions counselling enquiries collection"
+    },
+    "/deleted_counselling_forms/{formId}": {
+      "schema": "DeletedCounsellingForm",
+      "description": "Deleted admissions enquiry tombstone markers"
+    },
+    "/counsellor_accounts/{accountId}": {
+      "schema": "CounsellorAccount",
+      "description": "Admissions counsellor staff accounts"
+    },
+    "/deleted_counsellor_accounts/{accountId}": {
+      "schema": "DeletedCounsellorAccount",
+      "description": "Deleted counsellor staff tombstone markers"
+    },
+    "/tickets/{ticketId}": {
+      "schema": "Ticket",
+      "description": "Active tickets"
+    },
+    "/history/{historyId}": {
+      "schema": "Ticket",
+      "description": "Resolved/Archived tickets"
+    },
+    "/inventory/{itemId}": {
+      "schema": "InventoryItem",
+      "description": "Inventory list"
+    },
+    "/rooms/{roomId}": {
+      "schema": "Room",
+      "description": "Room configurations"
+    },
+    "/allocations/{allocationId}": {
+      "schema": "EmployeeAllocation",
+      "description": "Assets allocated to employees"
+    },
+    "/warranty/{warrantyId}": {
+      "schema": "WarrantyContract",
+      "description": "Asset warranties"
+    },
+    "/system_metadata/{docId}": {
+      "schema": "SystemMetadata",
+      "description": "System state"
+    }
+  }
+}

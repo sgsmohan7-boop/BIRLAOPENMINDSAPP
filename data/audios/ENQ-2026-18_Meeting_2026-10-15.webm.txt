@@ -1,0 +1,50 @@
+================================================================================
+BIRLA OPEN MINDS INTERNATIONAL SCHOOL
+GEMINI AI VOICE CONVERSATION TRANSCRIPT REPORT
+================================================================================
+Generated Date & Time : 10/15/2026 12:06 PM
+Enquiry Reference No  : ENQ-2026-18
+Student Full Name     : mohanarao
+Applying For Class    : Grade 1
+Admissions Counsellor : sravan (COUNSELLOR-02)
+Primary Spoken Language: English + Regional (Bilingual)
+Voice Transcribe Mode : Gemini AI Voice Conversation Engine (Bilingual & Standard English)
+--------------------------------------------------------------------------------
+
+[1. VERBATIM SPOKEN VOICE CONVERSATION TRANSCRIPT]:
+--------------------------------------------------------------------------------
+[00:08] • sravan: "good morning welcome to Birla open Minds please can help you today"
+
+[00:22] • Parent: "good morning I am looking for admission for my daughter she is currently in grade 4 looking for a great paper coming Academy"
+
+[00:42] • Parent: "school students recently won the National level robotic Championship"
+
+[00:46] • Parent: "that sound I want to know about the"
+
+[00:54] • Parent: "that sound"
+
+[01:12] • Parent: "that sound area the transport fees for the distance 35000"
+
+--------------------------------------------------------------------------------
+[2. PARENT / GUARDIAN CONTACT DETAILS]
+Father's Name         : N/A
+Mother's Name         : N/A
+Primary Contact No    : 8328211819
+Admission Status      : Interested
+Scheduled Follow-up   : None Set
+
+[3. MULTILINGUAL COMMUNICATION PROFILE]
+Parent Primary Spoken : English + Regional (Bilingual)
+Key Discussion Notes  : Verbatim meeting audio recorded and transcribed in Gemini voice conversation format.
+
+[4. MEETING AUDIO ARCHIVE METRICS]
+Audio Recording File  : ENQ-2026-18_Meeting_2026-10-15.webm
+Meeting Duration      : 154 seconds (02:34)
+Audio Capture Source  : Hardware Microphone
+Audio Format          : Digital Voice Recording
+Storage Engine        : IndexedDB Zero-Quota Local Vault
+Executive Audit State : Ready for Management Review & Quality Audit
+
+================================================================================
+CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
+================================================================================

@@ -1,0 +1,168 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background-color: #f8fafc;
+  color: #1e293b;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition-property: background-color, border-color, color, fill, stroke;
+  transition-duration: 200ms;
+}
+
+body.dark {
+  background-color: #0f172a;
+  color: #f8fafc;
+}
+
+/* Custom Sleek Scrollbar Styling */
+.custom-scrollbar {
+  -webkit-overflow-scrolling: touch;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #334155;
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* Smart Relational Print Setup for Work Orders, Portals, Warranties and Inventory Ledger */
+@media print {
+  html, body {
+    background-color: white !important;
+    background: white !important;
+    color: #0f172a !important;
+  }
+  
+  /* Disable screen background colors and shadows */
+  * {
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+
+  /* Ensure the body wraps cleanly without extra scrolls */
+  body {
+    position: relative !important;
+    visibility: hidden !important;
+  }
+
+  /* Make only the active print root and all its descendant contents visible */
+  #print-warranty-root,
+  #print-warranty-root *,
+  #print-employee-root,
+  #print-employee-root *,
+  #print-inventory-root,
+  #print-inventory-root *,
+  #print-executive-report-root,
+  #print-executive-report-root *,
+  #print-vendor-ledger-root,
+  #print-vendor-ledger-root *,
+  #print-work-order-root,
+  #print-work-order-root * {
+    visibility: visible !important;
+  }
+
+  /* Standard interactive web interface components are hidden completely to prevent bleed */
+  .no-print,
+  button,
+  header,
+  footer,
+  aside,
+  nav,
+  input,
+  select,
+  textarea,
+  .sidebar-container,
+  .modal-backdrop {
+    display: none !important;
+  }
+
+  /* Let the root layout display block rather than flex/grid for natural page breaks */
+  #root, #root > * {
+    display: block !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    position: static !important;
+  }
+
+  /* Absolute position the active print sheet at top 0 left 0 */
+  #print-warranty-root,
+  #print-employee-root,
+  #print-inventory-root,
+  #print-executive-report-root,
+  #print-vendor-ledger-root,
+  #print-work-order-root {
+    display: block !important;
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    z-index: 99999 !important;
+    background: white !important;
+    color: black !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  /* If a portaled print element is present directly on the body, hide #root to prevent overlay bleed */
+  body:has(#print-vendor-ledger-root) #root,
+  body:has(#print-work-order-root) #root,
+  body:has(#print-warranty-root) #root,
+  body:has(#print-employee-root) #root,
+  body:has(#print-executive-report-root) #root {
+    display: none !important;
+  }
+
+  /* Hide other parts of `#root` that are not the ancestors of our active nested print elements to avoid blank page generation */
+  body:not(:has(#print-vendor-ledger-root)):not(:has(#print-work-order-root)):not(:has(#print-warranty-root)):not(:has(#print-employee-root)):not(:has(#print-executive-report-root)) #root > :not(:has(#print-inventory-root)) {
+    display: none !important;
+  }
+}
+
+/* Default state: hidden on visual screens if they are portaled direct body children */
+#print-work-order-root,
+#print-vendor-ledger-root,
+#print-warranty-root,
+#print-employee-root,
+#print-executive-report-root {
+  display: none;
+}
+
+/* On screen, make sure print-inventory-root is displayed properly within the review overlay */
+div.print-document-canvas #print-inventory-root {
+  display: flex !important;
+}
+

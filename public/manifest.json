@@ -1,0 +1,79 @@
+{
+  "id": "/",
+  "name": "Birla Open Minds International School - Management & IT Portal",
+  "short_name": "Birla BOMIS",
+  "description": "Birla Open Minds International School Admissions Counselling, CCTV NVR Audio Vault, Student Management, and IT Helpdesk Command Center.",
+  "lang": "en-US",
+  "dir": "ltr",
+  "theme_color": "#4f46e5",
+  "background_color": "#0f172a",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui", "browser"],
+  "orientation": "any",
+  "start_url": "/",
+  "scope": "/",
+  "prefer_related_applications": false,
+  "launch_handler": {
+    "client_mode": "focus-existing"
+  },
+  "handle_links": "preferred",
+  "categories": ["education", "productivity", "management", "business"],
+  "icons": [
+    {
+      "src": "/birla_open_minds_logo.jpg",
+      "sizes": "192x192",
+      "type": "image/jpeg",
+      "purpose": "any"
+    },
+    {
+      "src": "/birla_open_minds_logo.jpg",
+      "sizes": "192x192",
+      "type": "image/jpeg",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/birla_open_minds_logo.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any"
+    },
+    {
+      "src": "/birla_open_minds_logo.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/pwa-screenshot-wide.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Birla Open Minds Desktop Command Center"
+    },
+    {
+      "src": "/pwa-screenshot-narrow.png",
+      "sizes": "720x1280",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Mobile Admissions Portal"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Admissions Counselling",
+      "short_name": "Counselling",
+      "description": "Open Admissions & Counselling Desk",
+      "url": "/?portal=counselling",
+      "icons": [{ "src": "/pwa-192x192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Management Overview",
+      "short_name": "Management",
+      "description": "Open Executive Management Desk",
+      "url": "/?portal=management",
+      "icons": [{ "src": "/pwa-192x192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ]
+}
