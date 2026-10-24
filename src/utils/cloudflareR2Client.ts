@@ -29,10 +29,10 @@ export function loadR2Credentials(): R2Credentials {
     if (raw) {
       const parsed = JSON.parse(raw);
       return {
-        bucketName: parsed.bucketName || DEFAULT_R2_CREDENTIALS.bucketName,
-        accountId: parsed.accountId || DEFAULT_R2_CREDENTIALS.accountId,
-        accessKeyId: parsed.accessKeyId || DEFAULT_R2_CREDENTIALS.accessKeyId,
-        secretAccessKey: parsed.secretAccessKey || DEFAULT_R2_CREDENTIALS.secretAccessKey
+        bucketName: (parsed.bucketName || DEFAULT_R2_CREDENTIALS.bucketName).trim(),
+        accountId: (parsed.accountId || DEFAULT_R2_CREDENTIALS.accountId).trim(),
+        accessKeyId: (parsed.accessKeyId || DEFAULT_R2_CREDENTIALS.accessKeyId).trim(),
+        secretAccessKey: (parsed.secretAccessKey || DEFAULT_R2_CREDENTIALS.secretAccessKey).trim()
       };
     }
   } catch (_) {}
@@ -41,7 +41,13 @@ export function loadR2Credentials(): R2Credentials {
 
 export function saveR2Credentials(creds: R2Credentials): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(creds));
+    const trimmed = {
+      bucketName: (creds.bucketName || DEFAULT_R2_CREDENTIALS.bucketName).trim(),
+      accountId: (creds.accountId || DEFAULT_R2_CREDENTIALS.accountId).trim(),
+      accessKeyId: (creds.accessKeyId || DEFAULT_R2_CREDENTIALS.accessKeyId).trim(),
+      secretAccessKey: (creds.secretAccessKey || DEFAULT_R2_CREDENTIALS.secretAccessKey).trim()
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(trimmed));
   } catch (_) {}
 }
 
@@ -64,10 +70,20 @@ export function createBrowserR2Client(creds: R2Credentials): S3Client | null {
   });
 }
 
+export const R2_CORS_POLICY_JSON = JSON.stringify([
+  {
+    "AllowedOrigins": ["*"],
+    "AllowedMethods": ["GET", "PUT", "POST", "DELETE", "HEAD"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+], null, 2);
+
 /**
  * Test R2 connection directly from browser
  */
-export async function testR2ConnectionDirect(creds: R2Credentials): Promise<{ success: boolean; message: string }> {
+export async function testR2ConnectionDirect(creds: R2Credentials): Promise<{ success: boolean; message: string; isCorsError?: boolean }> {
   try {
     const s3 = createBrowserR2Client(creds);
     if (!s3) {
@@ -103,9 +119,10 @@ export async function testR2ConnectionDirect(creds: R2Credentials): Promise<{ su
         message: `Bucket "${creds.bucketName}" does not exist in Cloudflare R2.`
       };
     }
-    if (errMsg.includes("Failed to fetch") || errMsg.includes("NetworkError") || errMsg.includes("CORS")) {
+    if (errMsg.includes("Failed to fetch") || errMsg.includes("NetworkError") || errMsg.includes("CORS") || errName === "TypeError") {
       return {
         success: false,
+        isCorsError: true,
         message: `Network/CORS Notice: Please ensure CORS is enabled on bucket "${creds.bucketName}" in Cloudflare R2 Settings (Allowed Origins: *).`
       };
     }

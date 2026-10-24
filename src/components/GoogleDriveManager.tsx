@@ -122,6 +122,15 @@ export default function GoogleDriveManager({
   const [isVoiceVaultExplorerOpen, setIsVoiceVaultExplorerOpen] = useState(false);
   const [isCloudflareModalOpen, setIsCloudflareModalOpen] = useState(false);
 
+  // Firebase Domain Auth Error State (for Vercel & custom deployments)
+  const [domainAuthError, setDomainAuthError] = useState<{
+    show: boolean;
+    domain: string;
+    projectId: string;
+    message: string;
+  } | null>(null);
+  const [copiedDomain, setCopiedDomain] = useState<boolean>(false);
+
   // Comprehensive Voice Vault records count combining local enquiry forms and Google Drive / Server vault files
   const audioEnquiriesCount = useMemo(() => {
     return counsellingEnquiries.filter((e) => Boolean(e.audioRecording && (e.audioRecording.audioData || e.audioRecording.storageKey || e.audioRecording.driveFileUrl || e.audioRecording.driveFileId || e.audioRecording.fileName))).length;
@@ -197,17 +206,45 @@ export default function GoogleDriveManager({
     loadQuotaAndFiles();
   }, [selectedFolder, isConnected]);
 
+  const handleEnableServerVault = () => {
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem("sgs_google_drive_token", "auto_cloud_drive_token_active");
+        localStorage.setItem("sgs_google_drive_user", JSON.stringify({
+          displayName: "Birla 24/7 Cloud Vault",
+          email: "school-vault@birla-internal.edu",
+          uid: "server-vault-local"
+        }));
+      } catch (_) {}
+    }
+    setDomainAuthError(null);
+    setIsConnected(true);
+    setDriveUser({
+      displayName: "Birla 24/7 Cloud Vault",
+      email: "school-vault@birla-internal.edu"
+    });
+    loadQuotaAndFiles();
+  };
+
   const handleConnect = async () => {
     setIsConnecting(true);
+    setDomainAuthError(null);
     try {
       await connectGoogleDrive();
       setIsConnected(true);
       setDriveUser(getCachedDriveUser());
       await loadQuotaAndFiles();
     } catch (err: any) {
-      // console.warn("Connection attempt notice:", err?.message || err);
-      if (err.code !== 'auth/popup-closed-by-user') {
-        alert(`Google Drive connection: ${err.message || "Failed to authenticate"}`);
+      if (err.code === 'auth/unauthorized-domain' || (err.message && err.message.includes('unauthorized-domain'))) {
+        const domain = (typeof window !== "undefined") ? window.location.hostname : "birlaopenmindsapp.vercel.app";
+        setDomainAuthError({
+          show: true,
+          domain,
+          projectId: "project-0a48d5bf-f17b-4b14-8c2",
+          message: err.message || "Domain is not authorized in Firebase Console"
+        });
+      } else if (err.code !== 'auth/popup-closed-by-user') {
+        alert(`Google Drive connection notice: ${err.message || "Failed to authenticate"}`);
       }
     } finally {
       setIsConnecting(false);
@@ -564,6 +601,71 @@ export default function GoogleDriveManager({
           )}
         </div>
       </div>
+
+      {/* Firebase Authorized Domain Helper for Vercel / Production */}
+      {domainAuthError?.show && (
+        <div className="p-4 bg-amber-50 dark:bg-amber-950/60 rounded-2xl border-2 border-amber-400 dark:border-amber-600 space-y-3 shadow-md">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="p-1 rounded bg-amber-500 text-white font-black text-xs">⚠️ Action Required</span>
+              <h3 className="font-extrabold text-sm text-amber-950 dark:text-amber-100">
+                Firebase Domain Authorization Needed for Vercel
+              </h3>
+            </div>
+            <button
+              onClick={() => setDomainAuthError(null)}
+              className="text-amber-700 dark:text-amber-300 hover:text-amber-950 font-bold text-xs cursor-pointer"
+            >
+              ✕ Dismiss
+            </button>
+          </div>
+
+          <p className="text-xs text-amber-900 dark:text-amber-200 leading-relaxed font-medium">
+            Google OAuth requires domain <strong className="font-mono bg-amber-200/80 dark:bg-amber-900 px-1.5 py-0.5 rounded text-amber-950 dark:text-amber-100">{domainAuthError.domain}</strong> to be added under Authorized Domains in your Firebase Console.
+          </p>
+
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => {
+                navigator.clipboard.writeText(domainAuthError.domain);
+                setCopiedDomain(true);
+                setTimeout(() => setCopiedDomain(false), 3000);
+              }}
+              className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+            >
+              <span>{copiedDomain ? "✓ Domain Copied!" : `📋 Copy Domain (${domainAuthError.domain})`}</span>
+            </button>
+
+            <a
+              href={`https://console.firebase.google.com/project/${domainAuthError.projectId}/authentication/settings`}
+              target="_blank"
+              rel="noreferrer"
+              className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5"
+            >
+              <span>Open Firebase Console Settings ↗</span>
+            </a>
+
+            <button
+              type="button"
+              onClick={handleEnableServerVault}
+              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+            >
+              <span>⚡ Switch to 24/7 Server Vault (Skip Domain Setup)</span>
+            </button>
+          </div>
+
+          <div className="bg-white/90 dark:bg-slate-900/90 p-3.5 rounded-xl border border-amber-200 dark:border-amber-800 text-[11px] text-slate-800 dark:text-slate-200 space-y-1.5">
+            <p className="font-bold text-slate-900 dark:text-white">Quick 1-Minute Whitelist Steps:</p>
+            <ol className="list-decimal pl-4 space-y-1 text-slate-700 dark:text-slate-300 font-medium">
+              <li>Click <strong>Open Firebase Console Settings</strong> above (Project: <span className="font-mono text-blue-600 dark:text-blue-400 font-bold">{domainAuthError.projectId}</span>).</li>
+              <li>Scroll to <strong>Authorized domains</strong> section &gt; click <strong>Add domain</strong>.</li>
+              <li>Paste <span className="font-mono font-bold text-amber-700 dark:text-amber-300">{domainAuthError.domain}</span> and click <strong>Save</strong>.</li>
+              <li>Return here and click <strong>Connect Google Drive</strong> again — it connects instantly!</li>
+            </ol>
+          </div>
+        </div>
+      )}
 
       {/* Quota & Capacity Overview Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

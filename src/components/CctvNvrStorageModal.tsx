@@ -30,7 +30,8 @@ import {
   listR2FilesDirect,
   syncAllRecordingsDirect,
   DEFAULT_R2_CREDENTIALS,
-  R2Credentials
+  R2Credentials,
+  R2_CORS_POLICY_JSON
 } from "../utils/cloudflareR2Client";
 
 interface CctvNvrStorageModalProps {
@@ -72,6 +73,8 @@ export default function CctvNvrStorageModal({
   const [driveSyncStatus, setDriveSyncStatus] = useState<string | null>(null);
   const [syncingAllToCf, setSyncingAllToCf] = useState<boolean>(false);
   const [previewAudio, setPreviewAudio] = useState<{ name: string; url: string } | null>(null);
+  const [showCorsGuide, setShowCorsGuide] = useState<boolean>(false);
+  const [copiedCors, setCopiedCors] = useState<boolean>(false);
 
   const [restorePointStatus, setRestorePointStatus] = useState<any>(null);
   const [restoreMsg, setRestoreMsg] = useState<string | null>(null);
@@ -262,9 +265,13 @@ export default function CctvNvrStorageModal({
         await fetchCloudflareFiles();
       } else {
         setR2TestMessage(`✕ ${result.message}`);
+        if (result.message.includes("CORS") || result.message.includes("Network")) {
+          setShowCorsGuide(true);
+        }
       }
     } catch (e: any) {
       setR2TestMessage(`✕ Sync failed: ${e?.message || e}`);
+      setShowCorsGuide(true);
     } finally {
       setSyncingAllToCf(false);
     }
@@ -413,11 +420,16 @@ export default function CctvNvrStorageModal({
       const direct = await testR2ConnectionDirect(creds);
       if (direct.success) {
         setR2TestMessage("✓ " + direct.message);
+        setShowCorsGuide(false);
       } else {
         setR2TestMessage("✕ " + direct.message);
+        if (direct.isCorsError || direct.message.includes("CORS") || direct.message.includes("Network")) {
+          setShowCorsGuide(true);
+        }
       }
     } catch (err: any) {
       setR2TestMessage("✕ Connection error: " + (err?.message || err));
+      setShowCorsGuide(true);
     } finally {
       setTestingR2(false);
     }
@@ -925,9 +937,77 @@ export default function CctvNvrStorageModal({
                   </div>
                 )}
 
+                {/* CORS Guide Card for Vercel / Production */}
+                {(showCorsGuide || (r2TestMessage && (r2TestMessage.includes("CORS") || r2TestMessage.includes("Network")))) && (
+                  <div className="p-4 bg-amber-50 dark:bg-amber-950/50 rounded-2xl border-2 border-amber-400 dark:border-amber-600 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="p-1 rounded bg-amber-500 text-white font-black text-xs">🌐 1-Min Fix</span>
+                        <h4 className="font-extrabold text-xs text-amber-950 dark:text-amber-100">
+                          Cloudflare R2 CORS Setup (Required for Vercel)
+                        </h4>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowCorsGuide(false)}
+                        className="text-amber-700 dark:text-amber-300 hover:text-amber-900 font-bold text-xs"
+                      >
+                        ✕ Dismiss
+                      </button>
+                    </div>
+
+                    <p className="text-[11px] text-amber-900 dark:text-amber-200 leading-relaxed">
+                      On live Vercel deployments (<code className="px-1 py-0.5 bg-amber-100 dark:bg-amber-900 rounded font-mono font-bold">birlaopenmindsapp.vercel.app</code>), the browser uploads recordings directly to Cloudflare R2 with $0 egress. Cloudflare R2 blocks browser requests until CORS is enabled on bucket <strong className="font-mono">{cloudflareBucketName || "counselling-audio-vault"}</strong>.
+                    </p>
+
+                    <div className="bg-slate-900 text-emerald-400 p-2.5 rounded-xl font-mono text-[10px] overflow-x-auto relative">
+                      <pre className="whitespace-pre-wrap">{R2_CORS_POLICY_JSON}</pre>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(R2_CORS_POLICY_JSON);
+                          setCopiedCors(true);
+                          setTimeout(() => setCopiedCors(false), 3000);
+                        }}
+                        className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <span>{copiedCors ? "✓ Copied CORS JSON!" : "📋 Copy CORS Policy JSON"}</span>
+                      </button>
+
+                      <a
+                        href={`https://dash.cloudflare.com/?to=/:account/r2/default/buckets/${cloudflareBucketName || "counselling-audio-vault"}/settings`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-3 py-1.5 bg-white dark:bg-slate-800 text-amber-900 dark:text-amber-200 border border-amber-300 dark:border-amber-700 hover:bg-amber-100 dark:hover:bg-slate-700 rounded-lg text-xs font-bold transition-all flex items-center gap-1"
+                      >
+                        <span>Open Cloudflare R2 Settings ↗</span>
+                      </a>
+                    </div>
+
+                    <ol className="list-decimal pl-4 space-y-1 text-[11px] text-amber-900 dark:text-amber-200 font-medium pt-1">
+                      <li>Click <strong>Open Cloudflare R2 Settings</strong> above (or go to Cloudflare Dashboard &gt; R2 &gt; bucket <em>{cloudflareBucketName || "counselling-audio-vault"}</em> &gt; <strong>Settings</strong>).</li>
+                      <li>Scroll down to <strong>CORS Policy</strong> and click <strong>Add CORS policy</strong> (or Edit).</li>
+                      <li>Click <strong>Copy CORS Policy JSON</strong> above and paste it.</li>
+                      <li>Click <strong>Save</strong>. Then return here and click <strong>Test R2 Connection</strong>!</li>
+                    </ol>
+                  </div>
+                )}
+
                 {/* Permanent Token Setup Notice */}
                 <div className="p-3 bg-indigo-50/80 dark:bg-indigo-950/40 rounded-xl border border-indigo-200 dark:border-indigo-800 text-indigo-950 dark:text-indigo-200 text-[11px] leading-relaxed">
-                  <strong>🔑 Permanent Keys Guide (No 2-Day Expiry):</strong> In Cloudflare Dashboard, when creating your API Token under <em>R2 &gt; Manage R2 API Tokens</em>:
+                  <div className="flex items-center justify-between">
+                    <strong>🔑 Permanent Keys Guide (No 2-Day Expiry):</strong>
+                    <button
+                      type="button"
+                      onClick={() => setShowCorsGuide(!showCorsGuide)}
+                      className="text-indigo-600 dark:text-indigo-400 hover:underline font-bold text-[10px] cursor-pointer"
+                    >
+                      {showCorsGuide ? "Hide CORS Guide" : "🌐 View Cloudflare CORS Policy Guide"}
+                    </button>
+                  </div>
                   <ul className="list-disc pl-4 mt-1 space-y-0.5 text-[11px]">
                     <li>Select permission: <strong>Object Read &amp; Write</strong></li>
                     <li>Under <strong>TTL / Expiration</strong>, select <strong>Forever</strong> (or leave Expiration empty so keys never expire every 2 days).</li>
