@@ -9,6 +9,7 @@ import Login from "./components/Login";
 import Sidebar from "./components/Sidebar";
 import Dashboard from "./components/Dashboard";
 import InventoryMaster from "./components/InventoryMaster";
+import SchoolStoreHub from "./components/SchoolStoreHub";
 import RoomMaster from "./components/RoomMaster";
 import EmployeeMaster from "./components/EmployeeMaster";
 import WarrantyTracker from "./components/WarrantyTracker";
@@ -1386,6 +1387,9 @@ export default function App() {
             jumpToTab={setCurrentTab}
           />
         );
+      case "school-store":
+      case "store-master":
+        return <SchoolStoreHub />;
       case "inventory":
         return (
           <InventoryMaster
@@ -1702,6 +1706,7 @@ export default function App() {
           <div className="flex items-center gap-2 min-w-0">
             <h2 className="text-xs md:text-sm font-black uppercase tracking-wider text-[#3B1505] truncate">
               {currentTab === "portal-links" ? "Staff Department Portal Links Directory" :
+               currentTab === "school-store" ? "School Store & Material Dispatch Hub" :
                currentTab === "counselling" ? "Parent Counselling & Admission Department" :
                currentTab === "management" ? "Executive Management Portal" :
                currentTab === "inventory-master" ? "Inventory & IT Asset Master" :

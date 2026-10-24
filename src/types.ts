@@ -35,6 +35,7 @@ export interface InventoryItem {
   warranty: string;
   remarks: string;
   logs: string; // New logs are prepended with timestamps
+  reorderLevel?: number; // Minimum balance threshold for low stock alert
 }
 
 export interface ClassHistoryItem {

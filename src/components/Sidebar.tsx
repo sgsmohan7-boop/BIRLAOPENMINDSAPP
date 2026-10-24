@@ -36,7 +36,8 @@ import {
   KeyRound,
   Lock,
   Eye,
-  EyeOff
+  EyeOff,
+  Store
 } from "lucide-react";
 import { motion } from "motion/react";
 import AppInstallModal from "./AppInstallModal";
@@ -239,7 +240,8 @@ export default function Sidebar({
     { id: "google-drive", label: "Google Drive (5 TB)", icon: <HardDrive size={18} />, color: "#2563EB", allowed: ["Super Admin", "IT Admin", "Management", "Viewer", "Counsellor"], badge: "5 TB" },
     { id: "cloudflare-r2", label: "Cloudflare R2 Storage", icon: <Cloud size={18} />, color: "#F97316", allowed: ["Super Admin", "IT Admin", "Management", "Viewer", "Counsellor"], badge: "10GB R2" },
     { id: "raise-ticket", label: "Raise Ticket", icon: <PlusCircle size={18} />, color: "#38A169", allowed: ["Super Admin", "IT Admin"] },
-    { id: "inventory", label: "Inventory", icon: <Package size={18} />, color: "#DD6B20", allowed: ["Super Admin", "IT Admin"] },
+    { id: "school-store", label: "School Store & Dispatches", icon: <Store size={18} />, color: "#DD6B20", allowed: ["Super Admin", "IT Admin"], badge: "Store Master" },
+    { id: "inventory", label: "IT & Asset Inventory", icon: <Package size={18} />, color: "#3182CE", allowed: ["Super Admin", "IT Admin"], badge: "IT Assets" },
     { id: "emp-assets", label: "Emp Assets", icon: <Users size={18} />, color: "#3182CE", allowed: ["Super Admin", "IT Admin"] },
     { id: "room-master", label: "Room Master", icon: <School size={18} />, color: "#D69E2E", allowed: ["Super Admin", "IT Admin"] },
     { id: "analytics", label: "Analytics", icon: <BarChart3 size={18} />, color: "#E53E3E", allowed: ["Super Admin", "IT Admin"] },

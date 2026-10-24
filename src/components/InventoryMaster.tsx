@@ -38,9 +38,18 @@ export default function InventoryMaster({ inventory, updateInventory }: Inventor
   const [date, setDate] = useState(new Date().toLocaleDateString("en-GB").replace(/\//g, "-")); // DD-MM-YYYY format
   const [warranty, setWarranty] = useState("");
   const [remarks, setRemarks] = useState("");
+  const [reorderLevel, setReorderLevel] = useState<number>(5);
 
   const [activeAuditLogs, setActiveAuditLogs] = useState<InventoryItem | null>(null);
   
+  // Quick Dispatch / Stock Outward State
+  const [showDispatchModal, setShowDispatchModal] = useState(false);
+  const [dispatchItemId, setDispatchItemId] = useState("");
+  const [dispatchStaffName, setDispatchStaffName] = useState("");
+  const [dispatchRoom, setDispatchRoom] = useState("");
+  const [dispatchQty, setDispatchQty] = useState<number>(1);
+  const [dispatchNotes, setDispatchNotes] = useState("");
+
   // Vendor Ledger state
   const [showVendorLedger, setShowVendorLedger] = useState(false);
   const [selectedVendorCodeForReport, setSelectedVendorCodeForReport] = useState("");
@@ -49,6 +58,19 @@ export default function InventoryMaster({ inventory, updateInventory }: Inventor
   const [vendorLedgerTab, setVendorLedgerTab] = useState<"table" | "preview">("table");
   const [pdfBlobUrl, setPdfBlobUrl] = useState<string>("");
   const [previewMode, setPreviewMode] = useState<"paper" | "iframe">("paper");
+
+  const categories = [
+    "Consumables (Mouse/Keyboard)",
+    "Spares (RAM/SSD)",
+    "Network (Switches/Cables)",
+    "Printers & Inks",
+    "Major Assets",
+    "Stationery & Academic Supplies",
+    "Textbooks & Workbooks",
+    "Uniforms & Badges",
+    "Housekeeping & Hygiene",
+    "Sports & Co-Curricular"
+  ];
 
   // Reactively compile a fresh PDF blob URL whenever dates, vendor or inventory updates
   React.useEffect(() => {
@@ -84,15 +106,6 @@ export default function InventoryMaster({ inventory, updateInventory }: Inventor
       // console.error("Failed to compile real-time PDF preview:", err);
     }
   }, [showVendorLedger, selectedVendorCodeForReport, vendorFromDate, vendorToDate, inventory]);
-
-
-  const categories = [
-    "Consumables (Mouse/Keyboard)",
-    "Spares (RAM/SSD)",
-    "Network (Switches/Cables)",
-    "Printers & Inks",
-    "Major Assets"
-  ];
 
   // Helper code to parse "DD-MM-YYYY" or related formats
   const parseDateString = (dateStr: string): Date | null => {
@@ -204,6 +217,7 @@ export default function InventoryMaster({ inventory, updateInventory }: Inventor
     setUnitPrice(item.unitPrice || 0);
     setDate(item.date || "");
     setWarranty(item.warranty || "");
+    setReorderLevel(item.reorderLevel ?? 5);
     setRemarks(""); // Clear remarks to force a change log comment reason
   };
 
@@ -222,6 +236,7 @@ export default function InventoryMaster({ inventory, updateInventory }: Inventor
     setDate(new Date().toLocaleDateString("en-GB").replace(/\//g, "-"));
     setWarranty("");
     setRemarks("");
+    setReorderLevel(5);
   };
 
   const handleSave = (e: React.FormEvent) => {
@@ -293,6 +308,7 @@ export default function InventoryMaster({ inventory, updateInventory }: Inventor
           unitPrice,
           date,
           warranty,
+          reorderLevel: reorderLevel || 5,
           logs: `${newLogLine}\n${itemObj.logs}`
         };
       }
@@ -329,6 +345,7 @@ export default function InventoryMaster({ inventory, updateInventory }: Inventor
         date,
         warranty: warranty.trim() || "No Warranty",
         remarks: commentsReason,
+        reorderLevel: reorderLevel || 5,
         logs: logLine
       };
 
@@ -403,6 +420,300 @@ export default function InventoryMaster({ inventory, updateInventory }: Inventor
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  // --- LOW STOCK ALERT COMPUTATION ---
+  const lowStockItems = inventory.filter((item) => {
+    const bal = item.balanceQty ?? (item.totalQty - item.usedQty);
+    const threshold = item.reorderLevel ?? 5;
+    return bal <= threshold;
+  });
+
+  // --- ⚡ QUICK DISPATCH / ISSUE ITEM HANDLER ---
+  const handleConfirmDispatch = () => {
+    if (!dispatchItemId) {
+      alert("Please select a valid store item to issue!");
+      return;
+    }
+    if (!dispatchStaffName.trim()) {
+      alert("Please enter the Teacher or Staff Name receiving the material!");
+      return;
+    }
+    if (!dispatchRoom.trim()) {
+      alert("Please enter the Class Room or Department (e.g., Class 1-A, Science Lab)!");
+      return;
+    }
+    if (dispatchQty <= 0) {
+      alert("Please enter a valid issue quantity!");
+      return;
+    }
+
+    const idx = inventory.findIndex((i) => i.id === dispatchItemId);
+    if (idx === -1) {
+      alert("Selected item not found in inventory!");
+      return;
+    }
+
+    const itemObj = inventory[idx];
+    const currentBal = itemObj.balanceQty ?? (itemObj.totalQty - itemObj.usedQty);
+
+    if (dispatchQty > currentBal) {
+      alert(`Insufficient stock! Available balance is only ${currentBal} units.`);
+      return;
+    }
+
+    const nowStr = new Date().toLocaleString("en-GB", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true
+    }).replace(/\//g, "-");
+
+    const newUsed = itemObj.usedQty + dispatchQty;
+    const newBal = itemObj.totalQty - newUsed;
+    const voucherNo = `DISPATCH-${Date.now().toString().slice(-6)}`;
+    const logLine = `• [${nowStr}] ⚡ DISPATCHED ${dispatchQty} unit(s) to ${dispatchStaffName.trim()} (${dispatchRoom.trim()}). Voucher: #${voucherNo}. Notes: ${dispatchNotes.trim() || "Regular issue"}`;
+
+    const updatedItem: InventoryItem = {
+      ...itemObj,
+      usedQty: newUsed,
+      balanceQty: newBal,
+      logs: `${logLine}\n${itemObj.logs || ""}`
+    };
+
+    const updatedInv = [...inventory];
+    updatedInv[idx] = updatedItem;
+    updateInventory(updatedInv);
+
+    // Generate Instant PDF Voucher Slip
+    generateDispatchSlipPDF({
+      voucherNo,
+      itemName: itemObj.itemName,
+      category: itemObj.category,
+      qty: dispatchQty,
+      recipient: dispatchStaffName.trim(),
+      room: dispatchRoom.trim(),
+      notes: dispatchNotes.trim() || "Approved Issue",
+      dateStr: nowStr,
+      unitPrice: itemObj.unitPrice
+    });
+
+    // Reset dispatch state
+    setShowDispatchModal(false);
+    setDispatchItemId("");
+    setDispatchStaffName("");
+    setDispatchRoom("");
+    setDispatchQty(1);
+    setDispatchNotes("");
+  };
+
+  // --- 📄 GENERATE DISPATCH SLIP PDF ---
+  const generateDispatchSlipPDF = (data: {
+    voucherNo: string;
+    itemName: string;
+    category: string;
+    qty: number;
+    recipient: string;
+    room: string;
+    notes: string;
+    dateStr: string;
+    unitPrice?: number;
+  }) => {
+    try {
+      const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+
+      // Corporate Header Banner
+      doc.setFillColor(30, 41, 59);
+      doc.rect(0, 0, 210, 36, "F");
+
+      doc.setTextColor(255, 255, 255);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(15);
+      doc.text("BIRLA OPEN MINDS INTERNATIONAL SCHOOL", 14, 14);
+
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+      doc.text("OFFICIAL MATERIAL DISPATCH & ISSUE VOUCHER", 14, 21);
+
+      doc.setFont("helvetica", "bold");
+      doc.text(`VOUCHER NO: #${data.voucherNo}`, 135, 14);
+      doc.setFont("helvetica", "normal");
+      doc.text(`Issue Date: ${data.dateStr}`, 135, 21);
+
+      // Section 1: Details
+      doc.setTextColor(30, 41, 59);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(11);
+      doc.text("RECIPIENT & LOCATION INFORMATION", 14, 48);
+
+      doc.setFontSize(9.5);
+      doc.setFont("helvetica", "normal");
+      doc.text([
+        `Recipient Staff / Teacher: ${data.recipient}`,
+        `Assigned Location / Room: ${data.room}`,
+        `Issue Purpose / Purpose Notes: ${data.notes}`
+      ], 14, 55);
+
+      // Section 2: Table
+      const tableColumn = ["S.No", "Voucher ID", "Material / Item Name", "Category Group", "Issued Qty", "Unit Cost (INR)", "Total Value (INR)"];
+      const unitVal = data.unitPrice || 0;
+      const totalVal = data.qty * unitVal;
+
+      const tableRows = [
+        ["1", `#${data.voucherNo}`, data.itemName, data.category, `${data.qty} Units`, `INR ${unitVal.toLocaleString()}`, `INR ${totalVal.toLocaleString()}`]
+      ];
+
+      autoTable(doc, {
+        head: [tableColumn],
+        body: tableRows,
+        startY: 75,
+        theme: "striped",
+        headStyles: { fillColor: [221, 107, 32], textColor: [255, 255, 255], fontStyle: "bold", fontSize: 9 },
+        bodyStyles: { fontSize: 9, textColor: [40, 40, 40] }
+      });
+
+      const finalY = (doc as any).lastAutoTable?.finalY || 120;
+      const sigY = Math.min(250, finalY + 35);
+
+      doc.setDrawColor(150, 150, 150);
+      doc.setLineWidth(0.3);
+
+      doc.line(14, sigY, 75, sigY);
+      doc.setFontSize(8.5);
+      doc.setFont("helvetica", "bold");
+      doc.text("RECEIVER / TEACHER SIGNATURE", 14, sigY + 5);
+
+      doc.line(135, sigY, 195, sigY);
+      doc.text("STORE KEEPER / ISSUING DESK SIGNATURE", 135, sigY + 5);
+
+      doc.save(`Material_Dispatch_${data.voucherNo}.pdf`);
+    } catch (err: any) {
+      alert(`Error generating Dispatch PDF: ${err.message}`);
+    }
+  };
+
+  // --- 📄 GENERATE INWARD GOODS VOUCHER PDF ---
+  const generateInwardVoucherPDF = (item: InventoryItem) => {
+    try {
+      const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+
+      doc.setFillColor(30, 41, 59);
+      doc.rect(0, 0, 210, 36, "F");
+
+      doc.setTextColor(255, 255, 255);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(15);
+      doc.text("BIRLA OPEN MINDS INTERNATIONAL SCHOOL", 14, 14);
+
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+      doc.text("OFFICIAL GOODS RECEIVED VOUCHER (INWARD STOCK)", 14, 21);
+
+      doc.setFont("helvetica", "bold");
+      doc.text(`INWARD ID: #${item.id}`, 135, 14);
+      doc.setFont("helvetica", "normal");
+      doc.text(`Received Date: ${item.date}`, 135, 21);
+
+      doc.setTextColor(30, 41, 59);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(11);
+      doc.text("VENDOR SUPPLIER DETAILS", 14, 48);
+
+      doc.setFontSize(9.5);
+      doc.setFont("helvetica", "normal");
+      doc.text([
+        `Vendor Supplier Name: ${item.vendor}`,
+        `Vendor Code: ${item.vendorCode || "N/A"}`,
+        `Payment Release Cycle: ${item.paymentCycle || "Half-Yearly (6 Months)"}`,
+        `Warranty Details: ${item.warranty || "No Warranty"}`
+      ], 14, 55);
+
+      const unitVal = item.unitPrice || 0;
+      const totalVal = item.totalQty * unitVal;
+
+      const tableColumn = ["S.No", "Stock ID", "Material / Item Name", "Category", "Purchased Qty", "Unit Cost (INR)", "Batch Valuation (INR)"];
+      const tableRows = [
+        ["1", item.id, item.itemName, item.category, `${item.totalQty} Units`, `INR ${unitVal.toLocaleString()}`, `INR ${totalVal.toLocaleString()}`]
+      ];
+
+      autoTable(doc, {
+        head: [tableColumn],
+        body: tableRows,
+        startY: 80,
+        theme: "striped",
+        headStyles: { fillColor: [49, 130, 206], textColor: [255, 255, 255], fontStyle: "bold", fontSize: 9 },
+        bodyStyles: { fontSize: 9, textColor: [40, 40, 40] }
+      });
+
+      const finalY = (doc as any).lastAutoTable?.finalY || 130;
+      const sigY = Math.min(250, finalY + 35);
+
+      doc.setDrawColor(150, 150, 150);
+      doc.setLineWidth(0.3);
+
+      doc.line(14, sigY, 75, sigY);
+      doc.setFontSize(8.5);
+      doc.setFont("helvetica", "bold");
+      doc.text("STORE KEEPER SIGNATURE", 14, sigY + 5);
+
+      doc.line(135, sigY, 195, sigY);
+      doc.text("ACCOUNTS / PURCHASE SIGNATURE", 135, sigY + 5);
+
+      doc.save(`Inward_Stock_Voucher_${item.id}.pdf`);
+    } catch (err: any) {
+      alert(`Error generating Inward PDF: ${err.message}`);
+    }
+  };
+
+  // --- 📋 EXPORT LOW STOCK RE-ORDER LIST PDF ---
+  const handleExportLowStockList = () => {
+    if (lowStockItems.length === 0) {
+      alert("All store items are currently above safety stock thresholds!");
+      return;
+    }
+
+    try {
+      const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+
+      doc.setFillColor(185, 28, 28);
+      doc.rect(0, 0, 210, 36, "F");
+
+      doc.setTextColor(255, 255, 255);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(15);
+      doc.text("BIRLA OPEN MINDS INTERNATIONAL SCHOOL", 14, 14);
+
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+      doc.text("URGENT RE-ORDER PURCHASE REQUISITION LIST", 14, 21);
+      doc.text(`Generated: ${new Date().toLocaleDateString("en-GB")}`, 135, 14);
+
+      const tableColumn = ["S.No", "Stock ID", "Item Name", "Category", "Current Balance", "Min Safety Level", "Vendor Supplier"];
+      const tableRows = lowStockItems.map((item, idx) => [
+        (idx + 1).toString(),
+        item.id,
+        item.itemName,
+        item.category,
+        `${item.balanceQty} Units`,
+        `${item.reorderLevel || 5} Units`,
+        `${item.vendor} (${item.vendorCode || "N/A"})`
+      ]);
+
+      autoTable(doc, {
+        head: [tableColumn],
+        body: tableRows,
+        startY: 45,
+        theme: "striped",
+        headStyles: { fillColor: [185, 28, 28], textColor: [255, 255, 255], fontStyle: "bold", fontSize: 9 },
+        bodyStyles: { fontSize: 8.5, textColor: [40, 40, 40] }
+      });
+
+      doc.save(`Low_Stock_Reorder_List_${new Date().toISOString().slice(0, 10)}.pdf`);
+    } catch (err: any) {
+      alert(`Error generating Low Stock PDF: ${err.message}`);
+    }
   };
 
   const handlePrintStockReportNow = () => {
@@ -1033,10 +1344,35 @@ export default function InventoryMaster({ inventory, updateInventory }: Inventor
       {/* Header bar */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center pb-6 border-b border-slate-200 gap-4 no-print">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight text-slate-900 font-sans">📦 IT INVENTORY & ASSET MASTER (SECURE)</h2>
-          <p className="text-xs text-slate-500 font-medium font-sans">Stock accounts, audits trails, and real-time hardware status controls</p>
+          <h2 className="text-2xl font-bold tracking-tight text-slate-900 font-sans flex items-center gap-2">
+            <span>📦</span> INVENTORY & GENERAL STORE MASTER
+          </h2>
+          <p className="text-xs text-slate-500 font-medium font-sans">Corporate school stock accounts, teacher material issue desk & real-time inventory controls</p>
         </div>
         <div className="mt-4 md:mt-0 flex flex-wrap gap-2.5">
+          <button
+            onClick={() => {
+              if (inventory.length > 0) {
+                setDispatchItemId(inventory[0].id);
+              }
+              setShowDispatchModal(true);
+            }}
+            className="px-3.5 py-2.5 bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold rounded-lg tracking-wide shadow-sm flex items-center gap-1.5 cursor-pointer transition-colors font-sans border border-orange-500"
+          >
+            <span>⚡</span>
+            QUICK ISSUE MATERIAL
+          </button>
+
+          {lowStockItems.length > 0 && (
+            <button
+              onClick={handleExportLowStockList}
+              className="px-3.5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-extrabold rounded-lg tracking-wide shadow-sm flex items-center gap-1.5 cursor-pointer transition-colors font-sans animate-pulse"
+            >
+              <AlertTriangle size={15} />
+              LOW STOCK RE-ORDER LIST ({lowStockItems.length})
+            </button>
+          )}
+
           <button
             onClick={handleExportTextLogs}
             className="px-3.5 py-2.5 bg-slate-600 hover:bg-slate-700 text-white text-xs font-semibold rounded-lg tracking-wide shadow-sm flex items-center gap-1.5 cursor-pointer transition-colors font-sans"
@@ -1073,6 +1409,34 @@ export default function InventoryMaster({ inventory, updateInventory }: Inventor
           </button>
         </div>
       </div>
+
+      {/* Low Stock Top Banner Alert */}
+      {lowStockItems.length > 0 && (
+        <div className="mt-4 p-4 bg-gradient-to-r from-rose-500 to-amber-600 rounded-2xl text-white shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-4 no-print animate-in fade-in duration-300">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-white/20 rounded-xl shrink-0">
+              <AlertTriangle size={22} className="text-white" />
+            </div>
+            <div>
+              <h4 className="font-extrabold text-sm uppercase tracking-wide">
+                ⚠️ RE-ORDER ALERT: {lowStockItems.length} ITEM(S) BELOW SAFETY STOCK LEVEL!
+              </h4>
+              <p className="text-xs text-white/90 font-medium">
+                The following store items are running low on balance stock and require vendor purchase re-orders:
+                {" "}<strong className="underline">{lowStockItems.map(i => i.itemName).slice(0, 4).join(", ")}{lowStockItems.length > 4 ? "..." : ""}</strong>
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={handleExportLowStockList}
+              className="px-4 py-2 bg-white text-rose-700 hover:bg-rose-50 text-xs font-bold rounded-xl shadow-xs cursor-pointer transition-colors"
+            >
+              📋 Download Vendor Re-Order PDF
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="my-8 flex flex-col lg:flex-row gap-8 items-start no-print">
         
@@ -1146,6 +1510,21 @@ export default function InventoryMaster({ inventory, updateInventory }: Inventor
                 className="w-full py-2 px-3 border border-slate-200 rounded-lg text-sm bg-slate-50 text-slate-800 focus:ring-2 focus:ring-amber-500 focus:outline-none"
               />
             </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-extrabold uppercase text-slate-500 tracking-wider mb-1">
+              Safety Re-Order Alert Level ⚠️
+            </label>
+            <input
+              type="number"
+              min="1"
+              value={reorderLevel ?? 5}
+              onChange={(e) => setReorderLevel(Math.max(1, parseInt(e.target.value) || 1))}
+              placeholder="Min balance before alert (e.g. 5)"
+              className="w-full py-2 px-3 border border-slate-200 rounded-lg text-xs bg-amber-50/50 text-slate-800 focus:ring-2 focus:ring-amber-500 focus:outline-none font-mono"
+            />
+            <p className="text-[10px] text-slate-400 mt-0.5 font-sans">System alerts admin when stock balance drops to or below this count.</p>
           </div>
 
           {assetType === "Fixed Asset (Need Serials)" && (
@@ -1435,25 +1814,42 @@ export default function InventoryMaster({ inventory, updateInventory }: Inventor
                     </div>
 
                     {/* Actions Column */}
-                    <div className="col-span-2 flex items-center justify-end gap-1.5">
+                    <div className="col-span-2 flex flex-wrap items-center justify-end gap-1">
+                      <button
+                        onClick={() => {
+                          setDispatchItemId(item.id);
+                          setShowDispatchModal(true);
+                        }}
+                        className="px-2 py-1 text-[9.5px] bg-orange-500 hover:bg-orange-600 text-white rounded font-bold transition-all cursor-pointer flex items-center gap-0.5 shadow-xs"
+                        title="Quick Issue Material to Staff / Class"
+                      >
+                        ⚡ ISSUE
+                      </button>
+                      <button
+                        onClick={() => generateInwardVoucherPDF(item)}
+                        className="px-2 py-1 text-[9.5px] bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded font-bold transition-all cursor-pointer flex items-center gap-0.5"
+                        title="Download Goods Received Voucher PDF"
+                      >
+                        📄 INWARD
+                      </button>
                       <button
                         onClick={() => handleEditSetup(item)}
-                        className="px-2.5 py-1.5 text-[10px] bg-slate-100 hover:bg-[#1E293B] hover:text-white rounded font-bold transition-all cursor-pointer border"
+                        className="px-2 py-1 text-[9.5px] bg-slate-100 hover:bg-[#1E293B] hover:text-white rounded font-bold transition-all cursor-pointer border"
                       >
                         EDIT
                       </button>
                       <button
                         onClick={() => setActiveAuditLogs(item)}
-                        className="px-2.5 py-1.5 text-[10px] bg-[#3182CE] hover:bg-blue-600 text-white rounded font-bold transition-all cursor-pointer flex items-center gap-1 shadow-sm"
+                        className="px-2 py-1 text-[9.5px] bg-[#3182CE] hover:bg-blue-600 text-white rounded font-bold transition-all cursor-pointer flex items-center gap-0.5 shadow-xs"
                       >
                         LOGS 👁️
                       </button>
                       <button
                         onClick={() => handleDeleteItem(item.id, item.itemName)}
-                        className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded border border-rose-150 cursor-pointer transition-colors"
+                        className="p-1 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded border border-rose-150 cursor-pointer transition-colors"
                         title="Delete entry"
                       >
-                        <Trash2 size={13} />
+                        <Trash2 size={12} />
                       </button>
                     </div>
 
@@ -2365,6 +2761,129 @@ export default function InventoryMaster({ inventory, updateInventory }: Inventor
           {renderInventoryPrintContent()}
         </div>,
         document.body
+      )}
+
+      {/* ⚡ QUICK ISSUE / MATERIAL DISPATCH MODAL */}
+      {showDispatchModal && (
+        <div className="fixed inset-0 z-[1100] bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 no-print animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl border border-slate-200 select-text">
+            <div className="p-5 bg-gradient-to-r from-orange-600 to-amber-600 text-white flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">⚡</span>
+                <div>
+                  <h3 className="font-extrabold text-base tracking-wide uppercase">Quick Issue Material to Staff / Room</h3>
+                  <p className="text-[10.5px] text-orange-100 font-medium">Issue store inventory directly & generate signed PDF dispatch slip</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowDispatchModal(false)}
+                className="hover:bg-white/20 p-1.5 rounded-lg text-white transition-colors cursor-pointer"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4 text-slate-800 text-xs">
+              <div>
+                <label className="block text-xs font-extrabold uppercase text-slate-500 mb-1">
+                  📦 Select Inventory Item to Issue
+                </label>
+                <select
+                  value={dispatchItemId}
+                  onChange={(e) => setDispatchItemId(e.target.value)}
+                  className="w-full py-2.5 px-3 border border-slate-250 rounded-xl text-xs bg-slate-50 text-slate-900 font-semibold focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                >
+                  {inventory.map((i) => (
+                    <option key={i.id} value={i.id}>
+                      {i.itemName} ({i.category}) — Avail Bal: {i.balanceQty ?? (i.totalQty - i.usedQty)} Units
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-extrabold uppercase text-slate-500 mb-1">
+                    👤 Teacher / Recipient Staff Name
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={dispatchStaffName}
+                    onChange={(e) => setDispatchStaffName(e.target.value)}
+                    placeholder="E.g. Sravan Kumar (Science)"
+                    className="w-full py-2 px-3 border border-slate-250 rounded-xl text-xs bg-slate-50 text-slate-900 focus:ring-2 focus:ring-orange-500 focus:outline-none font-medium"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-extrabold uppercase text-slate-500 mb-1">
+                    🏫 Class Room / Dept / Location
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={dispatchRoom}
+                    onChange={(e) => setDispatchRoom(e.target.value)}
+                    placeholder="E.g. Class 1-A, Science Lab"
+                    className="w-full py-2 px-3 border border-slate-250 rounded-xl text-xs bg-slate-50 text-slate-900 focus:ring-2 focus:ring-orange-500 focus:outline-none font-medium"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-extrabold uppercase text-slate-500 mb-1">
+                    🔢 Quantity to Issue
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    required
+                    value={dispatchQty}
+                    onChange={(e) => setDispatchQty(Math.max(1, parseInt(e.target.value) || 1))}
+                    className="w-full py-2 px-3 border border-slate-250 rounded-xl text-xs bg-slate-50 text-slate-900 font-bold focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-extrabold uppercase text-slate-500 mb-1">
+                    📝 Purpose / Remarks
+                  </label>
+                  <input
+                    type="text"
+                    value={dispatchNotes}
+                    onChange={(e) => setDispatchNotes(e.target.value)}
+                    placeholder="E.g. Daily teaching supply"
+                    className="w-full py-2 px-3 border border-slate-250 rounded-xl text-xs bg-slate-50 text-slate-900 focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {dispatchItemId && (
+                <div className="p-3 bg-orange-50 border border-orange-200 rounded-xl text-[11px] text-orange-950 leading-relaxed font-sans">
+                  💡 <strong>Stock Deduct Note:</strong> On clicking confirm, <strong>{dispatchQty} unit(s)</strong> will be decremented from available store stock and a signed PDF Dispatch Voucher Slip will be generated.
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setShowDispatchModal(false)}
+                className="px-4 py-2 border border-slate-300 text-slate-600 hover:bg-slate-100 bg-white text-xs font-bold rounded-xl cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDispatch}
+                className="px-5 py-2 bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold rounded-xl shadow cursor-pointer transition-colors flex items-center gap-1.5"
+              >
+                <span>⚡</span>
+                Confirm Issue & Generate PDF
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
     </div>

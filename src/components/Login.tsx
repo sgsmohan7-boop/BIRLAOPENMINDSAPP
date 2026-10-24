@@ -198,8 +198,8 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
   const [showAccountsHelper, setShowAccountsHelper] = useState<boolean>(false);
 
   // Management / Leadership credentials state
-  const [managementEmail, setManagementEmail] = useState<string>("director");
-  const [managementPassword, setManagementPassword] = useState<string>("Director@2026");
+  const [managementEmail, setManagementEmail] = useState<string>("");
+  const [managementPassword, setManagementPassword] = useState<string>("");
   const [showManagementPassword, setShowManagementPassword] = useState<boolean>(false);
   const [showManagementAccountsHelper, setShowManagementAccountsHelper] = useState<boolean>(false);
   
@@ -890,7 +890,7 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
           title: "Super Admin Command Hub",
           bullets: [
             "Multi-School Asset Control",
-            "5 TB Google Drive & Cloudflare R2",
+            "Google Drive & Cloudflare R2 Cloud Storage",
             "Master Access to All Department Portals",
             "CCTV Surveillance Watchdog Hub"
           ],
@@ -1088,8 +1088,8 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
                 <svg className="w-full h-48 max-w-[270px] drop-shadow-2xl" viewBox="0 0 320 240" fill="none">
                   <path d="M160 20 L300 90 L160 160 L20 90 Z" fill="url(#serverFloor2)" opacity="0.4" />
                   <g transform="translate(165, 28)">
-                    <rect x="0" y="0" width="90" height="28" rx="14" fill="#F59E0B" stroke="#0F172A" strokeWidth="1" />
-                    <text x="45" y="18" textAnchor="middle" fill="#0F172A" fontSize="11" fontWeight="900" fontFamily="sans-serif">5 TB Cloud</text>
+                    <rect x="10" y="0" width="70" height="28" rx="14" fill="#F59E0B" stroke="#0F172A" strokeWidth="1" />
+                    <text x="45" y="18" textAnchor="middle" fill="#0F172A" fontSize="11" fontWeight="900" fontFamily="sans-serif">Cloud</text>
                   </g>
                   <path d="M180 70 L240 40 L280 60 L220 90 Z" fill="#2563EB" />
                   <path d="M220 90 L280 60 L280 130 L220 160 Z" fill="#1D4ED8" />
@@ -1117,20 +1117,13 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
               )}
             </div>
           </div>
-
-          {/* Footer */}
-          <div className="text-[11px] font-mono text-blue-200/60 z-10 flex items-center justify-between border-t border-blue-900/50 pt-4">
-            <span>System Version 6.0.0</span>
-            <span>•</span>
-            <span className="text-emerald-400/80 font-bold">Verified TLS Active</span>
-          </div>
         </div>
 
         {/* Right Authentication Panel */}
         <div className="md:w-1/2 p-10 flex flex-col justify-center dark:text-slate-100">
           
-          {/* CASE 1: Locked Portal Mode (When opened via dedicated link like ?portal=management) */}
-          {isPortalLocked && (
+          {/* CASE 1: Locked Portal Mode (When opened via dedicated link like ?portal=management or ?portal=counsellor) */}
+          {isPortalLocked && portalRole !== "management" && portalRole !== "counsellor" && (
             <div className="mb-5 p-3 bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 rounded-xl flex items-center justify-between gap-3 shadow-xs">
               <div className="flex items-center gap-2.5 min-w-0">
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
@@ -1153,8 +1146,8 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
             </div>
           )}
 
-          {/* CASE 2: Super Admin Master Mode (Only shown on base URL when no portal parameter is present) */}
-          {!isPortalLocked && (
+          {/* CASE 2: Super Admin Master Mode (Only shown on base URL when no portal parameter is present and not on management portal) */}
+          {!isPortalLocked && portalRole !== "management" && (
             <>
               {/* Super Admin Top Hub Header */}
               <div className="mb-4 p-3 bg-blue-50/80 border border-blue-200 rounded-xl flex items-center justify-between gap-2 shadow-xs">
@@ -1291,26 +1284,48 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
             </>
           )}
 
-          <div className="mb-5">
-            <h2 className="text-xl md:text-2xl font-black text-[#0F172A]">
-              {portalRole === "teacher" 
-                ? "Teacher support access window" 
-                : portalRole === "driver" ? "Transport Fleet Login" 
-                : portalRole === "student" ? "Parent / Student Portal"
-                : portalRole === "counsellor" ? "Parent Counselling & Admissions Desk"
-                : portalRole === "management" ? "Executive Management & Leadership Portal"
-                : "Welcome Back Admin"}
-            </h2>
-            <p className="text-xs font-semibold text-[#475569] mt-1">
-              {portalRole === "teacher"
-                ? "Enter your name and choose branch to report issues."
-                : portalRole === "driver" ? "Enter your ID to start live GPS tracking."
-                : portalRole === "student" ? "Track your child's bus and get proximity alerts."
-                : portalRole === "counsellor" ? "Authorized Staff Login. Enter the username and password created by Admin in the Main App."
-                : portalRole === "management" ? "Principal, Directors & Management Audit Committee. Review parent meeting audios and generated text minutes (.txt)."
-                : "Please enter your corporate credentials"}
-            </p>
-          </div>
+          {portalRole === "management" ? (
+            <div className="mb-5 p-4 bg-gradient-to-r from-slate-900 via-purple-950 to-indigo-950 text-white rounded-2xl shadow-xl border border-purple-800/40 relative overflow-hidden">
+              <div className="absolute -right-6 -top-6 w-28 h-28 bg-purple-500/15 rounded-full blur-xl pointer-events-none"></div>
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-purple-500/20 border border-purple-400/30 flex items-center justify-center text-purple-300 font-bold shrink-0 shadow-inner">
+                  <Award size={20} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-amber-400">
+                      BIRLA OPEN MINDS
+                    </span>
+                    <span className="text-[9px] font-black px-2.5 py-0.5 rounded-full bg-purple-500/20 border border-purple-400/30 text-purple-200">
+                      BOARD DESK
+                    </span>
+                  </div>
+                  <h3 className="text-sm font-black text-white tracking-wide mt-0.5">
+                    Executive Leadership & Directors Portal
+                  </h3>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="mb-5">
+              <h2 className="text-xl md:text-2xl font-black text-[#0F172A]">
+                {portalRole === "teacher" 
+                  ? "Teacher support access window" 
+                  : portalRole === "driver" ? "Transport Fleet Login" 
+                  : portalRole === "student" ? "Parent / Student Portal"
+                  : portalRole === "counsellor" ? "Parent Counselling & Admissions Desk"
+                  : "Welcome Back Admin"}
+              </h2>
+              <p className="text-xs font-semibold text-[#475569] mt-1">
+                {portalRole === "teacher"
+                  ? "Enter your name and choose branch to report issues."
+                  : portalRole === "driver" ? "Enter your ID to start live GPS tracking."
+                  : portalRole === "student" ? "Track your child's bus and get proximity alerts."
+                  : portalRole === "counsellor" ? "Authorized Staff Login. Enter the username and password created by Admin in the Main App."
+                  : "Please enter your corporate credentials"}
+              </p>
+            </div>
+          )}
 
           {error && (
             <div className="mb-4 p-3.5 bg-red-50 dark:bg-red-950/40 border border-red-300 dark:border-red-900/60 rounded-xl space-y-2 text-xs text-red-700 dark:text-red-300 font-medium">
@@ -1515,25 +1530,13 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
               )}
             </form>
           ) : portalRole === "management" ? (
-            <form onSubmit={handleSubmitManagement} className="space-y-4">
-              <div className="p-3 bg-purple-50/80 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-900/50 rounded-xl text-xs text-purple-900 dark:text-purple-200 flex items-start gap-2.5">
-                <Award size={16} className="text-purple-600 dark:text-purple-400 shrink-0 mt-0.5" />
-                <div>
-                  <p className="font-bold">Birla Open Minds Executive Leadership Desk</p>
-                  <p className="text-[11px] text-purple-700 dark:text-purple-300 mt-0.5 leading-relaxed">
-                    Review recorded parent meeting audio files, view auto-generated counselling minutes text reports (.txt), rate counsellor performance, and track admissions conversions.
-                  </p>
-                </div>
-              </div>
-
+            <form onSubmit={handleSubmitManagement} className="space-y-4 bg-slate-50/90 dark:bg-slate-950/80 p-5 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-md">
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1">
-                  Management Username / Director ID
+                <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1.5 flex items-center gap-1.5">
+                  <User size={13} className="text-purple-600 dark:text-purple-400" />
+                  <span>Management Username / Director ID</span>
                 </label>
                 <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                    <User size={15} />
-                  </div>
                   <input
                     type="text"
                     required
@@ -1542,20 +1545,18 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
                       setManagementEmail(e.target.value);
                       if (error) setError("");
                     }}
-                    placeholder="Enter username (e.g. director, principal, radhika)"
-                    className="w-full pl-9 pr-3 py-2.5 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-medium bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    placeholder="Enter Username (e.g. director, principal)"
+                    className="w-full pl-3.5 pr-3 py-2.5 border border-slate-300 dark:border-slate-700/80 rounded-xl text-xs font-semibold bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-purple-600 focus:border-purple-600 shadow-2xs transition-all"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1">
-                  Executive Security Passcode
+                <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1.5 flex items-center gap-1.5">
+                  <Lock size={13} className="text-purple-600 dark:text-purple-400" />
+                  <span>Executive Passcode</span>
                 </label>
                 <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                    <Lock size={15} />
-                  </div>
                   <input
                     type={showManagementPassword ? "text" : "password"}
                     required
@@ -1564,8 +1565,8 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
                       setManagementPassword(e.target.value);
                       if (error) setError("");
                     }}
-                    placeholder="Enter management passcode or PIN"
-                    className="w-full pl-9 pr-10 py-2.5 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-medium bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    placeholder="••••••••••••"
+                    className="w-full pl-3.5 pr-10 py-2.5 border border-slate-300 dark:border-slate-700/80 rounded-xl text-xs font-semibold bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-purple-600 focus:border-purple-600 shadow-2xs transition-all"
                   />
                   <button
                     type="button"
@@ -1577,97 +1578,36 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
                 </div>
               </div>
 
-              <div className="pt-1">
+              <div className="pt-2">
                 <button
                   type="submit"
                   disabled={isLoading}
-                  className="w-full py-3 bg-gradient-to-r from-purple-600 via-indigo-600 to-indigo-700 hover:from-purple-700 hover:to-indigo-800 disabled:bg-slate-400 text-white rounded-xl text-xs font-black tracking-wide transition-all flex items-center justify-center gap-2 shadow-lg cursor-pointer active:scale-95"
+                  className="w-full py-3 bg-gradient-to-r from-purple-700 via-indigo-700 to-purple-800 hover:from-purple-800 hover:to-indigo-800 disabled:opacity-50 text-white rounded-xl text-xs font-black tracking-wider uppercase transition-all flex items-center justify-center gap-2 shadow-lg shadow-purple-600/25 cursor-pointer active:scale-[0.98]"
                 >
                   {isLoading ? (
-                    <>👑 VERIFYING MANAGEMENT ACCESS...</>
+                    <>👑 VERIFYING EXECUTIVE CREDENTIALS...</>
                   ) : (
-                    <>👑 ENTER MANAGEMENT PORTAL</>
+                    <>👑 AUTHENTICATE & ENTER BOARD DESK</>
                   )}
                 </button>
               </div>
 
-              {/* Management Accounts Helper Dropdown */}
-              <div className="mt-4 pt-3 border-t border-slate-200 dark:border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setShowManagementAccountsHelper(!showManagementAccountsHelper)}
-                  className="w-full flex items-center justify-between text-[11px] font-bold text-purple-600 dark:text-purple-400 hover:text-purple-700 py-1 cursor-pointer"
-                >
-                  <span className="flex items-center gap-1.5">
-                    <KeyRound size={13} />
-                    <span>View Authorized Management Accounts Created in Main App ({activeManagementAccounts.length})</span>
-                  </span>
-                  {showManagementAccountsHelper ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                </button>
-
-                {showManagementAccountsHelper && (
-                  <div className="mt-2 p-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl space-y-2 max-h-48 overflow-y-auto custom-scrollbar">
-                    <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-tight">
-                      Admin controls Executive Management accounts inside Main App &gt; <strong>Executive Management</strong>. Click any account below to autofill and log in:
-                    </p>
-                    <div className="space-y-1.5">
-                      {activeManagementAccounts.map((acc, idx) => (
-                        <div 
-                          key={`login-mgmt-${acc.id}-${acc.username}-${idx}`}
-                          className="flex items-center justify-between p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-[10px]"
-                        >
-                          <div className="min-w-0 pr-2">
-                            <div className="flex items-center gap-1.5">
-                              <span className="font-bold text-slate-800 dark:text-slate-200 truncate">{acc.name}</span>
-                              <span className="text-[9px] text-purple-600 dark:text-purple-400 font-semibold">({acc.roleTitle})</span>
-                            </div>
-                            <p className="text-slate-500 font-mono text-[9px] mt-0.5">
-                              User: <strong>{acc.username}</strong> | Pass: <strong>{acc.password}</strong>
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setManagementEmail(acc.username);
-                              setManagementPassword(acc.password);
-                              setShowManagementAccountsHelper(false);
-                            }}
-                            className="px-2.5 py-1 bg-purple-100 hover:bg-purple-200 dark:bg-purple-950/60 dark:hover:bg-purple-900/80 text-purple-700 dark:text-purple-300 rounded font-bold text-[9px] shrink-0 cursor-pointer"
-                          >
-                            ⚡ Autofill
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* 1-Click Quick Access as Executive Management */}
-              <div className="mt-2 text-center">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setManagementEmail("director");
-                    setManagementPassword("Director@2026");
-                    onLogin(branch, "director@birla.edu.in", "Management");
-                  }}
-                  className="w-full py-2 px-3 bg-purple-50 hover:bg-purple-100 dark:bg-purple-950/60 dark:hover:bg-purple-900/60 border border-purple-200 dark:border-purple-800 text-purple-800 dark:text-purple-300 rounded-xl text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
-                >
-                  <span>⚡ 1-Click Quick Access as Managing Director</span>
-                </button>
+              <div className="pt-3 border-t border-slate-200 dark:border-slate-800/80 flex items-center justify-between text-[10px] text-slate-500 dark:text-slate-400 font-bold">
+                <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                  <ShieldCheck size={12} />
+                  <span>256-Bit Encrypted Session</span>
+                </span>
+                <span className="font-mono text-purple-600 dark:text-purple-400">BOARD DESK SSO</span>
               </div>
             </form>
           ) : portalRole === "counsellor" ? (
-            <form onSubmit={handleSubmitCounsellor} className="space-y-4">
+            <form onSubmit={handleSubmitCounsellor} className="space-y-4 bg-slate-50/90 dark:bg-slate-950/80 p-5 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-md">
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1">
-                  Counsellor Username / User ID
+                <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1.5 flex items-center gap-1.5">
+                  <User size={13} className="text-orange-600 dark:text-orange-400" />
+                  <span>Counsellor Username / User ID</span>
                 </label>
                 <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                    <User size={15} />
-                  </div>
                   <input
                     type="text"
                     required
@@ -1676,20 +1616,18 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
                       setCounsellorUsername(e.target.value);
                       if (error) setError("");
                     }}
-                    placeholder="Enter Username"
-                    className="w-full pl-9 pr-3 py-2.5 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-medium bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    placeholder="Enter Counsellor Username"
+                    className="w-full pl-3.5 pr-3 py-2.5 border border-slate-300 dark:border-slate-700/80 rounded-xl text-xs font-semibold bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 shadow-2xs transition-all"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1">
-                  Password
+                <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1.5 flex items-center gap-1.5">
+                  <Lock size={13} className="text-orange-600 dark:text-orange-400" />
+                  <span>Account Password</span>
                 </label>
                 <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                    <Lock size={15} />
-                  </div>
                   <input
                     type={showCounsellorPassword ? "text" : "password"}
                     required
@@ -1698,8 +1636,8 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
                       setCounsellorPassword(e.target.value);
                       if (error) setError("");
                     }}
-                    placeholder="Enter Password"
-                    className="w-full pl-9 pr-10 py-2.5 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-medium bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    placeholder="••••••••••••"
+                    className="w-full pl-3.5 pr-10 py-2.5 border border-slate-300 dark:border-slate-700/80 rounded-xl text-xs font-semibold bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 shadow-2xs transition-all"
                   />
                   <button
                     type="button"
@@ -1715,14 +1653,22 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
                 <button
                   type="submit"
                   disabled={isLoading}
-                  className="w-full py-3 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 disabled:bg-slate-400 text-white rounded-xl text-xs font-black tracking-wide transition-all flex items-center justify-center gap-2 shadow-lg cursor-pointer active:scale-95"
+                  className="w-full py-3 bg-gradient-to-r from-orange-600 via-amber-600 to-orange-700 hover:from-orange-700 hover:to-amber-700 disabled:opacity-50 text-white rounded-xl text-xs font-black tracking-wider uppercase transition-all flex items-center justify-center gap-2 shadow-lg shadow-orange-500/20 cursor-pointer active:scale-[0.98]"
                 >
                   {isLoading ? (
-                    <>⭐ VERIFYING CREDENTIALS...</>
+                    <>🎓 VERIFYING COUNSELLOR ACCESS...</>
                   ) : (
                     <>🎓 SIGN IN TO COUNSELLOR WORKSPACE</>
                   )}
                 </button>
+              </div>
+
+              <div className="pt-3 border-t border-slate-200 dark:border-slate-800/80 flex items-center justify-between text-[10px] text-slate-500 dark:text-slate-400 font-bold">
+                <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                  <ShieldCheck size={12} />
+                  <span>Parent Admissions Portal</span>
+                </span>
+                <span className="font-mono text-orange-600 dark:text-orange-400">COUNSELLOR SSO</span>
               </div>
             </form>
           ) : portalRole === "teacher" ? (
@@ -1953,19 +1899,21 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
           )}
 
           {/* PWA Promo Banner */}
-          <div className="mt-6 pt-5 border-t border-slate-200 text-center">
-            <button
-              type="button"
-              onClick={handleInstallApp}
-              className="inline-flex items-center gap-2 py-2.5 px-5 rounded-xl bg-gradient-to-r from-[#2563EB] to-[#1D4ED8] hover:from-[#1D4ED8] hover:to-[#1E40AF] text-white text-xs font-black tracking-wide transition-all shadow-md active:scale-95 cursor-pointer font-sans uppercase"
-            >
-              <Download size={13} />
-              <span>INSTALL BI APP ON MOBILE</span>
-            </button>
-            <p className="text-[10px] text-slate-500 mt-2 leading-relaxed max-w-xs mx-auto">
-              Run this application like a native mobile app from your home screen. Easy shortcuts, faster loading, and instant support tracking!
-            </p>
-          </div>
+          {portalRole !== "management" && portalRole !== "counsellor" && (
+            <div className="mt-6 pt-5 border-t border-slate-200 text-center">
+              <button
+                type="button"
+                onClick={handleInstallApp}
+                className="inline-flex items-center gap-2 py-2.5 px-5 rounded-xl bg-gradient-to-r from-[#2563EB] to-[#1D4ED8] hover:from-[#1D4ED8] hover:to-[#1E40AF] text-white text-xs font-black tracking-wide transition-all shadow-md active:scale-95 cursor-pointer font-sans uppercase"
+              >
+                <Download size={13} />
+                <span>INSTALL BI APP ON MOBILE</span>
+              </button>
+              <p className="text-[10px] text-slate-500 mt-2 leading-relaxed max-w-xs mx-auto">
+                Run this application like a native mobile app from your home screen. Easy shortcuts, faster loading, and instant support tracking!
+              </p>
+            </div>
+          )}
 
         </div>
 
