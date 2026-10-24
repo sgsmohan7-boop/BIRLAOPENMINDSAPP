@@ -1147,13 +1147,27 @@ Return pure JSON matching this exact structure:
     cloudflareBucketName: process.env.R2_BUCKET_NAME || "counselling-audio-vault",
     cloudflareAccountId: process.env.R2_ACCOUNT_ID || "d187b1ea25b7d75547bf80c6ce3eb73a",
     cloudflareAccessKeyId: process.env.R2_ACCESS_KEY_ID || "adbe1437ad4446d68ccc22d3de5c637c",
-    cloudflareSecretAccessKey: process.env.R2_SECRET_ACCESS_KEY || "9321be8d27a4636d2080747138a646ce6f39d6c53bf3edc3e9083ceb48d393b6"
+    cloudflareSecretAccessKey: process.env.R2_SECRET_ACCESS_KEY || "4b36fb00224b1a02c39fb842c5a5d303ff6315877ed1a5a69f25c094dbae41f"
   };
 
   function readNvrConfig(): NvrConfigData {
     try {
       if (fs.existsSync(NVR_CONFIG_FILE)) {
-        return { ...DEFAULT_NVR_CONFIG, ...JSON.parse(fs.readFileSync(NVR_CONFIG_FILE, "utf-8")) };
+        const parsed = JSON.parse(fs.readFileSync(NVR_CONFIG_FILE, "utf-8"));
+        const merged = { ...DEFAULT_NVR_CONFIG, ...parsed };
+        if (!merged.cloudflareSecretAccessKey || merged.cloudflareSecretAccessKey === "9321be8d27a4636d2080747138a646ce6f39d6c53bf3edc3e9083ceb48d393b6") {
+          merged.cloudflareSecretAccessKey = "4b36fb00224b1a02c39fb842c5a5d303ff6315877ed1a5a69f25c094dbae41f";
+        }
+        if (!merged.cloudflareAccountId) {
+          merged.cloudflareAccountId = "d187b1ea25b7d75547bf80c6ce3eb73a";
+        }
+        if (!merged.cloudflareAccessKeyId) {
+          merged.cloudflareAccessKeyId = "adbe1437ad446d68ccc22d3de5c637c";
+        }
+        if (!merged.cloudflareBucketName) {
+          merged.cloudflareBucketName = "counselling-audio-vault";
+        }
+        return merged;
       }
     } catch (e) {
       console.warn("Failed to read nvr_config.json:", e);

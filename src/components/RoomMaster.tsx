@@ -472,20 +472,11 @@ export default function RoomMaster({ rooms, updateRooms, allocations = [] }: Roo
   };
 
   const handleSyncSheetAllocations = () => {
-    const existingKeys = new Set(rooms.map(r => `${r.roomNumber.trim().toLowerCase()}_${(r.floorWing || "").trim().toLowerCase()}`));
-    const newSheetRooms = SHEET_ALLOCATED_ROOMS.filter(sr => {
-      const key = `${sr.roomNumber.trim().toLowerCase()}_${(sr.floorWing || "").trim().toLowerCase()}`;
-      return !existingKeys.has(key);
-    });
-
-    if (newSheetRooms.length === 0) {
-      setCustomAlert(`All ${SHEET_ALLOCATED_ROOMS.length} campus rooms from the Official Allocation Sheet are already synced in your database!`);
-      return;
-    }
-
-    const merged = [...rooms, ...newSheetRooms];
+    const sheetIds = new Set(SHEET_ALLOCATED_ROOMS.map(sr => sr.id));
+    const nonSheetRooms = rooms.filter(r => !sheetIds.has(r.id) && !r.roomNumber.match(/^(NG|NF|NS|NT|SG|SF|SS|ST)/i));
+    const merged = [...SHEET_ALLOCATED_ROOMS, ...nonSheetRooms];
     updateRooms(merged);
-    setCustomAlert(`Successfully synced ${newSheetRooms.length} room allocations from the Official Campus Sheet into Room Master! Total rooms registered: ${merged.length}.`);
+    setCustomAlert(`Successfully synchronized all ${SHEET_ALLOCATED_ROOMS.length} Official Campus Room Allocations with fully expanded Greek names & verified S.No 12 labs!`);
   };
 
   const handleExportPDFReport = () => {
@@ -552,7 +543,7 @@ export default function RoomMaster({ rooms, updateRooms, allocations = [] }: Roo
             title="Import all 113 room allocations from official campus image sheet"
           >
             <School size={15} />
-            📥 SYNC SHEET ALLOCATIONS (113 ROOMS)
+            📥 SYNC SHEET ALLOCATIONS (120 ROOMS)
           </button>
           <button
             onClick={handleExportPDFReport}

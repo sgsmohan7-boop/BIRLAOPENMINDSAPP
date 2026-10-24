@@ -7,6 +7,6 @@
   "cloudflareR2Configured": true,
   "cloudflareBucketName": "counselling-audio-vault",
   "cloudflareAccountId": "d187b1ea25b7d75547bf80c6ce3eb73a",
-  "cloudflareAccessKeyId": "adbe1437ad4446d68ccc22d3de5c637c",
-  "cloudflareSecretAccessKey": "ceebb2e5822780b749fa476d6e370b53c2efd7c2b09a4fd5178ada160636298f"
+  "cloudflareAccessKeyId": "adbe1437ad446d68ccc22d3de5c637c",
+  "cloudflareSecretAccessKey": "4b36fb00224b1a02c39fb842c5a5d303ff6315877ed1a5a69f25c094dbae41f"
 }
