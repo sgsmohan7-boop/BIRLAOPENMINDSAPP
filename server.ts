@@ -1147,7 +1147,7 @@ Return pure JSON matching this exact structure:
     cloudflareBucketName: process.env.R2_BUCKET_NAME || "counselling-audio-vault",
     cloudflareAccountId: process.env.R2_ACCOUNT_ID || "d187b1ea25b7d75547bf80c6ce3eb73a",
     cloudflareAccessKeyId: process.env.R2_ACCESS_KEY_ID || "adbe1437ad4446d68ccc22d3de5c637c",
-    cloudflareSecretAccessKey: process.env.R2_SECRET_ACCESS_KEY || "d888ff14523a57cf84a101293d73789a0753a67bb954d3abf01bab49c2f55c1b"
+    cloudflareSecretAccessKey: process.env.R2_SECRET_ACCESS_KEY || "8714919d92ebbe30eac2b6386c30a41cc9b5c340fa0f32afa1b8e7ade23ee603"
   };
 
   function readNvrConfig(): NvrConfigData {
@@ -1155,8 +1155,8 @@ Return pure JSON matching this exact structure:
       if (fs.existsSync(NVR_CONFIG_FILE)) {
         const parsed = JSON.parse(fs.readFileSync(NVR_CONFIG_FILE, "utf-8"));
         const merged = { ...DEFAULT_NVR_CONFIG, ...parsed };
-        if (!merged.cloudflareSecretAccessKey || merged.cloudflareSecretAccessKey === "9321be8d27a4636d2080747138a646ce6f39d6c53bf3edc3e9083ceb48d393b6" || merged.cloudflareSecretAccessKey === "4b36fb00224b1a02c39fb842c5a5d303ff6315877ed1a5a69f25c094dbae41f") {
-          merged.cloudflareSecretAccessKey = "d888ff14523a57cf84a101293d73789a0753a67bb954d3abf01bab49c2f55c1b";
+        if (!merged.cloudflareSecretAccessKey || merged.cloudflareSecretAccessKey === "9321be8d27a4636d2080747138a646ce6f39d6c53bf3edc3e9083ceb48d393b6" || merged.cloudflareSecretAccessKey === "4b36fb00224b1a02c39fb842c5a5d303ff6315877ed1a5a69f25c094dbae41f" || merged.cloudflareSecretAccessKey === "d888ff14523a57cf84a101293d73789a0753a67bb954d3abf01bab49c2f55c1b") {
+          merged.cloudflareSecretAccessKey = "8714919d92ebbe30eac2b6386c30a41cc9b5c340fa0f32afa1b8e7ade23ee603";
         }
         if (!merged.cloudflareAccountId) {
           merged.cloudflareAccountId = "d187b1ea25b7d75547bf80c6ce3eb73a";
@@ -1186,9 +1186,9 @@ Return pure JSON matching this exact structure:
   }
 
   function getR2Client(cfg: NvrConfigData): S3Client | null {
-    const accountId = cfg.cloudflareAccountId || process.env.R2_ACCOUNT_ID;
-    const accessKeyId = cfg.cloudflareAccessKeyId || process.env.R2_ACCESS_KEY_ID;
-    const secretAccessKey = cfg.cloudflareSecretAccessKey || process.env.R2_SECRET_ACCESS_KEY;
+    const accountId = (cfg.cloudflareAccountId || process.env.R2_ACCOUNT_ID || "").trim();
+    const accessKeyId = (cfg.cloudflareAccessKeyId || process.env.R2_ACCESS_KEY_ID || "").trim();
+    const secretAccessKey = (cfg.cloudflareSecretAccessKey || process.env.R2_SECRET_ACCESS_KEY || "").trim();
 
     if (!accountId || !accessKeyId || !secretAccessKey) {
       return null;
@@ -1201,10 +1201,12 @@ Return pure JSON matching this exact structure:
         accessKeyId,
         secretAccessKey,
       },
+      requestChecksumCalculation: "WHEN_REQUIRED",
+      responseChecksumValidation: "WHEN_REQUIRED",
     });
   }
 
-  async function uploadToR2(fileName: string, buffer: Buffer, mimeType: string, maxRetries = 3): Promise<boolean> {
+  async function uploadToR2(fileName: string, buffer: Buffer, mimeType: string, maxRetries = 2): Promise<boolean> {
     const cfg = readNvrConfig();
     const s3 = getR2Client(cfg);
     if (!s3 || !cfg.cloudflareBucketName || !cfg.cloudflareR2Configured) return false;
@@ -1219,16 +1221,25 @@ Return pure JSON matching this exact structure:
         });
 
         await s3.send(command);
-        console.log(`[CLOUDFLARE R2] Successfully uploaded ${fileName} to bucket ${cfg.cloudflareBucketName} (attempt ${attempt})`);
+        console.log(`[CLOUDFLARE R2] Successfully uploaded ${fileName} to bucket ${cfg.cloudflareBucketName}`);
         return true;
-      } catch (err) {
-        console.warn(`[CLOUDFLARE R2] Upload attempt ${attempt}/${maxRetries} failed for ${fileName}:`, err);
-        if (attempt === maxRetries) {
-          console.error(`[CLOUDFLARE R2] All ${maxRetries} upload attempts failed for ${fileName}`);
+      } catch (err: any) {
+        const isAuthError = err?.name === "SignatureDoesNotMatch" || 
+                            err?.message?.includes("SignatureDoesNotMatch") ||
+                            err?.name === "InvalidAccessKeyId" ||
+                            err?.name === "AccessDenied";
+
+        if (isAuthError) {
+          console.warn(`[CLOUDFLARE R2] Upload skipped for ${fileName}: Cloudflare credentials expired or invalid (${err?.name || "SignatureDoesNotMatch"}). Please refresh R2 Access Key & Secret in settings.`);
+          // Do not retry on permanent authentication failures
           return false;
         }
-        // Exponential backoff
-        await new Promise(r => setTimeout(r, attempt * 1000));
+
+        console.warn(`[CLOUDFLARE R2] Upload attempt ${attempt}/${maxRetries} failed for ${fileName}:`, err?.message || err);
+        if (attempt === maxRetries) {
+          return false;
+        }
+        await new Promise(r => setTimeout(r, attempt * 500));
       }
     }
     return false;
@@ -1672,10 +1683,10 @@ Return pure JSON matching this exact structure:
 
       const testCfg: NvrConfigData = {
         ...current,
-        cloudflareBucketName: cloudflareBucketName || current.cloudflareBucketName,
-        cloudflareAccountId: cloudflareAccountId !== undefined ? cloudflareAccountId : current.cloudflareAccountId,
-        cloudflareAccessKeyId: cloudflareAccessKeyId !== undefined ? cloudflareAccessKeyId : current.cloudflareAccessKeyId,
-        cloudflareSecretAccessKey: cloudflareSecretAccessKey !== undefined ? cloudflareSecretAccessKey : current.cloudflareSecretAccessKey
+        cloudflareBucketName: (cloudflareBucketName || current.cloudflareBucketName || "").trim(),
+        cloudflareAccountId: (cloudflareAccountId !== undefined ? cloudflareAccountId : current.cloudflareAccountId || "").trim(),
+        cloudflareAccessKeyId: (cloudflareAccessKeyId !== undefined ? cloudflareAccessKeyId : current.cloudflareAccessKeyId || "").trim(),
+        cloudflareSecretAccessKey: (cloudflareSecretAccessKey !== undefined ? cloudflareSecretAccessKey : current.cloudflareSecretAccessKey || "").trim()
       };
 
       const s3 = getR2Client(testCfg);
@@ -1691,7 +1702,21 @@ Return pure JSON matching this exact structure:
       await s3.send(command);
       return res.json({ success: true, message: `Successfully connected to Cloudflare R2 Bucket "${testCfg.cloudflareBucketName}"!` });
     } catch (err: any) {
-      return res.status(400).json({ success: false, error: "Cloudflare R2 Connection Failed: " + (err?.message || String(err)) });
+      const errName = err?.name || "";
+      const errMsg = err?.message || String(err);
+      if (errName === "SignatureDoesNotMatch" || errMsg.includes("SignatureDoesNotMatch")) {
+        return res.status(400).json({
+          success: false,
+          error: "Cloudflare R2 API Token or Secret Access Key has expired or is invalid. In Cloudflare Dashboard > R2 > Manage R2 API Tokens, create a token with 'Object Read & Write' and TTL set to 'Forever' (No Expiry), then paste the new credentials."
+        });
+      }
+      if (errName === "NoSuchBucket") {
+        return res.status(400).json({
+          success: false,
+          error: `Bucket "${req.body.cloudflareBucketName || 'counselling-audio-vault'}" not found in Cloudflare R2. Please check bucket name.`
+        });
+      }
+      return res.status(400).json({ success: false, error: "Cloudflare R2 Connection Failed: " + errMsg });
     }
   });
 
@@ -1754,30 +1779,70 @@ Return pure JSON matching this exact structure:
         return res.status(400).json({ success: false, error: "Cloudflare R2 is not configured." });
       }
 
+      // Check credentials before looping through files
+      try {
+        await s3.send(new ListObjectsV2Command({ Bucket: cfg.cloudflareBucketName, MaxKeys: 1 }));
+      } catch (authErr: any) {
+        const isAuthErr = authErr?.name === "SignatureDoesNotMatch" || 
+                          authErr?.message?.includes("SignatureDoesNotMatch") || 
+                          authErr?.name === "InvalidAccessKeyId";
+        if (isAuthErr) {
+          return res.status(400).json({
+            success: false,
+            error: "Cloudflare R2 Token has expired or is invalid (SignatureDoesNotMatch). Please generate a new R2 token with TTL 'Forever' and update the credentials in R2 Settings."
+          });
+        }
+      }
+
       let uploadedCount = 0;
+      let failedCount = 0;
+      let stopLoop = false;
+
       if (fs.existsSync(AUDIOS_DIR)) {
         const diskFiles = fs.readdirSync(AUDIOS_DIR);
         for (const f of diskFiles) {
+          if (stopLoop) break;
           if (f.endsWith(".webm") || f.endsWith(".mp3") || f.endsWith(".wav") || f.endsWith(".txt")) {
             const filePath = path.join(AUDIOS_DIR, f);
             const buffer = fs.readFileSync(filePath);
             const mime = f.endsWith(".txt") ? "text/plain" : (f.endsWith(".mp3") ? "audio/mp3" : "audio/webm");
-            await uploadToR2(f, buffer, mime);
-            uploadedCount++;
+            const ok = await uploadToR2(f, buffer, mime);
+            if (ok) {
+              uploadedCount++;
+            } else {
+              failedCount++;
+              // If initial upload failed, stop iterating further
+              if (uploadedCount === 0 && failedCount >= 1) {
+                stopLoop = true;
+              }
+            }
           }
         }
       }
 
-      const list = readCounsellingData();
-      for (const enq of list) {
-        if (enq.audioRecording?.audioData && typeof enq.audioRecording.audioData === "string" && enq.audioRecording.audioData.length > 100) {
-          const raw = enq.audioRecording.audioData;
-          const clean = raw.includes(",") ? raw.split(",")[1] : raw;
-          const buf = Buffer.from(clean, "base64");
-          const fname = enq.audioRecording.fileName || `${enq.enquiryNo || 'ENQ'}_Meeting_${new Date().toISOString().slice(0, 10)}.webm`;
-          await uploadToR2(fname, buf, enq.audioRecording.mimeType || "audio/webm");
-          uploadedCount++;
+      if (!stopLoop) {
+        const list = readCounsellingData();
+        for (const enq of list) {
+          if (enq.audioRecording?.audioData && typeof enq.audioRecording.audioData === "string" && enq.audioRecording.audioData.length > 100) {
+            const raw = enq.audioRecording.audioData;
+            const clean = raw.includes(",") ? raw.split(",")[1] : raw;
+            const buf = Buffer.from(clean, "base64");
+            const fname = enq.audioRecording.fileName || `${enq.enquiryNo || 'ENQ'}_Meeting_${new Date().toISOString().slice(0, 10)}.webm`;
+            const ok = await uploadToR2(fname, buf, enq.audioRecording.mimeType || "audio/webm");
+            if (ok) {
+              uploadedCount++;
+            } else {
+              failedCount++;
+            }
+          }
         }
+      }
+
+      if (uploadedCount === 0 && failedCount > 0) {
+        return res.status(400).json({
+          success: false,
+          error: "Could not upload files to Cloudflare R2. Please verify your R2 token and bucket settings."
+        });
       }
 
       return res.json({ success: true, message: `Synced ${uploadedCount} file(s) to Cloudflare R2 Bucket "${cfg.cloudflareBucketName}".` });

@@ -332,51 +332,18 @@ export async function playWithWebAudio(
       source.start(0);
       return true;
     } catch (decodeErr) {
-      console.warn("Direct decodeAudioData notice, playing acoustic tone fallback:", decodeErr);
-      // Play guaranteed audible chime pattern through user speakers
-      playFallbackChime(ctx, onEnded);
-      return true;
-    }
-  } catch (err) {
-    console.warn("Web audio playback fallback notice:", err);
-    try {
-      const ctx = getSharedAudioContext();
-      if (ctx.state === "suspended") await ctx.resume();
-      playFallbackChime(ctx, onEnded);
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-}
-
-function playFallbackChime(ctx: AudioContext, onEnded?: () => void) {
-  try {
-    const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = "sine";
-    // Friendly melodic tone sequence (C5 -> E5 -> G5)
-    osc.frequency.setValueAtTime(523.25, now);
-    osc.frequency.setValueAtTime(659.25, now + 0.3);
-    osc.frequency.setValueAtTime(783.99, now + 0.6);
-
-    gain.gain.setValueAtTime(0.3, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 1.8);
-
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-
-    osc.onended = () => {
+      console.warn("Direct decodeAudioData notice:", decodeErr);
       webAudioPlaying = false;
       currentBufferSource = null;
       if (onEnded) onEnded();
-    };
-
-    webAudioPlaying = true;
-    osc.start(now);
-    osc.stop(now + 1.8);
-  } catch (_) {
+      return false;
+    }
+  } catch (err) {
+    console.warn("Web audio playback notice:", err);
+    webAudioPlaying = false;
+    currentBufferSource = null;
     if (onEnded) onEnded();
+    return false;
   }
 }
+

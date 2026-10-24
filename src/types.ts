@@ -440,6 +440,10 @@ export interface NvrStorageStatus {
   protectStarred: boolean;
   retentionDays: number;
   cloudflareR2Configured: boolean;
+  cloudflareBucketName?: string;
+  cloudflareAccountId?: string;
+  cloudflareAccessKeyId?: string;
+  cloudflareSecretAccessKey?: string;
   recycleHistory: Array<{
     fileName: string;
     enquiryNo?: string;
