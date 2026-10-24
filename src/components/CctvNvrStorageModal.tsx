@@ -53,7 +53,7 @@ export default function CctvNvrStorageModal({
   const [cloudflareBucketName, setCloudflareBucketName] = useState<string>("counselling-audio-vault");
   const [cloudflareAccountId, setCloudflareAccountId] = useState<string>("d187b1ea25b7d75547bf80c6ce3eb73a");
   const [cloudflareAccessKeyId, setCloudflareAccessKeyId] = useState<string>("adbe1437ad4446d68ccc22d3de5c637c");
-  const [cloudflareSecretAccessKey, setCloudflareSecretAccessKey] = useState<string>("9321be8d27a4636d2080747138a646ce6f39d6c53bf3edc3e9083ceb48d393b6");
+  const [cloudflareSecretAccessKey, setCloudflareSecretAccessKey] = useState<string>("d888ff14523a57cf84a101293d73789a0753a67bb954d3abf01bab49c2f55c1b");
   const [cloudflareR2Configured, setCloudflareR2Configured] = useState<boolean>(true);
   const [testingR2, setTestingR2] = useState<boolean>(false);
   const [r2TestMessage, setR2TestMessage] = useState<string | null>(null);
@@ -275,11 +275,17 @@ export default function CctvNvrStorageModal({
           cloudflareSecretAccessKey
         })
       });
-      const data = await res.json();
+      const text = await res.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = { success: false, error: text || `HTTP ${res.status}` };
+      }
       if (data.success) {
         setR2TestMessage("✓ " + data.message);
       } else {
-        setR2TestMessage("✕ " + data.error);
+        setR2TestMessage("✕ " + (data.error || "Connection test failed"));
       }
     } catch (err: any) {
       setR2TestMessage("✕ Connection error: " + err.message);
@@ -303,13 +309,19 @@ export default function CctvNvrStorageModal({
           cloudflareR2Configured: true
         })
       });
-      const data = await res.json();
+      const text = await res.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = { success: false, error: text || `HTTP ${res.status}` };
+      }
       if (data.success) {
         setR2TestMessage("✓ Cloudflare R2 credentials saved successfully & direct storage activated!");
         setCloudflareR2Configured(true);
         await fetchNvrStatus();
       } else {
-        setR2TestMessage("✕ Failed to save: " + data.error);
+        setR2TestMessage("✕ Failed to save: " + (data.error || "Save failed"));
       }
     } catch (err: any) {
       setR2TestMessage("✕ Error: " + err.message);
