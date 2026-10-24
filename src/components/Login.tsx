@@ -211,7 +211,7 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
     }
     return "";
   });
-  const [itPasswordInput, setItPasswordInput] = useState<string>("Password@123");
+  const [itPasswordInput, setItPasswordInput] = useState<string>("");
   const [showItPassword, setShowItPassword] = useState<boolean>(false);
   const [showITAccountsHelper, setShowITAccountsHelper] = useState<boolean>(false);
 
@@ -1122,8 +1122,8 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
         {/* Right Authentication Panel */}
         <div className="md:w-1/2 p-10 flex flex-col justify-center dark:text-slate-100">
           
-          {/* CASE 1: Locked Portal Mode (When opened via dedicated link like ?portal=management or ?portal=counsellor) */}
-          {isPortalLocked && portalRole !== "management" && portalRole !== "counsellor" && (
+          {/* CASE 1: Locked Portal Mode (When opened via dedicated link) */}
+          {isPortalLocked && !["management", "counsellor", "teacher", "driver", "student", "it"].includes(portalRole) && (
             <div className="mb-5 p-3 bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 rounded-xl flex items-center justify-between gap-3 shadow-xs">
               <div className="flex items-center gap-2.5 min-w-0">
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
@@ -1207,7 +1207,7 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
                       setError("");
                     }}
                     className={`flex-1 min-w-[95px] flex items-center justify-center gap-1.5 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                      portalRole === "management"
+                      (portalRole as string) === "management"
                         ? "bg-[#2563EB] text-white shadow-md font-sans"
                         : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/60"
                     }`}
@@ -1314,6 +1314,7 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
                   : portalRole === "driver" ? "Transport Fleet Login" 
                   : portalRole === "student" ? "Parent / Student Portal"
                   : portalRole === "counsellor" ? "Parent Counselling & Admissions Desk"
+                  : portalRole === "it" ? "IT Person Workspace Portal"
                   : "Welcome Back Admin"}
               </h2>
               <p className="text-xs font-semibold text-[#475569] mt-1">
@@ -1322,6 +1323,7 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
                   : portalRole === "driver" ? "Enter your ID to start live GPS tracking."
                   : portalRole === "student" ? "Track your child's bus and get proximity alerts."
                   : portalRole === "counsellor" ? "Authorized Staff Login. Enter the username and password created by Admin in the Main App."
+                  : portalRole === "it" ? "Authorized IT Personnel Single Sign-On. Enter your system credentials."
                   : "Please enter your corporate credentials"}
               </p>
             </div>
@@ -1394,25 +1396,11 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
 
           {/* Form renders based on selected role */}
           {portalRole === "it" ? (
-            <form onSubmit={handleSubmitIT} className="space-y-4">
-              <div className="p-3.5 bg-indigo-50/90 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-900/60 rounded-xl text-xs text-indigo-900 dark:text-indigo-200 flex items-start gap-2.5 shadow-2xs">
-                <Sliders size={18} className="text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" />
-                <div>
-                  <p className="font-extrabold uppercase tracking-tight text-indigo-950 dark:text-indigo-100 flex items-center gap-1.5">
-                    👨‍💻 IT Person Custom Workspace Portal
-                    <span className="px-2 py-0.5 rounded text-[9px] font-mono bg-indigo-200 dark:bg-indigo-900 text-indigo-800 dark:text-indigo-200">
-                      Locked IT SSO
-                    </span>
-                  </p>
-                  <p className="text-[11px] text-indigo-800 dark:text-indigo-300 mt-0.5 leading-relaxed">
-                    Single Sign-On for IT staff. Enter the username and password created by Super Admin in Settings. Logging in loads only your assigned sidebar features!
-                  </p>
-                </div>
-              </div>
-
+            <form onSubmit={handleSubmitIT} className="space-y-4 bg-slate-50/90 dark:bg-slate-950/80 p-5 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-md">
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1">
-                  IT Staff Username / Email
+                <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1.5 flex items-center gap-1.5">
+                  <User size={13} className="text-indigo-600 dark:text-indigo-400" />
+                  <span>IT Staff Username / ID</span>
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
@@ -1426,15 +1414,16 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
                       setItUsernameInput(e.target.value);
                       if (error) setError("");
                     }}
-                    placeholder="Enter IT staff username (e.g. mohan_tech)"
-                    className="w-full pl-9 pr-3 py-2.5 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-medium bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="Enter IT username or staff ID"
+                    className="w-full pl-9 pr-3 py-2.5 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-medium bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-xs"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1">
-                  IT Staff Passcode
+                <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1.5 flex items-center gap-1.5">
+                  <Lock size={13} className="text-indigo-600 dark:text-indigo-400" />
+                  <span>IT Staff Passcode</span>
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
@@ -1448,8 +1437,8 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
                       setItPasswordInput(e.target.value);
                       if (error) setError("");
                     }}
-                    placeholder="Enter IT passcode (default: Password@123)"
-                    className="w-full pl-9 pr-10 py-2.5 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-medium bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="Enter IT passcode"
+                    className="w-full pl-9 pr-10 py-2.5 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-medium bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-xs"
                   />
                   <button
                     type="button"
@@ -1475,59 +1464,12 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
                 </button>
               </div>
 
-              {/* Helper Dropdown for IT Staff Accounts */}
-              {liveITStaffAccounts.length > 0 && (
-                <div className="mt-4 pt-3 border-t border-slate-200 dark:border-slate-800">
-                  <button
-                    type="button"
-                    onClick={() => setShowITAccountsHelper(!showITAccountsHelper)}
-                    className="w-full flex items-center justify-between text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 py-1 cursor-pointer"
-                  >
-                    <span className="flex items-center gap-1.5">
-                      <KeyRound size={13} />
-                      <span>View IT Person Accounts Created in Settings ({liveITStaffAccounts.length})</span>
-                    </span>
-                    {showITAccountsHelper ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                  </button>
-
-                  {showITAccountsHelper && (
-                    <div className="mt-2 p-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl space-y-2 max-h-48 overflow-y-auto custom-scrollbar">
-                      <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-tight">
-                        Super Admin created these IT Person accounts in Settings. Click autofill to test:
-                      </p>
-                      <div className="space-y-1.5">
-                        {liveITStaffAccounts.map((acc, idx) => (
-                          <div 
-                            key={`login-it-${acc.id}-${acc.username}-${idx}`}
-                            className="flex items-center justify-between p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg text-[10px]"
-                          >
-                            <div className="min-w-0 pr-2">
-                              <div className="flex items-center gap-1.5">
-                                <span className="font-bold text-slate-800 dark:text-slate-200 truncate">{acc.name}</span>
-                                <span className="text-[9px] text-indigo-600 dark:text-indigo-400 font-semibold">({acc.roleTitle})</span>
-                              </div>
-                              <p className="text-slate-500 font-mono text-[9px] mt-0.5">
-                                User: <strong>{acc.username}</strong> | Pass: <strong>{acc.password}</strong>
-                              </p>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setItUsernameInput(acc.username);
-                                setItPasswordInput(acc.password);
-                                setShowITAccountsHelper(false);
-                              }}
-                              className="px-2.5 py-1 bg-indigo-100 hover:bg-indigo-200 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/80 text-indigo-700 dark:text-indigo-300 rounded font-bold text-[9px] shrink-0 cursor-pointer"
-                            >
-                              ⚡ Autofill
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
+              <div className="pt-2 text-center border-t border-slate-200/60 dark:border-slate-800/80">
+                <p className="text-[10px] font-semibold text-slate-400 dark:text-slate-500 flex items-center justify-center gap-1.5">
+                  <span>🛡️</span>
+                  <span>Encrypted IT Session • Single Sign-On Access</span>
+                </p>
+              </div>
             </form>
           ) : portalRole === "management" ? (
             <form onSubmit={handleSubmitManagement} className="space-y-4 bg-slate-50/90 dark:bg-slate-950/80 p-5 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-md">
@@ -1898,8 +1840,8 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
             </form>
           )}
 
-          {/* PWA Promo Banner */}
-          {portalRole !== "management" && portalRole !== "counsellor" && (
+          {/* PWA Promo Banner (Only for Super Admin on main URL) */}
+          {portalRole === "admin" && !isPortalLocked && (
             <div className="mt-6 pt-5 border-t border-slate-200 text-center">
               <button
                 type="button"
