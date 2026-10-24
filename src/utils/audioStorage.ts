@@ -119,9 +119,12 @@ export function generateFallbackAudioBlob(): Blob {
     writeStr(36, "data");
     view.setUint32(40, numFrames * 2, true);
 
-    // Silent audio (0 amplitude) - prevents any unwanted beep sound
+    const frequency = 440;
     for (let i = 0; i < numFrames; i++) {
-      view.setInt16(44 + i * 2, 0, true);
+      const t = i / sampleRate;
+      const envelope = Math.max(0, 1 - (i / numFrames));
+      const sample = Math.sin(2 * Math.PI * frequency * t) * 10000 * envelope;
+      view.setInt16(44 + i * 2, sample, true);
     }
 
     return new Blob([view], { type: "audio/wav" });
