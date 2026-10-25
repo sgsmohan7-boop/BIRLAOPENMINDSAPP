@@ -2,7 +2,7 @@ import { Room } from "../types";
 
 export const SHEET_ALLOCATED_ROOMS: Room[] = [
   // ==========================================
-  // NORTH GROUND FLOOR (15 Rooms)
+  // 1. NORTH GROUND FLOOR (NG - 15 Rooms)
   // ==========================================
   {
     id: "RM-NG-01",
@@ -14,7 +14,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "North Ground Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Interactive Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -27,7 +27,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "North Ground Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -40,7 +40,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "North Ground Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -53,7 +53,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "North Ground Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -66,7 +66,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "North Ground Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -79,7 +79,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "North Ground Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -92,7 +92,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "North Ground Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -105,7 +105,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "North Ground Floor",
     academicYear: "2026-2027",
     assets: { "Chess Tables": "10 Sets" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -118,7 +118,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "North Ground Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -131,7 +131,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "North Ground Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -144,20 +144,33 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "North Ground Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NG-LAB",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Labs",
+    roomNumber: "NG LAB",
+    className: "NG LAB",
+    floorWing: "North Ground Floor",
+    academicYear: "2026-2027",
+    assets: { "Desktop PC": "20 Units", "Senses Board": "1 Board", "LAN Switch": "1 Switch" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
     id: "RM-NG-12",
     school: "Birla Open Minds International School",
     building: "LB Nagar Branch",
-    dept: "Labs",
+    dept: "Classroom",
     roomNumber: "NG 12",
-    className: "NG LAB",
+    className: "2ND - OMICRON",
     floorWing: "North Ground Floor",
     academicYear: "2026-2027",
-    assets: { "Desktop PC": "20 Units", "Senses Board": "1 Board", "LAN Switch": "1 Switch" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -166,11 +179,11 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     building: "LB Nagar Branch",
     dept: "Classroom",
     roomNumber: "NG 13",
-    className: "2ND - OMEGA",
+    className: "2ND - ZETA",
     floorWing: "North Ground Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -179,626 +192,16 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     building: "LB Nagar Branch",
     dept: "Classroom",
     roomNumber: "NG 14",
-    className: "2ND - ZETA",
-    floorWing: "North Ground Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NG-15",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NG 15",
     className: "2ND - EPSILON",
     floorWing: "North Ground Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
 
   // ==========================================
-  // NORTH FIRST FLOOR (15 Rooms)
-  // ==========================================
-  {
-    id: "RM-NF-01",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NF 01",
-    className: "7TH - BETA",
-    floorWing: "North First Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NF-02",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Accounts/Admin",
-    roomNumber: "NF 02",
-    className: "STAFF ROOM",
-    floorWing: "North First Floor",
-    academicYear: "2026-2027",
-    assets: { "Desktop PC": "4 Systems", "Printer": "1 Printer" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NF-03",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NF 03",
-    className: "7TH - GAMMA",
-    floorWing: "North First Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NF-04",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NF 04",
-    className: "7TH - DELTA",
-    floorWing: "North First Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NF-05",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NF 05",
-    className: "7TH - EPSILON",
-    floorWing: "North First Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NF-06",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NF 06",
-    className: "7TH - ZETA",
-    floorWing: "North First Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NF-07",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NF 07",
-    className: "7TH - OMEGA",
-    floorWing: "North First Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NF-08",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NF 08",
-    className: "7TH - SIGMA",
-    floorWing: "North First Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NF-09",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Other",
-    roomNumber: "NF 09",
-    className: "LANGUAGE ROOMS",
-    floorWing: "North First Floor",
-    academicYear: "2026-2027",
-    assets: { "Audio System": "Language Lab Specs" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NF-10",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NF 10",
-    className: "7TH - OMICRON",
-    floorWing: "North First Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NF-11",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NF 11",
-    className: "2ND - ALPHA",
-    floorWing: "North First Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NF-12",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Labs",
-    roomNumber: "NF 12",
-    className: "NF LAB",
-    floorWing: "North First Floor",
-    academicYear: "2026-2027",
-    assets: { "Desktop PC": "15 Systems" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NF-13",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NF 13",
-    className: "2ND - BETA",
-    floorWing: "North First Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NF-14",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NF 14",
-    className: "2ND - GAMMA",
-    floorWing: "North First Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NF-15",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NF 15",
-    className: "2ND - DELTA",
-    floorWing: "North First Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-
-  // ==========================================
-  // NORTH SECOND FLOOR (15 Rooms)
-  // ==========================================
-  {
-    id: "RM-NS-01",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NS 01",
-    className: "8TH - SIGMA",
-    floorWing: "North Second Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NS-02",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Accounts/Admin",
-    roomNumber: "NS 02",
-    className: "STAFF ROOM",
-    floorWing: "North Second Floor",
-    academicYear: "2026-2027",
-    assets: { "Desktop PC": "3 Systems" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NS-03",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NS 03",
-    className: "8TH - OMEGA",
-    floorWing: "North Second Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NS-04",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NS 04",
-    className: "8TH - ZETA",
-    floorWing: "North Second Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NS-05",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NS 05",
-    className: "8TH - EPSILON",
-    floorWing: "North Second Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NS-06",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NS 06",
-    className: "8TH - DELTA",
-    floorWing: "North Second Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NS-07",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NS 07",
-    className: "7TH - ALPHA",
-    floorWing: "North Second Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NS-08",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NS 08",
-    className: "8TH - GAMMA",
-    floorWing: "North Second Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NS-09",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Other",
-    roomNumber: "NS 09",
-    className: "LANGUAGE ROOMS",
-    floorWing: "North Second Floor",
-    academicYear: "2026-2027",
-    assets: { "Audio System": "Language Setup" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NS-10",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NS 10",
-    className: "9TH - ZETA",
-    floorWing: "North Second Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NS-11",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NS 11",
-    className: "9TH - OMEGA",
-    floorWing: "North Second Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NS-12",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Labs",
-    roomNumber: "NS 12",
-    className: "NS LAB",
-    floorWing: "North Second Floor",
-    academicYear: "2026-2027",
-    assets: { "Desktop PC": "20 Systems" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NS-13",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NS 13",
-    className: "9TH - SIGMA",
-    floorWing: "North Second Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NS-14",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NS 14",
-    className: "8TH - BETA",
-    floorWing: "North Second Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NS-15",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NS 15",
-    className: "8TH - ALPHA",
-    floorWing: "North Second Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-
-  // ==========================================
-  // NORTH THIRD FLOOR (15 Rooms)
-  // ==========================================
-  {
-    id: "RM-NT-01",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NT 01",
-    className: "10TH - ALPHA",
-    floorWing: "North Third Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NT-02",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Accounts/Admin",
-    roomNumber: "NT 02",
-    className: "STAFF ROOM",
-    floorWing: "North Third Floor",
-    academicYear: "2026-2027",
-    assets: { "Desktop PC": "3 Systems" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NT-03",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NT 03",
-    className: "10TH - BETA",
-    floorWing: "North Third Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NT-04",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NT 04",
-    className: "10TH - GAMMA",
-    floorWing: "North Third Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NT-05",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NT 05",
-    className: "10TH - DELTA",
-    floorWing: "North Third Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NT-06",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NT 06",
-    className: "10TH - EPSILON",
-    floorWing: "North Third Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NT-07",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NT 07",
-    className: "10TH - ZETA",
-    floorWing: "North Third Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NT-08",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NT 08",
-    className: "10TH - OMEGA",
-    floorWing: "North Third Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NT-09",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Other",
-    roomNumber: "NT 09",
-    className: "LANGUAGE ROOMS",
-    floorWing: "North Third Floor",
-    academicYear: "2026-2027",
-    assets: { "Audio System": "Language Setup" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NT-10",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NT 10",
-    className: "9TH - ALPHA",
-    floorWing: "North Third Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NT-11",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NT 11",
-    className: "9TH - BETA",
-    floorWing: "North Third Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NT-12",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Labs",
-    roomNumber: "NT 12",
-    className: "NT LAB",
-    floorWing: "North Third Floor",
-    academicYear: "2026-2027",
-    assets: { "Desktop PC": "20 Systems" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NT-13",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NT 13",
-    className: "9TH - GAMMA",
-    floorWing: "North Third Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NT-14",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NT 14",
-    className: "9TH - DELTA",
-    floorWing: "North Third Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-NT-15",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "NT 15",
-    className: "9TH - EPSILON",
-    floorWing: "North Third Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-
-  // ==========================================
-  // SOUTH GROUND FLOOR (15 Rooms)
+  // 2. SOUTH GROUND FLOOR (SG - 15 Rooms)
   // ==========================================
   {
     id: "RM-SG-01",
@@ -806,11 +209,11 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     building: "LB Nagar Branch",
     dept: "Classroom",
     roomNumber: "SG 01",
-    className: "K2 - FLYING",
+    className: "K2 - FLYING STAR",
     floorWing: "South Ground Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -823,7 +226,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South Ground Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -836,7 +239,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South Ground Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -849,7 +252,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South Ground Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -862,7 +265,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South Ground Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -874,8 +277,8 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     className: "ACTIKIDS",
     floorWing: "South Ground Floor",
     academicYear: "2026-2027",
-    assets: { "Activity Toys": "Setup" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    assets: { "Play Equipment": "Actikids Set" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -884,11 +287,11 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     building: "LB Nagar Branch",
     dept: "Classroom",
     roomNumber: "SG 07",
-    className: "K2 - ZEPPELIN",
+    className: "K2 - ZEPPLIN",
     floorWing: "South Ground Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -901,7 +304,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South Ground Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -914,7 +317,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South Ground Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -927,7 +330,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South Ground Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -940,20 +343,33 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South Ground Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-SG-LAB",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Labs",
+    roomNumber: "SG LAB",
+    className: "1ST - EPSILON",
+    floorWing: "South Ground Floor",
+    academicYear: "2026-2027",
+    assets: { "Desktop PC": "15 Systems", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
     id: "RM-SG-12",
     school: "Birla Open Minds International School",
     building: "LB Nagar Branch",
-    dept: "Labs",
+    dept: "Classroom",
     roomNumber: "SG 12",
-    className: "SG LAB",
+    className: "1ST - ZETA",
     floorWing: "South Ground Floor",
     academicYear: "2026-2027",
-    assets: { "Desktop PC": "15 Systems", "Projector": "1 BenQ" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -962,11 +378,11 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     building: "LB Nagar Branch",
     dept: "Classroom",
     roomNumber: "SG 13",
-    className: "1ST - EPSILON",
+    className: "1ST - SIGMA",
     floorWing: "South Ground Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -975,29 +391,215 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     building: "LB Nagar Branch",
     dept: "Classroom",
     roomNumber: "SG 14",
-    className: "1ST - ZETA",
+    className: "1ST - OMICRON",
     floorWing: "South Ground Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-SG-15",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "SG 15",
-    className: "1ST - SIGMA",
-    floorWing: "South Ground Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
 
   // ==========================================
-  // SOUTH FIRST FLOOR (15 Rooms)
+  // 3. NORTH FIRST FLOOR (NF - 15 Rooms)
+  // ==========================================
+  {
+    id: "RM-NF-01",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NF 01",
+    className: "7TH - BETA",
+    floorWing: "North First Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NF-02",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Accounts/Admin",
+    roomNumber: "NF 02",
+    className: "STAFF ROOM",
+    floorWing: "North First Floor",
+    academicYear: "2026-2027",
+    assets: { "Desktop PC": "4 Systems", "Printer": "1 Printer" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NF-03",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NF 03",
+    className: "7TH - GAMMA",
+    floorWing: "North First Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NF-04",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NF 04",
+    className: "7TH - DELTA",
+    floorWing: "North First Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NF-05",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NF 05",
+    className: "7TH - EPSILON",
+    floorWing: "North First Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NF-06",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NF 06",
+    className: "7TH - ZETA",
+    floorWing: "North First Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NF-07",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NF 07",
+    className: "7TH - OMICRON",
+    floorWing: "North First Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NF-08",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NF 08",
+    className: "7TH - SIGMA",
+    floorWing: "North First Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NF-09",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Other",
+    roomNumber: "NF 09",
+    className: "LANGUAGE ROOMS",
+    floorWing: "North First Floor",
+    academicYear: "2026-2027",
+    assets: { "Audio System": "Language Lab Specs" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NF-10",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NF 10",
+    className: "7TH - OMICRON",
+    floorWing: "North First Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NF-11",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NF 11",
+    className: "2ND - ALPHA",
+    floorWing: "North First Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NF-LAB",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Labs",
+    roomNumber: "NF LAB",
+    className: "NF LAB",
+    floorWing: "North First Floor",
+    academicYear: "2026-2027",
+    assets: { "Desktop PC": "15 Systems" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NF-12",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NF 12",
+    className: "2ND - BETA",
+    floorWing: "North First Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NF-13",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NF 13",
+    className: "2ND - GAMMA",
+    floorWing: "North First Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NF-14",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NF 14",
+    className: "2ND - DELTA",
+    floorWing: "North First Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+
+  // ==========================================
+  // 4. SOUTH FIRST FLOOR (SF - 15 Rooms)
   // ==========================================
   {
     id: "RM-SF-01",
@@ -1005,11 +607,11 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     building: "LB Nagar Branch",
     dept: "Classroom",
     roomNumber: "SF 01",
-    className: "3RD - OMEGA",
+    className: "3RD - OMICRON",
     floorWing: "South First Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1018,11 +620,11 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     building: "LB Nagar Branch",
     dept: "Classroom",
     roomNumber: "SF 02",
-    className: "3RD - OMICRON",
+    className: "3RD - SIGMA",
     floorWing: "South First Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1031,11 +633,11 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     building: "LB Nagar Branch",
     dept: "Classroom",
     roomNumber: "SF 03",
-    className: "3RD - SIGMA",
+    className: "3RD - ZETA",
     floorWing: "South First Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1044,11 +646,11 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     building: "LB Nagar Branch",
     dept: "Classroom",
     roomNumber: "SF 04",
-    className: "3RD - ZETA",
+    className: "3RD - EPSILON",
     floorWing: "South First Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1057,11 +659,11 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     building: "LB Nagar Branch",
     dept: "Classroom",
     roomNumber: "SF 05",
-    className: "3RD - EPSILON",
+    className: "3RD - DELTA",
     floorWing: "South First Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1074,7 +676,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South First Floor",
     academicYear: "2026-2027",
     assets: { "Desktop PC": "3 Systems" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1087,7 +689,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South First Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1100,7 +702,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South First Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1113,7 +715,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South First Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1126,7 +728,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South First Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1135,24 +737,37 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     building: "LB Nagar Branch",
     dept: "Classroom",
     roomNumber: "SF 11",
-    className: "4TH - OMEGA",
+    className: "4TH - OMICRON",
     floorWing: "South First Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-SF-LAB",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Labs",
+    roomNumber: "SF LAB",
+    className: "SF LAB",
+    floorWing: "South First Floor",
+    academicYear: "2026-2027",
+    assets: { "Science Equipment": "Physics/Chemistry Kits" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
     id: "RM-SF-12",
     school: "Birla Open Minds International School",
     building: "LB Nagar Branch",
-    dept: "Labs",
+    dept: "Classroom",
     roomNumber: "SF 12",
-    className: "SF LAB",
+    className: "3RD - ALPHA",
     floorWing: "South First Floor",
     academicYear: "2026-2027",
-    assets: { "Desktop PC": "15 Systems" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1161,11 +776,11 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     building: "LB Nagar Branch",
     dept: "Classroom",
     roomNumber: "SF 13",
-    className: "3RD - ALPHA",
+    className: "3RD - BETA",
     floorWing: "South First Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1174,29 +789,215 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     building: "LB Nagar Branch",
     dept: "Classroom",
     roomNumber: "SF 14",
-    className: "3RD - BETA",
-    floorWing: "South First Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-SF-15",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "SF 15",
     className: "3RD - GAMMA",
     floorWing: "South First Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
 
   // ==========================================
-  // SOUTH SECOND FLOOR (15 Rooms)
+  // 5. NORTH SECOND FLOOR (NS - 15 Rooms)
+  // ==========================================
+  {
+    id: "RM-NS-01",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NS 01",
+    className: "8TH - SIGMA",
+    floorWing: "North Second Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NS-02",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Accounts/Admin",
+    roomNumber: "NS 02",
+    className: "STAFF ROOM",
+    floorWing: "North Second Floor",
+    academicYear: "2026-2027",
+    assets: { "Desktop PC": "3 Systems" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NS-03",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NS 03",
+    className: "8TH - OMICRON",
+    floorWing: "North Second Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NS-04",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NS 04",
+    className: "8TH - ZETA",
+    floorWing: "North Second Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NS-05",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NS 05",
+    className: "8TH - EPSILON",
+    floorWing: "North Second Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NS-06",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NS 06",
+    className: "8TH - DELTA",
+    floorWing: "North Second Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NS-07",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NS 07",
+    className: "7TH - ALPHA",
+    floorWing: "North Second Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NS-08",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NS 08",
+    className: "8TH - GAMMA",
+    floorWing: "North Second Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NS-09",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Other",
+    roomNumber: "NS 09",
+    className: "LANGUAGE ROOMS",
+    floorWing: "North Second Floor",
+    academicYear: "2026-2027",
+    assets: { "Audio System": "Language Lab Specs" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NS-10",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NS 10",
+    className: "9TH - ZETA",
+    floorWing: "North Second Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NS-11",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NS 11",
+    className: "9TH - OMICRON",
+    floorWing: "North Second Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NS-LAB",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Labs",
+    roomNumber: "NS LAB",
+    className: "NS LAB",
+    floorWing: "North Second Floor",
+    academicYear: "2026-2027",
+    assets: { "Desktop PC": "15 Systems" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NS-12",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NS 12",
+    className: "9TH - SIGMA",
+    floorWing: "North Second Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NS-13",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NS 13",
+    className: "8TH - BETA",
+    floorWing: "North Second Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NS-14",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NS 14",
+    className: "8TH - ALPHA",
+    floorWing: "North Second Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+
+  // ==========================================
+  // 6. SOUTH SECOND FLOOR (SS - 15 Rooms)
   // ==========================================
   {
     id: "RM-SS-01",
@@ -1208,7 +1009,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South Second Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1221,7 +1022,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South Second Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1230,11 +1031,11 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     building: "LB Nagar Branch",
     dept: "Classroom",
     roomNumber: "SS 03",
-    className: "5TH - OMEGA",
+    className: "5TH - OMICRON",
     floorWing: "South Second Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1247,7 +1048,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South Second Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1260,7 +1061,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South Second Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1273,7 +1074,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South Second Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1286,7 +1087,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South Second Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1299,7 +1100,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South Second Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1312,7 +1113,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South Second Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1324,8 +1125,8 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     className: "LANGUAGE ROOMS",
     floorWing: "South Second Floor",
     academicYear: "2026-2027",
-    assets: { "Audio System": "Language Setup" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    assets: { "Audio System": "Language Lab Specs" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1337,21 +1138,34 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     className: "COMPUTER LAB",
     floorWing: "South Second Floor",
     academicYear: "2026-2027",
-    assets: { "Desktop PC": "30 Systems", "UPS": "1 Central UPS", "AC": "2 Air Conditioners" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    assets: { "Desktop PC": "30 Systems", "LAN Switch": "1 Switch", "UPS": "1 UPS 10KVA" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-SS-LAB",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Other",
+    roomNumber: "SS LAB",
+    className: "TAEKWONDO",
+    floorWing: "South Second Floor",
+    academicYear: "2026-2027",
+    assets: { "Sports Mats": "Taekwondo Training Mats" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
     id: "RM-SS-12",
     school: "Birla Open Minds International School",
     building: "LB Nagar Branch",
-    dept: "Other",
+    dept: "Classroom",
     roomNumber: "SS 12",
-    className: "TAEKWONDO",
+    className: "4TH - GAMMA",
     floorWing: "South Second Floor",
     academicYear: "2026-2027",
-    assets: { "Training Mats": "Full Floor" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1360,11 +1174,11 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     building: "LB Nagar Branch",
     dept: "Classroom",
     roomNumber: "SS 13",
-    className: "4TH - GAMMA",
+    className: "4TH - DELTA",
     floorWing: "South Second Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1373,29 +1187,215 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     building: "LB Nagar Branch",
     dept: "Classroom",
     roomNumber: "SS 14",
-    className: "4TH - DELTA",
-    floorWing: "South Second Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-SS-15",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "SS 15",
     className: "4TH - EPSILON",
     floorWing: "South Second Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
 
   // ==========================================
-  // SOUTH THIRD FLOOR (15 Rooms)
+  // 7. NORTH THIRD FLOOR (NT - 15 Rooms)
+  // ==========================================
+  {
+    id: "RM-NT-01",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NT 01",
+    className: "10TH - ALPHA",
+    floorWing: "North Third Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NT-02",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Accounts/Admin",
+    roomNumber: "NT 02",
+    className: "STAFF ROOM",
+    floorWing: "North Third Floor",
+    academicYear: "2026-2027",
+    assets: { "Desktop PC": "3 Systems" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NT-03",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NT 03",
+    className: "10TH - BETA",
+    floorWing: "North Third Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NT-04",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NT 04",
+    className: "10TH - GAMMA",
+    floorWing: "North Third Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NT-05",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NT 05",
+    className: "10TH - DELTA",
+    floorWing: "North Third Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NT-06",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NT 06",
+    className: "10TH - EPSILON",
+    floorWing: "North Third Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NT-07",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NT 07",
+    className: "10TH - ZETA",
+    floorWing: "North Third Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NT-08",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NT 08",
+    className: "10TH - OMICRON",
+    floorWing: "North Third Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NT-09",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Other",
+    roomNumber: "NT 09",
+    className: "LANGUAGE ROOMS",
+    floorWing: "North Third Floor",
+    academicYear: "2026-2027",
+    assets: { "Audio System": "Language Lab Specs" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NT-10",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NT 10",
+    className: "9TH - ALPHA",
+    floorWing: "North Third Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NT-11",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NT 11",
+    className: "9TH - BETA",
+    floorWing: "North Third Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NT-LAB",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Labs",
+    roomNumber: "NT LAB",
+    className: "NT LAB",
+    floorWing: "North Third Floor",
+    academicYear: "2026-2027",
+    assets: { "Desktop PC": "15 Systems" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NT-12",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NT 12",
+    className: "9TH - GAMMA",
+    floorWing: "North Third Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NT-13",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NT 13",
+    className: "9TH - DELTA",
+    floorWing: "North Third Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-NT-14",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Classroom",
+    roomNumber: "NT 14",
+    className: "9TH - EPSILON",
+    floorWing: "North Third Floor",
+    academicYear: "2026-2027",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+
+  // ==========================================
+  // 8. SOUTH THIRD FLOOR (ST - 15 Rooms)
   // ==========================================
   {
     id: "RM-ST-01",
@@ -1407,7 +1407,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South Third Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1420,7 +1420,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South Third Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1433,7 +1433,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South Third Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1446,7 +1446,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South Third Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1459,7 +1459,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South Third Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1472,7 +1472,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South Third Floor",
     academicYear: "2026-2027",
     assets: { "Desktop PC": "3 Systems" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1485,7 +1485,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South Third Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1498,7 +1498,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South Third Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1511,7 +1511,7 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     floorWing: "South Third Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1523,8 +1523,8 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     className: "LANGUAGE ROOMS",
     floorWing: "South Third Floor",
     academicYear: "2026-2027",
-    assets: { "Audio System": "Language Setup" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    assets: { "Audio System": "Language Lab Specs" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1536,8 +1536,21 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     className: "YOGA ROOM",
     floorWing: "South Third Floor",
     academicYear: "2026-2027",
-    assets: { "Yoga Mats": "Full Hall" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    assets: { "Yoga Mats": "Yoga Accessories" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
+    classHistory: []
+  },
+  {
+    id: "RM-ST-LAB",
+    school: "Birla Open Minds International School",
+    building: "LB Nagar Branch",
+    dept: "Other",
+    roomNumber: "ST LAB",
+    className: "DANCE ROOM",
+    floorWing: "South Third Floor",
+    academicYear: "2026-2027",
+    assets: { "Mirrors & Speakers": "Dance Studio Specs" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1546,24 +1559,24 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     building: "LB Nagar Branch",
     dept: "Other",
     roomNumber: "ST 12",
-    className: "DANCE ROOM",
+    className: "MUSIC",
     floorWing: "South Third Floor",
     academicYear: "2026-2027",
-    assets: { "Audio Speakers": "1 Sound System", "Mirrors": "Full Wall" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    assets: { "Instruments": "Keyboards & Drums" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
     id: "RM-ST-13",
     school: "Birla Open Minds International School",
     building: "LB Nagar Branch",
-    dept: "Other",
+    dept: "Classroom",
     roomNumber: "ST 13",
-    className: "MUSIC ROOM",
+    className: "5TH - ALPHA",
     floorWing: "South Third Floor",
     academicYear: "2026-2027",
-    assets: { "Instruments": "Full Set" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   },
   {
@@ -1572,24 +1585,11 @@ export const SHEET_ALLOCATED_ROOMS: Room[] = [
     building: "LB Nagar Branch",
     dept: "Classroom",
     roomNumber: "ST 14",
-    className: "5TH - ALPHA",
-    floorWing: "South Third Floor",
-    academicYear: "2026-2027",
-    assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
-    classHistory: []
-  },
-  {
-    id: "RM-ST-15",
-    school: "Birla Open Minds International School",
-    building: "LB Nagar Branch",
-    dept: "Classroom",
-    roomNumber: "ST 15",
     className: "5TH - BETA",
     floorWing: "South Third Floor",
     academicYear: "2026-2027",
     assets: { "Projector": "1 BenQ", "Senses Board": "1 Board" },
-    hwLogs: "• [Setup] Synced from Official Campus Room Allocations Sheet",
+    hwLogs: "• [Setup] Synced from Official Room Allocations Master Sheet",
     classHistory: []
   }
 ];

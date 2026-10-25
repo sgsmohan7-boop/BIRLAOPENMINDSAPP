@@ -61,6 +61,16 @@ export default function RoomMaster({ rooms, updateRooms, allocations = [] }: Roo
   const [dynamicInputs, setDynamicInputs] = useState<Record<string, string>>({});
   const [customAssets, setCustomAssets] = useState<{ key: string; val: string }[]>([]);
 
+  // Auto-sync master sheet allocations if cached data is incomplete or outdated
+  useEffect(() => {
+    if (rooms.length < SHEET_ALLOCATED_ROOMS.length || !rooms.some(r => r.roomNumber.includes("LAB"))) {
+      const sheetIds = new Set(SHEET_ALLOCATED_ROOMS.map(sr => sr.id));
+      const nonSheetRooms = rooms.filter(r => !sheetIds.has(r.id) && !r.roomNumber.match(/^(NG|NF|NS|NT|SG|SF|SS|ST)/i));
+      const merged = [...SHEET_ALLOCATED_ROOMS, ...nonSheetRooms];
+      updateRooms(merged);
+    }
+  }, []);
+
   // Monitor dept selection
   useEffect(() => {
     if (editingId) return; // Keep existing data when editing
