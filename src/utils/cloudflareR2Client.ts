@@ -174,6 +174,13 @@ export async function uploadToR2Direct(
   body: Uint8Array | Blob | string,
   contentType = "audio/webm"
 ): Promise<boolean> {
+  // Strict Policy: Cloudflare R2 is 100% reserved for raw meeting audio files (.webm, .mp3, .wav).
+  // All text transcripts, notes, and records are managed in Firebase Firestore to save 10GB R2 storage for 1-hour audio.
+  if (fileName.toLowerCase().endsWith(".txt") || contentType.includes("text/")) {
+    console.log(`[R2 Policy] Skipping text file ${fileName}. Text data belongs exclusively in Firebase Firestore.`);
+    return false;
+  }
+
   try {
     const s3 = createBrowserR2Client(creds);
     if (!s3) return false;
@@ -304,24 +311,92 @@ export async function syncAllRecordingsDirect(
         } catch (_) {}
       }
 
-      // Upload transcript text if present
-      const summaryText = rec.meetingTextSummary || enq.notes || enq.followUpNotes;
-      if (summaryText && typeof summaryText === "string" && summaryText.trim().length > 0) {
-        const textFileName = `${fileName}.txt`;
-        await uploadToR2Direct(creds, textFileName, summaryText, "text/plain; charset=utf-8");
-      }
     }
 
     return {
       success: true,
       syncedCount,
-      message: `Direct Browser Sync completed: Synced ${syncedCount} audio record(s) & transcripts to Cloudflare R2 Bucket "${creds.bucketName}"!`
+      message: `Direct Browser Sync completed: Synced ${syncedCount} audio recording(s) to Cloudflare R2 Bucket "${creds.bucketName}"! (Transcripts and notes remain safe in Firebase Firestore)`
     };
   } catch (err: any) {
     return {
       success: false,
       syncedCount: 0,
       message: `Direct Browser Sync error: ${err?.message || err}`
+    };
+  }
+}
+
+/**
+ * Delete a specific object from Cloudflare R2
+ */
+export async function deleteR2FileDirect(creds: R2Credentials, fileName: string): Promise<boolean> {
+  try {
+    const s3 = createBrowserR2Client(creds);
+    if (!s3) return false;
+
+    const command = new DeleteObjectCommand({
+      Bucket: (creds.bucketName || "counselling-audio-vault").trim(),
+      Key: fileName
+    });
+
+    await s3.send(command);
+    return true;
+  } catch (err) {
+    console.warn(`Failed to delete ${fileName} from R2:`, err);
+    return false;
+  }
+}
+
+/**
+ * Clean up all .txt files from Cloudflare R2 to ensure the 10GB vault holds strictly audio files.
+ * Text files are already securely stored in Firebase Firestore.
+ */
+export async function purgeTextFilesFromR2(
+  creds: R2Credentials,
+  onProgress?: (status: string) => void
+): Promise<{ success: boolean; deletedCount: number; message: string }> {
+  try {
+    const s3 = createBrowserR2Client(creds);
+    if (!s3) {
+      return { success: false, deletedCount: 0, message: "Missing Cloudflare R2 credentials." };
+    }
+
+    onProgress?.("Scanning Cloudflare R2 bucket for .txt files...");
+    const command = new ListObjectsV2Command({
+      Bucket: (creds.bucketName || "counselling-audio-vault").trim(),
+      MaxKeys: 1000
+    });
+
+    const result = await s3.send(command);
+    const textObjects = (result.Contents || []).filter(c => c.Key && c.Key.toLowerCase().endsWith(".txt"));
+
+    if (textObjects.length === 0) {
+      return {
+        success: true,
+        deletedCount: 0,
+        message: "No .txt files found in Cloudflare R2 bucket. Bucket is already 100% clean audio storage!"
+      };
+    }
+
+    let deletedCount = 0;
+    for (const obj of textObjects) {
+      if (!obj.Key) continue;
+      onProgress?.(`Removing text file (${deletedCount + 1}/${textObjects.length}): ${obj.Key}...`);
+      const ok = await deleteR2FileDirect(creds, obj.Key);
+      if (ok) deletedCount++;
+    }
+
+    return {
+      success: true,
+      deletedCount,
+      message: `Cleaned up ${deletedCount} .txt file(s) from Cloudflare R2! R2 bucket is now 100% reserved for Audio recordings.`
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      deletedCount: 0,
+      message: `Error cleaning text files from R2: ${err?.message || err}`
     };
   }
 }

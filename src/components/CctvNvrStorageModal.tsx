@@ -29,6 +29,8 @@ import {
   testR2ConnectionDirect,
   listR2FilesDirect,
   syncAllRecordingsDirect,
+  purgeTextFilesFromR2,
+  deleteR2FileDirect,
   DEFAULT_R2_CREDENTIALS,
   R2Credentials,
   R2_CORS_POLICY_JSON
@@ -274,6 +276,32 @@ export default function CctvNvrStorageModal({
       setShowCorsGuide(true);
     } finally {
       setSyncingAllToCf(false);
+    }
+  };
+
+  const [purgingTextFiles, setPurgingTextFiles] = useState(false);
+
+  const handlePurgeTextFiles = async () => {
+    setPurgingTextFiles(true);
+    setR2TestMessage("Scanning and purging .txt files from Cloudflare R2 bucket...");
+    const creds: R2Credentials = {
+      bucketName: cloudflareBucketName,
+      accountId: cloudflareAccountId,
+      accessKeyId: cloudflareAccessKeyId,
+      secretAccessKey: cloudflareSecretAccessKey
+    };
+    try {
+      const result = await purgeTextFilesFromR2(creds, (msg) => setR2TestMessage(msg));
+      if (result.success) {
+        setR2TestMessage(`✓ ${result.message}`);
+        await fetchCloudflareFiles();
+      } else {
+        setR2TestMessage(`✕ ${result.message}`);
+      }
+    } catch (err: any) {
+      setR2TestMessage(`✕ Purge failed: ${err?.message || err}`);
+    } finally {
+      setPurgingTextFiles(false);
     }
   };
 
@@ -1070,15 +1098,28 @@ export default function CctvNvrStorageModal({
                 </div>
 
                 <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200 dark:border-slate-700">
-                  <button
-                    type="button"
-                    onClick={handleSyncAllToCloudflare}
-                    disabled={syncingAllToCf}
-                    className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-xs"
-                  >
-                    <RefreshCw size={13} className={syncingAllToCf ? "animate-spin" : ""} />
-                    <span>{syncingAllToCf ? "Syncing All to Cloudflare..." : "Sync All Audio Records to Cloudflare R2"}</span>
-                  </button>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={handleSyncAllToCloudflare}
+                      disabled={syncingAllToCf}
+                      className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-xs"
+                    >
+                      <RefreshCw size={13} className={syncingAllToCf ? "animate-spin" : ""} />
+                      <span>{syncingAllToCf ? "Syncing All to Cloudflare..." : "Sync All Audio to Cloudflare R2"}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handlePurgeTextFiles}
+                      disabled={purgingTextFiles}
+                      className="px-3.5 py-2 bg-red-100 hover:bg-red-200 dark:bg-red-950/60 dark:hover:bg-red-900/60 text-red-700 dark:text-red-300 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      title="Purge .txt files from R2. All transcripts, notes & dialogue remain 100% safe in Firebase Firestore."
+                    >
+                      <Trash2 size={13} className={purgingTextFiles ? "animate-spin" : ""} />
+                      <span>{purgingTextFiles ? "Purging .txt Files..." : "🧹 Purge .txt Files (Audio Only)"}</span>
+                    </button>
+                  </div>
 
                   <div className="flex items-center gap-2">
                     <button
@@ -1099,6 +1140,14 @@ export default function CctvNvrStorageModal({
                       {savingConfig ? "Saving..." : "Save & Connect R2"}
                     </button>
                   </div>
+                </div>
+
+                {/* Storage Rule Banner */}
+                <div className="p-2.5 bg-sky-50 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-800 rounded-xl flex items-center gap-2 text-[11px] text-sky-800 dark:text-sky-300">
+                  <Info size={14} className="shrink-0 text-sky-600" />
+                  <p>
+                    <strong>Storage Rule:</strong> Cloudflare R2 is 100% reserved for 1-hour audio recordings (.webm / .mp3) to maximize your 10GB vault. All text transcripts, parent notes, and meeting summaries are stored in <strong>Firebase Firestore</strong>.
+                  </p>
                 </div>
               </div>
 

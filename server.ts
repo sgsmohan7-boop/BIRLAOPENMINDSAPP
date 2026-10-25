@@ -1802,10 +1802,10 @@ Return pure JSON matching this exact structure:
         const diskFiles = fs.readdirSync(AUDIOS_DIR);
         for (const f of diskFiles) {
           if (stopLoop) break;
-          if (f.endsWith(".webm") || f.endsWith(".mp3") || f.endsWith(".wav") || f.endsWith(".txt")) {
+          if (f.endsWith(".webm") || f.endsWith(".mp3") || f.endsWith(".wav")) {
             const filePath = path.join(AUDIOS_DIR, f);
             const buffer = fs.readFileSync(filePath);
-            const mime = f.endsWith(".txt") ? "text/plain" : (f.endsWith(".mp3") ? "audio/mp3" : "audio/webm");
+            const mime = f.endsWith(".mp3") ? "audio/mp3" : "audio/webm";
             const ok = await uploadToR2(f, buffer, mime);
             if (ok) {
               uploadedCount++;
