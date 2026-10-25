@@ -617,26 +617,27 @@ export default function App() {
             return;
           }
 
-          // Automatically delete any legacy duplicate documents in Firestore with timestamp suffix
+          // Automatically purge deleted or duplicate documents from Firestore
           items.forEach(item => {
             if (item.id && /_(\d{10,})$/.test(item.id)) {
               deleteDocument("counselling_forms", item.id);
               deleteDocument("counselling", item.id);
             }
+            const eId = (item.id || "").toLowerCase();
+            const eNo = (item.enquiryNo || "").toLowerCase();
+            if ((eId && deletedSet.has(eId)) || (eNo && deletedSet.has(eNo))) {
+              if (item.id) {
+                deleteDocument("counselling_forms", item.id);
+                deleteDocument("counselling", item.id);
+              }
+              if (item.enquiryNo) {
+                deleteDocument("counselling_forms", item.enquiryNo);
+                deleteDocument("counselling", item.enquiryNo);
+              }
+            }
           });
 
-          items.forEach(item => {
-            if (item.id) {
-              deletedSet.delete(item.id.toLowerCase());
-              unmarkDeletedEnquiryId(item.id, item.enquiryNo);
-            }
-            if (item.enquiryNo) {
-              deletedSet.delete(item.enquiryNo.toLowerCase());
-              unmarkDeletedEnquiryId(item.enquiryNo);
-            }
-          });
-
-          // Standardize ID strictly to canonical enquiryNo
+          // Standardize ID strictly to canonical enquiryNo and exclude deleted items
           const nonDeletedItems = items
             .filter(e => e && (!e.id || !deletedSet.has(e.id.toLowerCase())) && (!e.enquiryNo || !deletedSet.has(e.enquiryNo.toLowerCase())))
             .map(e => ({

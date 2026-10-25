@@ -149,6 +149,14 @@ export default function GoogleDriveManager({
     return Math.max(syncedEnquiries, driveAudioFilesCount);
   }, [counsellingEnquiries, driveAudioFilesCount]);
 
+  const backupSnapshotsCount = useMemo(() => {
+    return (files || []).filter(f => f.name.includes('Backup') || f.name.includes('Snapshot') || f.name.includes('.json')).length;
+  }, [files]);
+
+  const activeSchoolEntitiesCount = useMemo(() => {
+    return counsellingEnquiries.length + tickets.length + inventory.length;
+  }, [counsellingEnquiries, tickets, inventory]);
+
   // Check initial connection
   useEffect(() => {
     checkConnection();
@@ -721,7 +729,7 @@ export default function GoogleDriveManager({
               </span>
             </div>
             <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
-              {totalSyncedRecordsCount} Synced to Google Drive / Server Vault
+              {totalSyncedRecordsCount} Saved in 24/7 School Cloud Server Database
             </p>
           </div>
 
@@ -793,10 +801,10 @@ export default function GoogleDriveManager({
           </div>
           <div>
             <div className="text-2xl font-black text-slate-900 dark:text-white">
-              {tickets.length + inventory.length + rooms.length} Entities
+              {backupSnapshotsCount} Snapshots
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Tickets, Assets, Rooms, AMC & Voice logs
+              {counsellingEnquiries.length} Enquiries • {tickets.length} IT Tickets Active
             </p>
           </div>
           <button

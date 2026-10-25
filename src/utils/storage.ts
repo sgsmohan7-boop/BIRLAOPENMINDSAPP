@@ -546,16 +546,20 @@ export const loadCounselling = (): CounsellingEnquiry[] => {
     try {
       const loaded = JSON.parse(raw);
       if (Array.isArray(loaded)) {
-        // Clear stale wiped flags if loaded has items
-        if (loaded.length > 0 && typeof window !== "undefined") {
+        // Filter out any explicitly deleted enquiry IDs
+        const deletedSet = new Set(getDeletedEnquiryIds().map((x) => x.toLowerCase()));
+        const nonDeletedLoaded = loaded.filter(
+          (item) => item && 
+            (!item.id || !deletedSet.has(item.id.toLowerCase())) && 
+            (!item.enquiryNo || !deletedSet.has(item.enquiryNo.toLowerCase()))
+        );
+
+        if (nonDeletedLoaded.length > 0 && typeof window !== "undefined") {
           localStorage.removeItem("sgs_counselling_is_wiped");
           localStorage.removeItem("sgs_database_is_wiped");
           localStorage.removeItem("sgs_wiping_database");
-          loaded.forEach(item => {
-            if (item) unmarkDeletedEnquiryId(item.id, item.enquiryNo);
-          });
         }
-        return deduplicateEnquiries(loaded);
+        return deduplicateEnquiries(nonDeletedLoaded);
       }
     } catch {}
   }
@@ -606,10 +610,6 @@ export const saveCounselling = (enquiries: CounsellingEnquiry[]) => {
     localStorage.removeItem("sgs_counselling_is_wiped");
     localStorage.removeItem("sgs_database_is_wiped");
     localStorage.removeItem("sgs_wiping_database");
-    // Actively unmark every saved enquiry from deleted set
-    deduped.forEach(item => {
-      if (item) unmarkDeletedEnquiryId(item.id, item.enquiryNo);
-    });
   }
 
   try {
