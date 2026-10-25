@@ -294,12 +294,32 @@ export default function GoogleDriveManager({
   // Sync all local IndexedDB audio recordings to 24/7 Server Vault & Google Drive
   const handleSyncAllAudiosToDrive = async () => {
     setIsUploading(true);
-    setUploadStatusMsg("Syncing counselling voice recordings to 24/7 Server Vault...");
+    setUploadStatusMsg("Syncing counselling voice recordings to Google Drive & Server Vault...");
 
     try {
+      // Helper to convert base64 to Blob
+      const base64ToBlob = (base64Data: string, defaultMime = "audio/webm"): Blob => {
+        try {
+          if (base64Data.startsWith("blob:")) {
+            return new Blob([], { type: defaultMime });
+          }
+          const parts = base64Data.split(",");
+          const mime = parts[0].match(/:(.*?);/)?.[1] || defaultMime;
+          const bstr = atob(parts[1] || parts[0]);
+          let n = bstr.length;
+          const u8arr = new Uint8Array(n);
+          while (n--) {
+            u8arr[n] = bstr.charCodeAt(n);
+          }
+          return new Blob([u8arr], { type: mime });
+        } catch {
+          return new Blob([base64Data], { type: defaultMime });
+        }
+      };
+
       let count = 0;
       for (const enquiry of counsellingEnquiries) {
-        if (enquiry.audioRecording && (enquiry.audioRecording.audioData || enquiry.audioRecording.storageKey) && (!enquiry.audioRecording.driveFileUrl || enquiry.audioRecording.driveFileUrl.startsWith("blob:"))) {
+        if (enquiry.audioRecording && (enquiry.audioRecording.audioData || enquiry.audioRecording.storageKey)) {
           setUploadStatusMsg(`Uploading audio: ${enquiry.studentName} (${enquiry.enquiryNo})...`);
           
           let audioPayload: string | null = enquiry.audioRecording.audioData || null;
@@ -314,42 +334,88 @@ export default function GoogleDriveManager({
 
           if (audioPayload) {
             const cleanFilename = `Voice_${enquiry.enquiryNo}_${enquiry.studentName.replace(/\s+/g, '_')}.webm`;
-            const uploadRes = await fetch("/api/upload-audio", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                enquiryNo: enquiry.enquiryNo,
-                id: enquiry.id,
-                audioBase64: audioPayload,
-                filename: cleanFilename,
-                mimeType: enquiry.audioRecording.mimeType || "audio/webm",
-                meetingTextSummary: (enquiry as any).meetingTextSummary || enquiry.audioRecording.meetingTextSummary
-              })
-            });
+            
+            // 1. Upload to 24/7 Express Server Vault
+            let serverAudioUrl = enquiry.audioRecording.driveFileUrl || "";
+            try {
+              const uploadRes = await fetch("/api/upload-audio", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  enquiryNo: enquiry.enquiryNo,
+                  id: enquiry.id,
+                  audioBase64: audioPayload,
+                  filename: cleanFilename,
+                  mimeType: enquiry.audioRecording.mimeType || "audio/webm",
+                  meetingTextSummary: (enquiry as any).meetingTextSummary || enquiry.audioRecording.meetingTextSummary
+                })
+              });
 
-            if (uploadRes.ok) {
-              const resData = await uploadRes.json();
-              if (resData.success && resData.audioUrl) {
-                const updated: CounsellingEnquiry = {
-                  ...enquiry,
-                  audioRecording: {
-                    ...enquiry.audioRecording,
-                    driveFileId: resData.filename,
-                    driveFileUrl: resData.audioUrl,
-                    driveSyncedAt: new Date().toISOString()
-                  }
-                };
-                if (onUpdateEnquiry) {
-                  onUpdateEnquiry(updated);
+              if (uploadRes.ok) {
+                const resData = await uploadRes.json();
+                if (resData.success && resData.audioUrl) {
+                  serverAudioUrl = resData.audioUrl;
                 }
-                count++;
               }
+            } catch (netErr) {
+              console.warn("Server vault sync notice:", netErr);
             }
+
+            // 2. Upload Audio File (.webm) directly to Google Drive
+            let driveFileId = enquiry.audioRecording.driveFileId || "";
+            let safeDriveUrl = serverAudioUrl || enquiry.audioRecording.driveFileUrl;
+
+            try {
+              const audioBlob = base64ToBlob(audioPayload, enquiry.audioRecording.mimeType || "audio/webm");
+              const driveItem = await uploadFileToDrive({
+                name: cleanFilename,
+                mimeType: enquiry.audioRecording.mimeType || "audio/webm",
+                dataBlob: audioBlob,
+                folderType: "Counselling Voice Vault",
+                description: `Counselling meeting audio for enquiry #${enquiry.enquiryNo} (${enquiry.studentName})`
+              });
+
+              if (driveItem && driveItem.id) {
+                driveFileId = driveItem.id;
+                if (driveItem.webViewLink && !driveItem.webViewLink.startsWith("blob:")) {
+                  safeDriveUrl = driveItem.webViewLink;
+                }
+              }
+
+              // 3. Upload Transcript Report (.txt) directly to Google Drive
+              const transcriptText = (enquiry as any).meetingTextSummary || enquiry.audioRecording.meetingTextSummary || enquiry.audioRecording.conversationLanguageNotes;
+              if (transcriptText) {
+                const textBlob = new Blob([transcriptText], { type: "text/plain;charset=utf-8" });
+                await uploadFileToDrive({
+                  name: `${cleanFilename}.txt`,
+                  mimeType: "text/plain",
+                  dataBlob: textBlob,
+                  folderType: "Counselling Voice Vault",
+                  description: `Counselling meeting transcript for enquiry #${enquiry.enquiryNo} (${enquiry.studentName})`
+                }).catch(() => {});
+              }
+            } catch (driveErr) {
+              console.warn("Google Drive upload notice:", driveErr);
+            }
+
+            const updated: CounsellingEnquiry = {
+              ...enquiry,
+              audioRecording: {
+                ...enquiry.audioRecording,
+                driveFileId: driveFileId || cleanFilename,
+                driveFileUrl: safeDriveUrl,
+                driveSyncedAt: new Date().toISOString()
+              }
+            };
+            if (onUpdateEnquiry) {
+              onUpdateEnquiry(updated);
+            }
+            count++;
           }
         }
       }
 
-      setUploadStatusMsg(count > 0 ? `Synced ${count} audio recording(s) to 24/7 Server Vault!` : "All audio recordings are fully synced on 24/7 Server Vault!");
+      setUploadStatusMsg(count > 0 ? `Synced ${count} audio recording(s) & transcript(s) to Google Drive & Server Vault!` : "All audio recordings are fully synced!");
       await loadQuotaAndFiles();
       setTimeout(() => setUploadStatusMsg(""), 5000);
     } catch (err: any) {
@@ -364,7 +430,27 @@ export default function GoogleDriveManager({
     if (!enquiry.audioRecording) return;
     setIsUploading(true);
     setUploadStatusMsg(`Uploading audio for ${enquiry.studentName} (${enquiry.enquiryNo})...`);
+    
     try {
+      const base64ToBlob = (base64Data: string, defaultMime = "audio/webm"): Blob => {
+        try {
+          if (base64Data.startsWith("blob:")) {
+            return new Blob([], { type: defaultMime });
+          }
+          const parts = base64Data.split(",");
+          const mime = parts[0].match(/:(.*?);/)?.[1] || defaultMime;
+          const bstr = atob(parts[1] || parts[0]);
+          let n = bstr.length;
+          const u8arr = new Uint8Array(n);
+          while (n--) {
+            u8arr[n] = bstr.charCodeAt(n);
+          }
+          return new Blob([u8arr], { type: mime });
+        } catch {
+          return new Blob([base64Data], { type: defaultMime });
+        }
+      };
+
       let audioPayload: string | null = enquiry.audioRecording.audioData || null;
       if (!audioPayload && enquiry.audioRecording.storageKey) {
         const blobData = await getAudioRecordingBlob(enquiry.audioRecording.storageKey);
@@ -375,6 +461,8 @@ export default function GoogleDriveManager({
 
       if (audioPayload) {
         const cleanFilename = `Voice_${enquiry.enquiryNo}_${enquiry.studentName.replace(/\s+/g, '_')}.webm`;
+        
+        let serverAudioUrl = enquiry.audioRecording.driveFileUrl || "";
         const uploadRes = await fetch("/api/upload-audio", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -391,22 +479,57 @@ export default function GoogleDriveManager({
         if (uploadRes.ok) {
           const resData = await uploadRes.json();
           if (resData.success && resData.audioUrl) {
-            const updated: CounsellingEnquiry = {
-              ...enquiry,
-              audioRecording: {
-                ...enquiry.audioRecording,
-                driveFileId: resData.filename,
-                driveFileUrl: resData.audioUrl,
-                driveSyncedAt: new Date().toISOString()
-              }
-            };
-            if (onUpdateEnquiry) {
-              onUpdateEnquiry(updated);
-            }
+            serverAudioUrl = resData.audioUrl;
           }
         }
+
+        // Upload to Google Drive
+        const audioBlob = base64ToBlob(audioPayload, enquiry.audioRecording.mimeType || "audio/webm");
+        const driveItem = await uploadFileToDrive({
+          name: cleanFilename,
+          mimeType: enquiry.audioRecording.mimeType || "audio/webm",
+          dataBlob: audioBlob,
+          folderType: "Counselling Voice Vault",
+          description: `Counselling meeting audio for enquiry #${enquiry.enquiryNo} (${enquiry.studentName})`
+        });
+
+        let driveFileId = enquiry.audioRecording.driveFileId || "";
+        let safeDriveUrl = serverAudioUrl || enquiry.audioRecording.driveFileUrl;
+
+        if (driveItem && driveItem.id) {
+          driveFileId = driveItem.id;
+          if (driveItem.webViewLink && !driveItem.webViewLink.startsWith("blob:")) {
+            safeDriveUrl = driveItem.webViewLink;
+          }
+        }
+
+        // Upload transcript text file to Google Drive
+        const transcriptText = (enquiry as any).meetingTextSummary || enquiry.audioRecording.meetingTextSummary || enquiry.audioRecording.conversationLanguageNotes;
+        if (transcriptText) {
+          const textBlob = new Blob([transcriptText], { type: "text/plain;charset=utf-8" });
+          await uploadFileToDrive({
+            name: `${cleanFilename}.txt`,
+            mimeType: "text/plain",
+            dataBlob: textBlob,
+            folderType: "Counselling Voice Vault",
+            description: `Counselling meeting transcript for enquiry #${enquiry.enquiryNo}`
+          }).catch(() => {});
+        }
+
+        const updated: CounsellingEnquiry = {
+          ...enquiry,
+          audioRecording: {
+            ...enquiry.audioRecording,
+            driveFileId: driveFileId || cleanFilename,
+            driveFileUrl: safeDriveUrl,
+            driveSyncedAt: new Date().toISOString()
+          }
+        };
+        if (onUpdateEnquiry) {
+          onUpdateEnquiry(updated);
+        }
       }
-      setUploadStatusMsg(`Synced audio for ${enquiry.studentName} to 24/7 Server Vault!`);
+      setUploadStatusMsg(`Synced audio & transcript for ${enquiry.studentName} to Google Drive!`);
       await loadQuotaAndFiles();
       setTimeout(() => setUploadStatusMsg(""), 4000);
     } catch (err: any) {
@@ -566,37 +689,11 @@ export default function GoogleDriveManager({
             </div>
           </div>
 
-          {isConnected ? (
-            <div className="bg-white/10 backdrop-blur-md border border-white/20 rounded-lg p-2 flex items-center gap-2 text-xs">
-              <div className="w-7 h-7 rounded-full bg-emerald-500/20 border border-emerald-400 flex items-center justify-center text-emerald-300 font-bold text-xs">
-                {driveUser?.photoLink ? (
-                  <img src={driveUser.photoLink} alt="Avatar" className="w-7 h-7 rounded-full" />
-                ) : (
-                  driveUser?.displayName?.charAt(0) || "G"
-                )}
-              </div>
-              <div className="text-left text-[11px]">
-                <p className="font-bold text-white flex items-center gap-1">
-                  <CheckCircle2 size={11} className="text-emerald-400" />
-                  Drive Synced
-                </p>
-                <p className="text-blue-200 text-[10px] font-mono truncate max-w-[130px]">
-                  {driveUser?.emailAddress || driveUser?.email || "Google Account"}
-                </p>
-              </div>
-              <button
-                onClick={handleDisconnect}
-                className="ml-1 px-2 py-1 bg-red-500/20 hover:bg-red-500/40 text-red-100 rounded text-[10px] font-bold cursor-pointer"
-                title="Disconnect Google Drive session"
-              >
-                Disconnect
-              </button>
-            </div>
-          ) : (
             <button
               onClick={handleConnect}
               disabled={isConnecting}
-              className="flex items-center justify-center gap-2 px-3 py-1.5 bg-white text-slate-900 hover:bg-slate-100 rounded-lg font-bold text-xs shadow-md active:scale-95 transition-all cursor-pointer border border-white/40 disabled:opacity-50"
+              className="flex items-center justify-center gap-2 px-3.5 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 rounded-xl font-black text-xs shadow-lg active:scale-95 transition-all cursor-pointer border-2 border-amber-200 disabled:opacity-50"
+              title="Click to sign in with Google Account and authorize Google Drive upload"
             >
               <svg className="w-4 h-4" viewBox="0 0 48 48">
                 <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
@@ -604,9 +701,26 @@ export default function GoogleDriveManager({
                 <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
                 <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
               </svg>
-              <span>{isConnecting ? "Connecting..." : "Connect Google Drive (Optional)"}</span>
+              <span>{isConnecting ? "Connecting..." : "🔑 Connect Google Drive"}</span>
             </button>
-          )}
+
+            {isConnected && (
+              <div className="bg-white/10 backdrop-blur-md border border-white/20 rounded-lg p-1.5 flex items-center gap-1.5 text-xs">
+                <div className="text-left text-[11px] px-1">
+                  <p className="font-bold text-white flex items-center gap-1">
+                    <CheckCircle2 size={11} className="text-emerald-400" />
+                    <span>{driveUser?.emailAddress || driveUser?.email || "Synced"}</span>
+                  </p>
+                </div>
+                <button
+                  onClick={handleDisconnect}
+                  className="px-2 py-0.5 bg-red-500/30 hover:bg-red-500/50 text-red-100 rounded text-[10px] font-bold cursor-pointer"
+                  title="Disconnect Google Drive session"
+                >
+                  Disconnect
+                </button>
+              </div>
+            )}
         </div>
       </div>
 
