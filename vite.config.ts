@@ -33,8 +33,10 @@ export default defineConfig(() => {
           manualChunks(id) {
             if (id.includes('node_modules')) {
               if (id.includes('firebase')) return 'vendor-firebase';
+              if (id.includes('@aws-sdk')) return 'vendor-aws-s3';
               if (id.includes('recharts')) return 'vendor-charts';
               if (id.includes('jspdf')) return 'vendor-pdf';
+              if (id.includes('html2canvas')) return 'vendor-canvas';
               if (id.includes('lucide-react')) return 'vendor-icons';
               if (id.includes('framer-motion') || id.includes('motion')) return 'vendor-motion';
             }

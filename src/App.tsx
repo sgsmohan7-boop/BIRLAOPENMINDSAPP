@@ -46,6 +46,7 @@ import {
   isFirestoreQuotaExhausted
 } from "./utils/firebase";
 import { checkBackupStatus, syncAllToMongoBackup, fetchFromMongoBackup, saveToMongoBackup, deleteFromMongoBackup } from "./utils/backupClient";
+import { loadR2Credentials, uploadToR2Direct } from "./utils/cloudflareR2Client";
 
 
 export default function App() {
@@ -869,8 +870,11 @@ export default function App() {
     const saveToFirestore = (targetEnquiry: CounsellingEnquiry) => {
       if (!isFirebaseConfigured()) return;
       const firestoreEnquiry: any = JSON.parse(JSON.stringify(targetEnquiry));
-      if (firestoreEnquiry.audioRecording) {
-        delete firestoreEnquiry.audioRecording.audioData;
+      // Only delete audioData if it exceeds 350KB to preserve instant cross-device playback
+      if (firestoreEnquiry.audioRecording && firestoreEnquiry.audioRecording.audioData) {
+        if (typeof firestoreEnquiry.audioRecording.audioData === "string" && firestoreEnquiry.audioRecording.audioData.length > 350 * 1024) {
+          delete firestoreEnquiry.audioRecording.audioData;
+        }
       }
       const targetDocId = targetEnquiry.enquiryNo || targetEnquiry.id || `ENQ-${Date.now()}`;
       
@@ -888,7 +892,17 @@ export default function App() {
     // 2. Save to Firestore
     saveToFirestore(cleanEnquiry);
 
-    // 3. Express Server API sync + Audio File Storage Vault
+    // 3. Direct Cloudflare R2 Background Upload (Ensures 24/7 global audio access)
+    if (enquiry.audioRecording?.audioData && enquiry.audioRecording.audioData.length > 50) {
+      try {
+        const creds = loadR2Credentials();
+        const r2FileName = enquiry.audioRecording.fileName || `${enquiry.enquiryNo || 'ENQ'}_Meeting_${new Date().toISOString().slice(0, 10)}.webm`;
+        uploadToR2Direct(creds, r2FileName, enquiry.audioRecording.audioData, enquiry.audioRecording.mimeType || "audio/webm")
+          .catch((err) => console.warn("Background R2 audio auto-upload notice:", err));
+      } catch (_) {}
+    }
+
+    // 4. Express Server API sync + Audio File Storage Vault (for Node.js dev environments)
     try {
       const cleanServerEnquiry = { ...enquiry };
       if (cleanServerEnquiry.audioRecording) {

@@ -39,7 +39,17 @@ import {
   Users
 } from "lucide-react";
 import { CounsellingEnquiry, CounsellingAudioRecord, AdmissionStatus, CounsellorAccount } from "../types";
-import { formatAudioDuration, formatAudioFileSize, getAudioRecordingBlob, generateFallbackAudioBlob, ensurePlayableAudioUrl, playWithWebAudio, stopWebAudio } from "../utils/audioStorage";
+import { 
+  formatAudioDuration, 
+  formatAudioFileSize, 
+  getAudioRecordingBlob, 
+  findAudioRecordingBlob,
+  generateFallbackAudioBlob, 
+  ensurePlayableAudioUrl, 
+  playWithWebAudio, 
+  stopWebAudio 
+} from "../utils/audioStorage";
+import { loadR2Credentials, getR2AudioBlobDirect } from "../utils/cloudflareR2Client";
 import { 
   parseDialogueTurnsFromSummary, 
   generateMeetingKeyPointsAndNotes, 
@@ -282,47 +292,66 @@ export default function ManagementAudioDesk({
       }
       const rec = activeEnquiry.audioRecording;
 
-      // 1. Check local IndexedDB first for pristine audio recording
-      // 1. Direct Express Server Audio Stream URL (Guaranteed HTTP 200/206 Range Stream with Sound on ALL devices)
-      if (rec.fileName) {
-        setResolvedAudioUrl(`/api/audios/${encodeURIComponent(rec.fileName)}`);
-        return;
-      }
-
-      // 2. Check server audioUrl or driveFileUrl
-      if (rec.audioUrl && !rec.audioUrl.startsWith("blob:")) {
-        setResolvedAudioUrl(ensurePlayableAudioUrl(rec.audioUrl));
-        return;
-      }
-      if (rec.driveFileUrl && !rec.driveFileUrl.startsWith("blob:")) {
-        setResolvedAudioUrl(ensurePlayableAudioUrl(rec.driveFileUrl));
-        return;
-      }
-
-      // 3. Check base64 audioData
-      if (rec.audioData) {
+      // 1. Direct base64 audioData (Instant & zero-latency)
+      if (rec.audioData && typeof rec.audioData === "string" && rec.audioData.length > 50) {
         setResolvedAudioUrl(ensurePlayableAudioUrl(rec.audioData));
         return;
       }
 
-      // 4. Local IndexedDB fallback
-      if (rec.storageKey || rec.id) {
+      // 2. High-performance Local IndexedDB search across all candidate keys
+      const candidateKeys = [
+        rec.storageKey,
+        rec.id,
+        rec.fileName,
+        activeEnquiry.id,
+        activeEnquiry.enquiryNo
+      ];
+      try {
+        const idbBlob = await findAudioRecordingBlob(candidateKeys);
+        if (idbBlob && active) {
+          if (typeof idbBlob === "string") {
+            setResolvedAudioUrl(ensurePlayableAudioUrl(idbBlob));
+          } else {
+            setResolvedAudioUrl(URL.createObjectURL(idbBlob));
+          }
+          return;
+        }
+      } catch (e) {
+        console.warn("Could not retrieve IndexedDB audio blob:", e);
+      }
+
+      // 3. Direct Cloudflare R2 Bucket download via S3 Client
+      if (rec.fileName) {
         try {
-          const blob = await getAudioRecordingBlob(rec.storageKey || rec.id);
-          if (blob && active) {
-            if (typeof blob === "string") {
-              setResolvedAudioUrl(ensurePlayableAudioUrl(blob));
-            } else {
-              setResolvedAudioUrl(URL.createObjectURL(blob));
-            }
+          const creds = loadR2Credentials();
+          const r2Blob = await getR2AudioBlobDirect(creds, rec.fileName);
+          if (r2Blob && active) {
+            setResolvedAudioUrl(URL.createObjectURL(r2Blob));
             return;
           }
-        } catch (e) {
-          console.warn("Could not retrieve IndexedDB audio blob:", e);
+        } catch (r2Err) {
+          console.warn("Could not fetch R2 audio blob:", r2Err);
         }
       }
 
-      // 5. Fallback audio
+      // 4. Check external audioUrl or driveFileUrl (only valid http/https URLs)
+      if (rec.audioUrl && (rec.audioUrl.startsWith("http://") || rec.audioUrl.startsWith("https://") || rec.audioUrl.startsWith("blob:"))) {
+        setResolvedAudioUrl(ensurePlayableAudioUrl(rec.audioUrl));
+        return;
+      }
+      if (rec.driveFileUrl && (rec.driveFileUrl.startsWith("http://") || rec.driveFileUrl.startsWith("https://") || rec.driveFileUrl.startsWith("blob:"))) {
+        setResolvedAudioUrl(ensurePlayableAudioUrl(rec.driveFileUrl));
+        return;
+      }
+
+      // 5. Localhost / Dev Server streaming endpoint (only on localhost/dev server)
+      const isLocalHost = typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+      if (isLocalHost && rec.fileName) {
+        setResolvedAudioUrl(`/api/audios/${encodeURIComponent(rec.fileName)}`);
+        return;
+      }
+
+      // 6. Safe synthesized audio fallback so audio player never crashes
       const fallbackBlob = generateFallbackAudioBlob();
       setResolvedAudioUrl(URL.createObjectURL(fallbackBlob));
     };
@@ -498,7 +527,44 @@ export default function ManagementAudioDesk({
     // Direct Web Audio API fallback guarantee
     if (!playedHtml5) {
       const rec = activeEnquiry?.audioRecording;
-      const targetSource = resolvedAudioUrl || (rec?.storageKey ? await getAudioRecordingBlob(rec.storageKey) : null) || rec?.driveFileUrl || rec?.audioUrl || rec?.audioData;
+      let targetSource: any = null;
+
+      // 1. Try local IndexedDB
+      if (rec) {
+        try {
+          targetSource = await findAudioRecordingBlob([
+            rec.storageKey,
+            rec.id,
+            rec.fileName,
+            activeEnquiry?.id,
+            activeEnquiry?.enquiryNo
+          ]);
+        } catch (_) {}
+      }
+
+      // 2. Try base64 audioData
+      if (!targetSource && rec?.audioData) {
+        targetSource = rec.audioData;
+      }
+
+      // 3. Try clean resolved audio URL (if not a broken /api/audios URL)
+      if (!targetSource && resolvedAudioUrl && !resolvedAudioUrl.startsWith("/api/audios")) {
+        targetSource = resolvedAudioUrl;
+      }
+
+      // 4. Try remote drive or audio URL
+      if (!targetSource && rec?.driveFileUrl && (rec.driveFileUrl.startsWith("http://") || rec.driveFileUrl.startsWith("https://"))) {
+        targetSource = rec.driveFileUrl;
+      }
+      if (!targetSource && rec?.audioUrl && (rec.audioUrl.startsWith("http://") || rec.audioUrl.startsWith("https://"))) {
+        targetSource = rec.audioUrl;
+      }
+
+      // 5. Ultimate fallback tone
+      if (!targetSource) {
+        targetSource = generateFallbackAudioBlob();
+      }
+
       if (targetSource) {
         setIsPlaying(true);
         const ok = await playWithWebAudio(targetSource, () => setIsPlaying(false));

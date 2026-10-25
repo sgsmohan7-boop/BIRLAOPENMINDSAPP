@@ -133,6 +133,23 @@
     </div>
     <script type="module" src="/src/main.tsx"></script>
     <script>
+      // Anti-hang splash watchdog: If app mounting is delayed by network or SW caching,
+      // offer instant unblock button and auto-refresh safely after 3.2s
+      setTimeout(function() {
+        var splash = document.getElementById('splash-screen');
+        if (splash && document.getElementById('root') && document.getElementById('root').contains(splash)) {
+          var retryBtn = document.getElementById('splash-retry-btn');
+          if (!retryBtn) {
+            retryBtn = document.createElement('button');
+            retryBtn.id = 'splash-retry-btn';
+            retryBtn.textContent = '⚡ Click to Open Instantly';
+            retryBtn.style.cssText = 'margin-top:16px;padding:9px 18px;background:#EA580C;color:#fff;border:none;border-radius:12px;font-family:sans-serif;font-size:12px;font-weight:700;cursor:pointer;box-shadow:0 4px 14px rgba(234,88,12,0.35);transition:all 0.2s;';
+            retryBtn.onclick = function() { window.location.reload(); };
+            splash.appendChild(retryBtn);
+          }
+        }
+      }, 3200);
+
       // Capture PWA installation prompt globally to trigger instantly on click
       window.deferredPrompt = null;
       window.addEventListener("beforeinstallprompt", (e) => {

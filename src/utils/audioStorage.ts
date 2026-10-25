@@ -58,6 +58,7 @@ export async function saveAudioRecordingBlob(id: string, data: Blob | string): P
  * Retrieve audio blob or data URL by recording ID
  */
 export async function getAudioRecordingBlob(id: string): Promise<Blob | string | null> {
+  if (!id) return null;
   try {
     const db = await getDB();
     return new Promise((resolve) => {
@@ -82,6 +83,57 @@ export async function getAudioRecordingBlob(id: string): Promise<Blob | string |
       req.onerror = () => {
         resolve(null);
       };
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Search IndexedDB across multiple potential keys (id, storageKey, fileName, enquiryNo)
+ */
+export async function findAudioRecordingBlob(possibleKeys: (string | null | undefined)[]): Promise<Blob | string | null> {
+  const cleanKeys = Array.from(new Set(possibleKeys.filter(Boolean).map(k => String(k).trim()))).filter(k => k.length > 0);
+  if (cleanKeys.length === 0) return null;
+
+  for (const k of cleanKeys) {
+    try {
+      const found = await getAudioRecordingBlob(k);
+      if (found) return found;
+    } catch (_) {}
+  }
+
+  // Deep search: scan all keys in object store to find matching enquiryNo or filename substring
+  try {
+    const db = await getDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(STORE_NAME, "readonly");
+      const store = tx.objectStore(STORE_NAME);
+      const req = store.openCursor();
+
+      req.onsuccess = (e) => {
+        const cursor = (e.target as IDBRequest).result;
+        if (!cursor) {
+          resolve(null);
+          return;
+        }
+        const key = String(cursor.key || "").toLowerCase();
+        for (const candidate of cleanKeys) {
+          const cLower = candidate.toLowerCase();
+          if (key === cLower || key.includes(cLower) || (cLower.length > 4 && cLower.includes(key))) {
+            const val = cursor.value;
+            if (val instanceof Blob) {
+              resolve(val.type ? val : new Blob([val], { type: "audio/webm" }));
+              return;
+            } else if (val) {
+              resolve(val);
+              return;
+            }
+          }
+        }
+        cursor.continue();
+      };
+      req.onerror = () => resolve(null);
     });
   } catch {
     return null;
@@ -310,6 +362,11 @@ export async function playWithWebAudio(
         arrayBuffer = u8.buffer;
       } else {
         const res = await fetch(urlOrBlobOrBase64);
+        if (!res.ok) return false;
+        const contentType = res.headers.get("content-type") || "";
+        if (contentType.includes("text/html") || contentType.includes("application/json")) {
+          return false;
+        }
         arrayBuffer = await res.arrayBuffer();
       }
     } else {

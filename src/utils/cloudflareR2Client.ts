@@ -1,6 +1,7 @@
 import {
   S3Client,
   PutObjectCommand,
+  GetObjectCommand,
   ListObjectsV2Command,
   DeleteObjectCommand,
   HeadBucketCommand
@@ -203,6 +204,44 @@ export async function uploadToR2Direct(
   } catch (err: any) {
     console.warn(`Direct upload to R2 failed for ${fileName}:`, err?.message || err);
     return false;
+  }
+}
+
+/**
+ * Fetch an audio file from R2 bucket directly into a browser Blob
+ */
+export async function getR2AudioBlobDirect(
+  creds: R2Credentials,
+  fileName: string
+): Promise<Blob | null> {
+  if (!fileName) return null;
+  try {
+    const s3 = createBrowserR2Client(creds);
+    if (!s3) return null;
+
+    const command = new GetObjectCommand({
+      Bucket: (creds.bucketName || "counselling-audio-vault").trim(),
+      Key: fileName
+    });
+
+    const response = await s3.send(command);
+    if (response && response.Body) {
+      if (typeof (response.Body as any).transformToByteArray === "function") {
+        const bytes = await (response.Body as any).transformToByteArray();
+        return new Blob([bytes], { type: response.ContentType || "audio/webm" });
+      }
+      if (typeof (response.Body as any).arrayBuffer === "function") {
+        const buf = await (response.Body as any).arrayBuffer();
+        return new Blob([buf], { type: response.ContentType || "audio/webm" });
+      }
+      if (response.Body instanceof Blob) {
+        return response.Body;
+      }
+    }
+    return null;
+  } catch (err) {
+    console.warn(`Direct R2 audio download notice for ${fileName}:`, err);
+    return null;
   }
 }
 

@@ -582,9 +582,14 @@ export const cleanEnquiryForStorage = (item: CounsellingEnquiry): CounsellingEnq
   if (!item) return item;
   if (item.audioRecording) {
     const copyRec = { ...item.audioRecording };
-    delete (copyRec as any).audioData;
-    if (!copyRec.driveFileUrl && copyRec.fileName) {
-      copyRec.driveFileUrl = `/api/audios/${copyRec.fileName}`;
+    // Only strip audioData if it exceeds 350KB to protect localStorage limits
+    if (copyRec.audioData && typeof copyRec.audioData === "string" && copyRec.audioData.length > 350 * 1024) {
+      delete (copyRec as any).audioData;
+    }
+    // Only set /api/audios/ fallback if running on local dev server
+    const isLocal = typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+    if (!copyRec.driveFileUrl && copyRec.fileName && isLocal) {
+      copyRec.driveFileUrl = `/api/audios/${encodeURIComponent(copyRec.fileName)}`;
     }
     return { ...item, audioRecording: copyRec };
   }
