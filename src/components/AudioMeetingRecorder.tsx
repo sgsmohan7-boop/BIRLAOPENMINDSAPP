@@ -3101,15 +3101,10 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
                   <Edit3 size={12} />
                   <span>Edit Text</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={handleSyncTurnsToRecord}
-                  className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer active:scale-95"
-                  title="Save current conversation turns to enquiry record"
-                >
-                  <Save size={12} />
-                  <span>Save to Enquiry</span>
-                </button>
+                <span className="px-2.5 py-1 bg-emerald-50 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 rounded-lg text-xs font-bold flex items-center gap-1">
+                  <CheckCircle size={12} className="text-emerald-500" />
+                  <span>Auto-Attached to Form</span>
+                </span>
               </div>
             </div>
 
@@ -3369,30 +3364,11 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
                   <span>Download Both</span>
                 </button>
 
-                {/* Google Drive 5 TB Cloud Sync */}
-                {existingAudio?.driveFileUrl ? (
-                  <a
-                    href={existingAudio.driveFileUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-3 py-1.5 bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 text-blue-700 dark:text-blue-300 border border-blue-300 dark:border-blue-800 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5"
-                    title="Open recording file in 5 TB Google Drive"
-                  >
-                    <Cloud size={13} className="text-blue-500" />
-                    <span>View in Google Drive</span>
-                  </a>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={handleSyncToGoogleDrive}
-                    disabled={isDriveSyncing}
-                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 cursor-pointer active:scale-95 disabled:opacity-50"
-                    title="Upload voice recording to your 5 TB Google Drive Cloud Vault"
-                  >
-                    <Cloud size={13} className={isDriveSyncing ? "animate-pulse" : ""} />
-                    <span>{isDriveSyncing ? "Syncing..." : driveSyncSuccess || "☁️ Save to Google Drive (5 TB)"}</span>
-                  </button>
-                )}
+                {/* Google Drive 5 TB Cloud Sync Status Badge */}
+                <div className="px-3 py-1.5 bg-blue-50 dark:bg-blue-950/60 border border-blue-300 dark:border-blue-800 rounded-lg text-xs font-bold text-blue-700 dark:text-blue-300 flex items-center gap-1.5">
+                  <Cloud size={13} className="text-blue-500 animate-pulse" />
+                  <span>☁️ Auto-Synced to Google Drive</span>
+                </div>
 
                 <button
                   type="button"
