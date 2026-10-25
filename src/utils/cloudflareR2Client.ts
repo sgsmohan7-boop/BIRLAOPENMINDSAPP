@@ -6,6 +6,7 @@ import {
   DeleteObjectCommand,
   HeadBucketCommand
 } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { getAudioRecordingBlob } from "./audioStorage";
 
 export interface R2Credentials {
@@ -193,6 +194,12 @@ export async function uploadToR2Direct(
         const u8 = new Uint8Array(bstr.length);
         for (let i = 0; i < bstr.length; i++) u8[i] = bstr.charCodeAt(i);
         payload = u8;
+      } else if (body.length > 50 && /^[A-Za-z0-9+/=\r\n]+$/.test(body.trim())) {
+        // Raw base64 string
+        const bstr = atob(body.trim().replace(/\s/g, ""));
+        const u8 = new Uint8Array(bstr.length);
+        for (let i = 0; i < bstr.length; i++) u8[i] = bstr.charCodeAt(i);
+        payload = u8;
       } else {
         const encoder = new TextEncoder();
         payload = encoder.encode(body);
@@ -215,6 +222,96 @@ export async function uploadToR2Direct(
 }
 
 /**
+ * Generate a direct presigned GET URL for an audio file from Cloudflare R2.
+ * Valid for up to 7 days (604,800 seconds).
+ * Bypasses all browser CORS and Authorization header restrictions because signatures are in URL query parameters.
+ */
+export async function getR2PresignedAudioUrl(
+  creds: R2Credentials,
+  fileName: string,
+  expiresInSeconds = 604800
+): Promise<string | null> {
+  if (!fileName) return null;
+  try {
+    const s3 = createBrowserR2Client(creds);
+    if (!s3) return null;
+
+    const command = new GetObjectCommand({
+      Bucket: (creds.bucketName || "counselling-audio-vault").trim(),
+      Key: fileName
+    });
+
+    return await getSignedUrl(s3, command, { expiresIn: expiresInSeconds });
+  } catch (err) {
+    console.warn(`Direct R2 presigned URL generation notice for ${fileName}:`, err);
+    return null;
+  }
+}
+
+/**
+ * Searches Cloudflare R2 bucket for any audio file associated with an enquiry.
+ * Matches candidateFileName, enquiryNo prefix, or timestamped names.
+ */
+export async function findR2AudioUrl(
+  creds: R2Credentials,
+  enquiryNo?: string,
+  candidateFileName?: string
+): Promise<{ fileName: string; presignedUrl: string; size?: number } | null> {
+  try {
+    // 1. Try candidateFileName directly if provided
+    if (candidateFileName) {
+      const url = await getR2PresignedAudioUrl(creds, candidateFileName);
+      if (url) {
+        return { fileName: candidateFileName, presignedUrl: url };
+      }
+    }
+
+    // 2. Query R2 bucket object list to locate matching audio recording
+    const files = await listR2FilesDirect(creds);
+    if (!files || files.length === 0) return null;
+
+    // Filter to audio only (.webm, .mp3, .wav, .m4a, .ogg)
+    const audioFiles = files.filter(f => {
+      const lower = (f.name || f.key || "").toLowerCase();
+      return (
+        lower.endsWith(".webm") ||
+        lower.endsWith(".mp3") ||
+        lower.endsWith(".wav") ||
+        lower.endsWith(".m4a") ||
+        lower.endsWith(".ogg")
+      );
+    });
+
+    // Match by candidateFileName first
+    if (candidateFileName) {
+      const match = audioFiles.find(f => f.name === candidateFileName || f.key === candidateFileName);
+      if (match) {
+        const url = await getR2PresignedAudioUrl(creds, match.key);
+        if (url) return { fileName: match.key, presignedUrl: url, size: match.size };
+      }
+    }
+
+    // Match by enquiryNo prefix (e.g. "ENQ-2026-01")
+    if (enquiryNo) {
+      const cleanNo = enquiryNo.trim().toUpperCase();
+      const match = audioFiles.find(f => {
+        const k = (f.key || f.name || "").toUpperCase();
+        return k.startsWith(cleanNo) || k.includes(cleanNo);
+      });
+      if (match) {
+        const url = await getR2PresignedAudioUrl(creds, match.key);
+        if (url) return { fileName: match.key, presignedUrl: url, size: match.size };
+      }
+    }
+
+    return null;
+  } catch (err) {
+    console.warn("Failed to find R2 audio file:", err);
+    return null;
+  }
+}
+
+/**
  * Fetch an audio file from R2 bucket directly into a browser Blob
  */
 export async function getR2AudioBlobDirect(
@@ -223,6 +320,23 @@ export async function getR2AudioBlobDirect(
 ): Promise<Blob | null> {
   if (!fileName) return null;
   try {
+    // 1. Try fetching via presigned URL first (works smoothly across all browsers without CORS header blocking)
+    const presignedUrl = await getR2PresignedAudioUrl(creds, fileName);
+    if (presignedUrl) {
+      try {
+        const res = await fetch(presignedUrl);
+        if (res.ok) {
+          const blob = await res.blob();
+          if (blob && blob.size > 100) {
+            return blob;
+          }
+        }
+      } catch (fetchErr) {
+        console.warn(`Presigned URL download attempt for ${fileName}:`, fetchErr);
+      }
+    }
+
+    // 2. Direct S3 GetObjectCommand fallback
     const s3 = createBrowserR2Client(creds);
     if (!s3) return null;
 

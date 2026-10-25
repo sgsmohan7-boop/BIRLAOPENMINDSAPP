@@ -1078,7 +1078,7 @@ export default function AudioMeetingRecorder({
           setInterimSpeechText(formattedInterim);
           interimSpeechTextRef.current = formattedInterim;
 
-          // Auto-commit interim after 1200ms of pause so speech thoughts are never lost
+          // High-speed speech capture: Auto-commit interim after 380ms pause (instant capture for fast speakers)
           if (interimDebounceRef.current) clearTimeout(interimDebounceRef.current);
           interimDebounceRef.current = setTimeout(() => {
             if (interimSpeechTextRef.current && interimSpeechTextRef.current.trim()) {
@@ -1086,7 +1086,7 @@ export default function AudioMeetingRecorder({
               setInterimSpeechText("");
               interimSpeechTextRef.current = "";
             }
-          }, 1200);
+          }, 380);
         }
       };
 
@@ -2409,7 +2409,23 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Minimal corporate language dropdown - zero confusion */}
+          <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-2.5 py-1 rounded-xl text-xs">
+            <Languages size={13} className="text-indigo-600" />
+            <select
+              value={speechMode}
+              onChange={(e) => handleSwitchSpeechMode(e.target.value as any)}
+              className="bg-transparent text-xs font-bold text-slate-700 dark:text-slate-200 focus:outline-none cursor-pointer"
+            >
+              <option value="bilingual_admissions">🌐 Smart Auto (Telugu + English)</option>
+              <option value="telugu_native">🇮🇳 Pure Telugu (తెలుగు)</option>
+              <option value="english_indian">🇮🇳 Indian English</option>
+              <option value="hindi_native">🇮🇳 Hindi (हिंदी)</option>
+              <option value="english_global">🌍 Global English</option>
+            </select>
+          </div>
+
           {recordedAudioUrl && !isRecording && (
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-300 text-xs font-bold border border-emerald-300 dark:border-emerald-800">
               <CheckCircle size={13} />
@@ -2431,126 +2447,66 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
         </div>
       </div>
 
-      {/* SPEECH RECOGNITION MODE SELECTION */}
-      <div className="p-3.5 bg-white dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800 rounded-xl space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5 text-xs font-black text-slate-900 dark:text-white">
-            <Languages size={15} className="text-indigo-500" />
-            <span>Voice Language &amp; Recognition Mode</span>
+      {/* 1-CLICK CORPORATE ADMISSIONS RECORDING STUDIO (WHEN IDLE - ZERO CONFUSION) */}
+      {!isRecording && !recordedAudioUrl && (
+        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-2xl p-5 border border-indigo-500/30 shadow-xl space-y-4">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="space-y-1 text-center sm:text-left">
+              <div className="flex items-center justify-center sm:justify-start gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span className="text-xs font-black uppercase tracking-wider text-emerald-400">
+                  Ready to Record
+                </span>
+                <span className="text-xs text-slate-400">•</span>
+                <span className="text-xs text-slate-300 font-medium">
+                  {studentName ? `Student: ${studentName}` : `Enquiry #${enquiryNo}`}
+                </span>
+              </div>
+              <h3 className="text-base font-bold text-white">
+                Admissions Meeting Voice Recording Studio
+              </h3>
+              <p className="text-xs text-slate-300 max-w-lg">
+                1-Click voice recording. Spoken conversations are instantly captured and converted to verbatim dialogue text live as you speak.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3 w-full sm:w-auto">
+              <button
+                type="button"
+                onClick={startRecording}
+                disabled={isProcessing}
+                className="flex-1 sm:flex-initial px-6 py-3.5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white rounded-xl text-sm font-black shadow-lg shadow-emerald-500/30 transition-all flex items-center justify-center gap-2.5 cursor-pointer active:scale-95"
+              >
+                <Mic size={18} />
+                <span>Start Recording</span>
+              </button>
+
+              <label className="px-4 py-3 bg-white/10 hover:bg-white/15 border border-white/20 rounded-xl text-xs font-bold text-white transition-all flex items-center justify-center gap-2 cursor-pointer shrink-0" title="Attach an audio file from mobile/dictaphone">
+                <Upload size={14} />
+                <span className="hidden md:inline">Attach File</span>
+                <input
+                  type="file"
+                  accept="audio/*,.mp3,.wav,.m4a,.webm,.ogg"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
+              </label>
+            </div>
           </div>
-          <span className="text-[10px] text-slate-400 font-medium">
-            International School Admissions Discourse
-          </span>
+
+          {/* Quick optional meeting agenda / focus line */}
+          <div className="pt-2 border-t border-white/10 flex items-center gap-2">
+            <FileText size={13} className="text-indigo-400 shrink-0" />
+            <input
+              type="text"
+              value={conversationNotes}
+              onChange={(e) => setConversationNotes(e.target.value)}
+              placeholder="Optional: Meeting agenda (e.g. CBSE Fee structure, Transport route, Term 1 books)..."
+              className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white placeholder-slate-400 focus:outline-none focus:border-indigo-400"
+            />
+          </div>
         </div>
-
-        {/* Speech Mode Quick Selector Pills */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
-          <button
-            type="button"
-            onClick={() => handleSwitchSpeechMode("bilingual_admissions")}
-            className={`p-2.5 rounded-xl text-left border transition-all cursor-pointer ${
-              speechMode === "bilingual_admissions"
-                ? "bg-indigo-50 dark:bg-indigo-950/60 border-indigo-500 text-indigo-950 dark:text-indigo-200 ring-2 ring-indigo-500/20 font-bold shadow-xs"
-                : "bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-indigo-300"
-            }`}
-          >
-            <div className="text-xs font-bold leading-tight flex items-center justify-between">
-              <span>🌐 Trilingual Auto</span>
-              <span className="px-1.5 py-0.2 rounded bg-indigo-200 text-indigo-900 text-[9px] font-bold">Recommended</span>
-            </div>
-            <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
-              Telugu + Hindi + English code-mixing converted to fluent English sentences
-            </div>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => handleSwitchSpeechMode("english_indian")}
-            className={`p-2.5 rounded-xl text-left border transition-all cursor-pointer ${
-              speechMode === "english_indian"
-                ? "bg-indigo-50 dark:bg-indigo-950/60 border-indigo-500 text-indigo-950 dark:text-indigo-200 ring-2 ring-indigo-500/20 font-bold shadow-xs"
-                : "bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-indigo-300"
-            }`}
-          >
-            <div className="text-xs font-bold leading-tight flex items-center justify-between">
-              <span>🇮🇳 Indian English</span>
-              <span className="px-1.5 py-0.2 rounded bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-200 text-[9px] font-bold">en-IN</span>
-            </div>
-            <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
-              Indian English with spoken Tenglish &amp; Hinglish colloquialisms
-            </div>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => handleSwitchSpeechMode("telugu_native")}
-            className={`p-2.5 rounded-xl text-left border transition-all cursor-pointer ${
-              speechMode === "telugu_native"
-                ? "bg-indigo-50 dark:bg-indigo-950/60 border-indigo-500 text-indigo-950 dark:text-indigo-200 ring-2 ring-indigo-500/20 font-bold shadow-xs"
-                : "bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-indigo-300"
-            }`}
-          >
-            <div className="text-xs font-bold leading-tight flex items-center justify-between">
-              <span>🇮🇳 Regional Native</span>
-              <span className="px-1.5 py-0.2 rounded bg-cyan-200 text-cyan-950 text-[9px] font-bold">te-IN</span>
-            </div>
-            <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
-              Regional speech recognition auto-translated to English script
-            </div>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => handleSwitchSpeechMode("hindi_native")}
-            className={`p-2.5 rounded-xl text-left border transition-all cursor-pointer ${
-              speechMode === "hindi_native"
-                ? "bg-indigo-50 dark:bg-indigo-950/60 border-indigo-500 text-indigo-950 dark:text-indigo-200 ring-2 ring-indigo-500/20 font-bold shadow-xs"
-                : "bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-indigo-300"
-            }`}
-          >
-            <div className="text-xs font-bold leading-tight flex items-center justify-between">
-              <span>🇮🇳 Hindi Native</span>
-              <span className="px-1.5 py-0.2 rounded bg-amber-200 text-amber-900 text-[9px] font-bold">hi-IN</span>
-            </div>
-            <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
-              Hindi speech recognition auto-translated to English script
-            </div>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => handleSwitchSpeechMode("english_global")}
-            className={`p-2.5 rounded-xl text-left border transition-all cursor-pointer ${
-              speechMode === "english_global"
-                ? "bg-indigo-50 dark:bg-indigo-950/60 border-indigo-500 text-indigo-950 dark:text-indigo-200 ring-2 ring-indigo-500/20 font-bold shadow-xs"
-                : "bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-indigo-300"
-            }`}
-          >
-            <div className="text-xs font-bold leading-tight flex items-center justify-between">
-              <span>🌍 Global English</span>
-              <span className="px-1.5 py-0.2 rounded bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-200 text-[9px] font-bold">en-US</span>
-            </div>
-            <div className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
-              Standard international English for Cambridge &amp; IB enquiries
-            </div>
-          </button>
-        </div>
-
-        {/* Conversation Notes */}
-        <div>
-          <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1 flex items-center gap-1">
-            <FileText size={12} className="text-indigo-500" />
-            <span>Key Discussion Notes &amp; Topics:</span>
-          </label>
-          <input
-            type="text"
-            value={conversationNotes}
-            onChange={(e) => setConversationNotes(e.target.value)}
-            placeholder="e.g. CBSE Syllabus discussion, Transport route, Fee installment terms..."
-            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          />
-        </div>
-      </div>
+      )}
 
       {/* SPEECH BLOCKED WARNING IN IFRAME */}
       {speechBlockedWarning && (
@@ -2774,36 +2730,7 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
               </div>
             </div>
 
-            {/* Language Switcher Bar: 1-Click Instant Language Change */}
-            <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-50 dark:bg-slate-950 p-2.5 rounded-xl border border-slate-200/70 dark:border-slate-800 text-xs">
-              <div className="flex items-center gap-1.5 font-bold text-slate-700 dark:text-slate-300 text-[11px]">
-                <Languages size={14} className="text-indigo-600" />
-                <span>Speech Language:</span>
-              </div>
-              
-              <div className="flex flex-wrap items-center gap-1.5">
-                {[
-                  { id: "telugu_native", label: "🇮🇳 తెలుగు (Telugu)", hint: "Native Telugu speech" },
-                  { id: "english_indian", label: "🇮🇳 English (Indian)", hint: "Indian English & numbers" },
-                  { id: "bilingual_admissions", label: "🇮🇳 Telugu + English Mix", hint: "Tenglish code-mixing" },
-                  { id: "hindi_native", label: "🇮🇳 हिंदी (Hindi)", hint: "Hindi admissions queries" }
-                ].map((lang) => (
-                  <button
-                    type="button"
-                    key={lang.id}
-                    onClick={() => handleSwitchSpeechMode(lang.id as any)}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer active:scale-95 ${
-                      speechMode === lang.id
-                        ? "bg-indigo-600 text-white shadow-xs ring-2 ring-indigo-400/30"
-                        : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:border-indigo-400"
-                    }`}
-                    title={lang.hint}
-                  >
-                    {lang.label}
-                  </button>
-                ))}
-              </div>
-            </div>
+
 
             {/* Warning / Clean Tab Helper (If speech recognition restricted in iframe) */}
             {(speechBlockedWarning || !speechSupported) && (
@@ -3583,39 +3510,7 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
         </div>
       )}
 
-      {/* IDLE STATE: 1-CLICK DIRECT START OR ATTACH PHONE AUDIO */}
-      {!isRecording && !recordedAudioUrl && (
-        <div className="space-y-3">
-          <div className="flex flex-col sm:flex-row items-center gap-3">
-            <button
-              type="button"
-              onClick={startRecording}
-              disabled={isProcessing}
-              className="flex-1 w-full py-3.5 px-5 bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-xl text-xs font-black shadow-lg transition-all flex items-center justify-center gap-2.5 cursor-pointer active:scale-98"
-            >
-              <Mic size={17} />
-              <span>Start Gemini Voice Conversation Recording</span>
-            </button>
 
-            <label className="sm:w-auto w-full py-3 px-4 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm">
-              <Upload size={14} />
-              <span>Attach Voice Recording File</span>
-              <input
-                type="file"
-                accept="audio/*,.mp3,.wav,.m4a,.webm,.ogg"
-                onChange={handleFileUpload}
-                className="hidden"
-              />
-            </label>
-          </div>
-
-          <div className="text-center py-2">
-            <p className="text-[11px] text-slate-400">
-              🎙️ Speak naturally during meeting. Words will convert into Gemini AI conversation format automatically.
-            </p>
-          </div>
-        </div>
-      )}
 
       {/* 100% AI Meeting Minutes (MOM) & Notes Modal */}
       <MeetingMomGeneratorModal

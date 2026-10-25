@@ -56,6 +56,7 @@ import AudioMeetingRecorder from "./AudioMeetingRecorder";
 import ManagementAudioDesk from "./ManagementAudioDesk";
 import AppInstallModal from "./AppInstallModal";
 import AppUpdateNotifier from "./AppUpdateNotifier";
+import CounsellingReportModal from "./CounsellingReportModal";
 import { 
   CounsellingEnquiry, 
   AdmissionStatus, 
@@ -202,6 +203,7 @@ export default function CounsellingPortal({
 
   // Account modal states
   const [isAppInstallModalOpen, setIsAppInstallModalOpen] = useState(false);
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
   const [accountModalMode, setAccountModalMode] = useState<"create" | "edit">("create");
 
@@ -661,6 +663,7 @@ export default function CounsellingPortal({
       date: dateFormatted,
       studentName: "",
       applyingForClass: "Grade 1",
+      academicYear: "2026-2027",
       dateOfBirth: "",
       gender: "Male",
       fatherName: "",
@@ -1270,6 +1273,260 @@ export default function CounsellingPortal({
     document.body.removeChild(link);
   };
 
+  const handleGenerateMetricPDF = () => {
+    if (!selectedMetricCard || filteredMetricEnquiries.length === 0) {
+      alert("No records available to generate PDF report.");
+      return;
+    }
+
+    const reportTitleMap: Record<string, string> = {
+      total: userRole === "Counsellor" ? "My Enquiries — Date-Wise Report" : "Total Enquiries — Date-Wise Activity Report",
+      applications: "Applications Taken — Date-Wise Report",
+      entrance: "Entrance Tests Scheduled & Required — Date-Wise Register",
+      followup: "Follow-up Due & Hot Leads — Date-Wise Action Planner",
+      confirmed: "Confirmed Admissions — Date-Wise Enrolment Register"
+    };
+
+    const reportTitle = reportTitleMap[selectedMetricCard] || "Admissions Date-Wise Report";
+    const generatedOn = new Date().toLocaleString("en-IN", { dateStyle: "full", timeStyle: "medium" });
+
+    // Format current filters description
+    let filterDesc = "All Dates Combined";
+    if (selectedDateChip) {
+      filterDesc = `Specific Date: ${selectedDateChip}`;
+    } else if (metricSingleDate) {
+      filterDesc = `Single Date: ${metricSingleDate}`;
+    } else if (metricFromDate || metricToDate) {
+      filterDesc = `Range: ${metricFromDate || "Start"} to ${metricToDate || "Present"}`;
+    } else if (metricDatePreset !== "all") {
+      filterDesc = `Preset: ${metricDatePreset.toUpperCase()}`;
+    }
+
+    const classDesc = metricClassFilter === "ALL" ? "All Grades / Classes" : `Grade: ${metricClassFilter}`;
+    const counsellorDesc = userRole === "Counsellor" && activeCounsellor
+      ? `Counsellor: ${activeCounsellor.name} (${activeCounsellor.id})`
+      : adminFilterCounsellor === "ALL"
+      ? "All Counsellors Scope"
+      : `Filtered Counsellor ID: ${adminFilterCounsellor}`;
+
+    const printWindow = window.open("", "_blank", "width=1000,height=800");
+    if (!printWindow) {
+      alert("Please allow pop-ups to generate PDF report.");
+      return;
+    }
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>BIRLA OPEN MINDS — ${reportTitle}</title>
+        <style>
+          @page { size: A4 landscape; margin: 10mm; }
+          body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+            color: #1e293b;
+            margin: 0;
+            padding: 16px;
+            background: #ffffff;
+            font-size: 11px;
+            line-height: 1.4;
+          }
+          .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 3px solid #ea580c;
+            padding-bottom: 10px;
+            margin-bottom: 14px;
+          }
+          .brand-title {
+            font-size: 18px;
+            font-weight: 900;
+            color: #c2410c;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+          }
+          .brand-subtitle {
+            font-size: 13px;
+            font-weight: 800;
+            color: #0f172a;
+            margin-top: 2px;
+          }
+          .school-info {
+            font-size: 10px;
+            color: #64748b;
+          }
+          .meta-box {
+            background: #fff7ed;
+            border: 1px solid #ffedd5;
+            border-radius: 8px;
+            padding: 8px 12px;
+            margin-bottom: 14px;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+          }
+          .meta-item strong {
+            display: block;
+            font-size: 9px;
+            text-transform: uppercase;
+            color: #9a3412;
+            margin-bottom: 2px;
+          }
+          .meta-item span {
+            font-weight: 700;
+            font-size: 11px;
+            color: #1e293b;
+          }
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+          }
+          th {
+            background-color: #f8fafc;
+            color: #475569;
+            font-weight: 800;
+            text-transform: uppercase;
+            font-size: 9px;
+            letter-spacing: 0.5px;
+            padding: 8px 10px;
+            border: 1px solid #cbd5e1;
+            text-align: left;
+          }
+          td {
+            padding: 7px 9px;
+            border: 1px solid #e2e8f0;
+            font-size: 10px;
+          }
+          tr:nth-child(even) {
+            background-color: #f8fafc;
+          }
+          .badge {
+            display: inline-block;
+            padding: 2px 7px;
+            border-radius: 12px;
+            font-size: 9px;
+            font-weight: 800;
+            text-transform: uppercase;
+          }
+          .status-Interested { background: #dbeafe; color: #1e40af; }
+          .status-Application { background: #fef3c7; color: #92400e; }
+          .status-Entrance { background: #f3e8ff; color: #6b21a8; }
+          .status-Confirmed { background: #d1fae5; color: #065f46; }
+          .status-Followup { background: #ffedd5; color: #9a3412; }
+          .footer-sig {
+            margin-top: 25px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            padding-top: 15px;
+            border-top: 1px dashed #cbd5e1;
+          }
+          .sig-box {
+            text-align: center;
+            width: 220px;
+          }
+          .sig-line {
+            border-top: 1px solid #475569;
+            margin-top: 30px;
+            padding-top: 4px;
+            font-weight: 700;
+            font-size: 10px;
+            text-transform: uppercase;
+          }
+          @media print {
+            body { padding: 0; }
+            .no-print { display: none; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div>
+            <div class="brand-title">BIRLA OPEN MINDS INTERNATIONAL SCHOOL</div>
+            <div class="brand-subtitle">${reportTitle}</div>
+            <div class="school-info">Admissions &amp; Parent Counselling Department • Official Register</div>
+          </div>
+          <div style="text-align: right;">
+            <div style="font-weight: 900; font-size: 16px; color: #ea580c;">${filteredMetricEnquiries.length} RECORDS</div>
+            <div style="font-size: 9px; color: #64748b;">Generated: ${generatedOn}</div>
+          </div>
+        </div>
+
+        <div class="meta-box">
+          <div class="meta-item">
+            <strong>Date / Period Filter</strong>
+            <span>${filterDesc}</span>
+          </div>
+          <div class="meta-item">
+            <strong>Grade / Class Scope</strong>
+            <span>${classDesc}</span>
+          </div>
+          <div class="meta-item">
+            <strong>Counsellor Scope</strong>
+            <span>${counsellorDesc}</span>
+          </div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 35px; text-align: center;">S.No</th>
+              <th>Date &amp; Time</th>
+              <th>Enquiry ID</th>
+              <th>Student Name</th>
+              <th>Grade</th>
+              <th>Parent / Contact</th>
+              <th>Counsellor</th>
+              <th>Admission Status</th>
+              <th>Follow-up Date</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${filteredMetricEnquiries.map((item, idx) => `
+              <tr>
+                <td style="text-align: center; font-weight: 800; font-family: monospace;">#${idx + 1}</td>
+                <td style="font-family: monospace; font-weight: 700;">${item.date}<br/><span style="color:#64748b; font-size:8.5px;">${item.createdAt ? item.createdAt.split(" ")[1] || "" : ""}</span></td>
+                <td style="font-family: monospace; font-weight: 800; color: #c2410c;">${item.enquiryNo}</td>
+                <td><strong>${item.studentName}</strong><br/><span style="color:#64748b; font-size:8.5px;">${item.gender || "—"} • DOB: ${item.dateOfBirth || "N/A"}</span></td>
+                <td><strong>${item.applyingForClass}</strong></td>
+                <td>${item.fatherName || item.motherName || "Parent"}<br/><span style="font-family: monospace; font-weight: 700;">📞 ${item.contactNo}</span></td>
+                <td>${item.counsellorName || "Counsellor"}<br/><span style="font-family: monospace; font-size: 8px; color:#64748b;">${item.counsellorId || ""}</span></td>
+                <td><span class="badge ${item.admissionStatus === "Admission Confirmed" ? "status-Confirmed" : item.admissionStatus === "Entrance Test Required" ? "status-Entrance" : item.admissionStatus === "Application Taken" ? "status-Application" : "status-Interested"}">${item.admissionStatus}</span></td>
+                <td style="font-family: monospace;">${item.followUpDate || "—"}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+
+        <div class="footer-sig">
+          <div class="sig-box">
+            <div class="sig-line">Prepared By (Counsellor)</div>
+          </div>
+          <div class="sig-box">
+            <div class="sig-line">Checked By (Admissions Head)</div>
+          </div>
+          <div class="sig-box">
+            <div class="sig-line">School Seal / Official Verification</div>
+          </div>
+        </div>
+
+        <script>
+          window.onload = function() {
+            setTimeout(function() {
+              window.print();
+            }, 300);
+          };
+        </script>
+      </body>
+      </html>
+    `;
+
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+  };
+
   return (
     <div className={`space-y-6 pb-24 ${standalone ? "min-h-screen w-full bg-slate-100 dark:bg-slate-950 p-4 md:p-8 custom-scrollbar" : ""}`}>
       {/* Standalone Top Bar if accessed directly from Login Portal */}
@@ -1449,6 +1706,16 @@ export default function CounsellingPortal({
 
           <button
             type="button"
+            onClick={() => setIsReportModalOpen(true)}
+            className="px-4 py-2.5 rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer border bg-emerald-500 hover:bg-emerald-600 text-white shadow-md active:scale-95 border-emerald-400"
+            title="Generate 1-Click Day, Week, and Month reports for WhatsApp"
+          >
+            <Send size={15} />
+            <span>📊 1-Click WhatsApp Report</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => setIsAppInstallModalOpen(true)}
             className="px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer border bg-emerald-500/20 hover:bg-emerald-500/30 text-white border-emerald-400/30"
             title="Install on Android phone or Windows/Mac PC"
@@ -1498,8 +1765,8 @@ export default function CounsellingPortal({
         </div>
       </div>
 
-      {/* KPI Stats Strip - Interactive 4 Metric Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
+      {/* KPI Stats Strip - Interactive 5 Metric Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
         {/* Card 1: Total Enquiries */}
         <button
           type="button"
@@ -1541,6 +1808,28 @@ export default function CounsellingPortal({
           </div>
           <p className="text-2xl font-black text-amber-600 dark:text-amber-400 mt-2">{stats.applicationTaken}</p>
           <div className="mt-2 pt-1.5 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-[11px] text-amber-600 dark:text-amber-400 font-bold">
+            <span>📅 Date Breakdown</span>
+            <span>→</span>
+          </div>
+        </button>
+
+        {/* Card 3: Entrance Test */}
+        <button
+          type="button"
+          onClick={() => handleCardClick("entrance")}
+          className={`text-left p-4 rounded-xl border shadow-sm transition-all duration-200 cursor-pointer group hover:-translate-y-0.5 hover:shadow-md ${
+            selectedMetricCard === "entrance"
+              ? "bg-purple-50/90 dark:bg-purple-950/50 border-purple-500 ring-2 ring-purple-500/20 shadow-md"
+              : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-purple-400"
+          }`}
+          title="Click to view Date-wise Entrance Tests Scheduled &amp; Required"
+        >
+          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-bold">
+            <span className="group-hover:text-purple-600 dark:group-hover:text-purple-400 transition-colors">Entrance Test</span>
+            <GraduationCap size={16} className="text-purple-500 group-hover:scale-110 transition-transform" />
+          </div>
+          <p className="text-2xl font-black text-purple-600 dark:text-purple-400 mt-2">{stats.testRequired}</p>
+          <div className="mt-2 pt-1.5 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-[11px] text-purple-600 dark:text-purple-400 font-bold">
             <span>📅 Date Breakdown</span>
             <span>→</span>
           </div>
@@ -1647,6 +1936,16 @@ export default function CounsellingPortal({
                 </div>
 
                 <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleGenerateMetricPDF}
+                    className="flex items-center gap-1.5 px-3.5 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs active:scale-95"
+                    title="Generate & Print PDF Report"
+                  >
+                    <Printer size={14} />
+                    <span>PDF Report</span>
+                  </button>
+
                   <button
                     type="button"
                     onClick={handleExportMetricCSV}
@@ -2203,6 +2502,15 @@ export default function CounsellingPortal({
               <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end">
                 <button
                   type="button"
+                  onClick={handleGenerateMetricPDF}
+                  className="px-4 py-2 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 shadow-xs active:scale-95"
+                >
+                  <Printer size={14} />
+                  <span>📄 Generate PDF Report</span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={handleExportMetricCSV}
                   className="px-4 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
                 >
@@ -2462,6 +2770,9 @@ export default function CounsellingPortal({
                           <div className="flex items-center gap-2 mt-0.5">
                             <span className="px-2 py-0.5 bg-slate-100 dark:bg-slate-800 rounded font-semibold text-slate-700 dark:text-slate-300 text-[10px]">
                               {enquiry.applyingForClass}
+                            </span>
+                            <span className="px-1.5 py-0.5 bg-orange-100 dark:bg-orange-950/60 text-orange-800 dark:text-orange-300 rounded font-bold text-[9px]">
+                              AY {enquiry.academicYear || "2026-2027"}
                             </span>
                             <span className="text-[10px] text-slate-400">
                               {enquiry.gender} {enquiry.dateOfBirth ? `• DOB: ${enquiry.dateOfBirth}` : ""}
@@ -3001,6 +3312,22 @@ export default function CounsellingPortal({
                 </div>
 
                 <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Academic Year <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={formData.academicYear || "2026-2027"}
+                    onChange={(e) => setFormData({ ...formData, academicYear: e.target.value })}
+                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-bold text-orange-600 dark:text-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-500 cursor-pointer"
+                  >
+                    <option value="2026-2027">2026-2027 (Current Academic Year)</option>
+                    <option value="2027-2028">2027-2028 (Next Year Advance)</option>
+                    <option value="2028-2029">2028-2029 (Future Advance)</option>
+                    <option value="2025-2026">2025-2026 (Mid-Term)</option>
+                  </select>
+                </div>
+
+                <div>
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Date of Birth</label>
                   <input
                     type="text"
@@ -3267,7 +3594,7 @@ export default function CounsellingPortal({
               </div>
 
               {/* Requirement checkboxes */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 bg-slate-50 dark:bg-slate-800/40 p-4 rounded-xl border border-slate-200 dark:border-slate-800">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 bg-slate-50 dark:bg-slate-800/40 p-4 rounded-xl border border-slate-200 dark:border-slate-800">
                 <div>
                   <span className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">Transport Required?</span>
                   <div className="flex items-center gap-4">
@@ -3285,30 +3612,6 @@ export default function CounsellingPortal({
                         type="radio"
                         checked={formData.transportRequired === false}
                         onChange={() => setFormData({ ...formData, transportRequired: false })}
-                        className="text-orange-600 focus:ring-orange-500"
-                      />
-                      <span>No</span>
-                    </label>
-                  </div>
-                </div>
-
-                <div>
-                  <span className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">Hostel Required?</span>
-                  <div className="flex items-center gap-4">
-                    <label className="flex items-center gap-1.5 cursor-pointer text-xs font-medium">
-                      <input
-                        type="radio"
-                        checked={formData.hostelRequired === true}
-                        onChange={() => setFormData({ ...formData, hostelRequired: true })}
-                        className="text-orange-600 focus:ring-orange-500"
-                      />
-                      <span>Yes</span>
-                    </label>
-                    <label className="flex items-center gap-1.5 cursor-pointer text-xs font-medium">
-                      <input
-                        type="radio"
-                        checked={formData.hostelRequired === false}
-                        onChange={() => setFormData({ ...formData, hostelRequired: false })}
                         className="text-orange-600 focus:ring-orange-500"
                       />
                       <span>No</span>
@@ -3747,8 +4050,7 @@ export default function CounsellingPortal({
                 <div><span className="font-bold">Strengths:</span> {selectedEnquiry.strengths || "—"}</div>
                 <div><span className="font-bold">Areas needing support:</span> {selectedEnquiry.areasNeedingSupport || "—"}</div>
                 <div><span className="font-bold">Transport Required:</span> [ {selectedEnquiry.transportRequired ? "X" : " "} ] Yes  [ {!selectedEnquiry.transportRequired ? "X" : " "} ] No</div>
-                <div><span className="font-bold">Hostel Required:</span> [ {selectedEnquiry.hostelRequired ? "X" : " "} ] Yes  [ {!selectedEnquiry.hostelRequired ? "X" : " "} ] No</div>
-                <div className="col-span-2">
+                <div>
                   <span className="font-bold">Special Learning/Support Requirement:</span> [ {selectedEnquiry.specialLearningSupport ? "X" : " "} ] Yes  [ {!selectedEnquiry.specialLearningSupport ? "X" : " "} ] No
                   {selectedEnquiry.specialLearningSupport && ` (Details: ${selectedEnquiry.specialLearningDetails})`}
                 </div>
@@ -4506,6 +4808,15 @@ export default function CounsellingPortal({
       <AppInstallModal
         isOpen={isAppInstallModalOpen}
         onClose={() => setIsAppInstallModalOpen(false)}
+      />
+
+      {/* 1-Click WhatsApp Counselling & Admissions Report Modal */}
+      <CounsellingReportModal
+        isOpen={isReportModalOpen}
+        onClose={() => setIsReportModalOpen(false)}
+        enquiries={safeEnquiries}
+        currentCounsellorName={activeCounsellor?.name}
+        userRole={userRole}
       />
 
       {/* Real-Time In-App Live Auto-Update Notifier */}

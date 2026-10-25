@@ -895,3 +895,67 @@ export const syncAllRecordingsToGoogleDrive = async (
   return { successCount, failCount };
 };
 
+/**
+ * Hands-free 24/7 background sync: auto-syncs a single counselling recording & transcript
+ * to Google Drive folder 'Birla Open Minds - School Cloud > Counselling Voice Vault'.
+ * Runs non-blocking in the background so counsellors never have to click manual buttons.
+ */
+export const autoSyncSingleRecordToDrive = async (
+  enquiry: CounsellingEnquiry
+): Promise<{ success: boolean; driveFileUrl?: string }> => {
+  if (!enquiry?.audioRecording) return { success: false };
+  const rec = enquiry.audioRecording;
+  const student = enquiry.studentName || "Student";
+  const fname = rec.fileName || `${enquiry.enquiryNo || 'ENQ'}_Meeting_${enquiry.date || 'Record'}.webm`;
+
+  try {
+    let audioBlob: Blob | null = null;
+    if (rec.id) {
+      const rawBlob = await getAudioRecordingBlob(rec.id);
+      if (rawBlob && rawBlob instanceof Blob) {
+        audioBlob = rawBlob;
+      }
+    }
+
+    if (!audioBlob && rec.audioData) {
+      const cleanB64 = rec.audioData.includes(",") ? rec.audioData.split(",")[1] : rec.audioData;
+      const bin = atob(cleanB64.replace(/\s/g, ""));
+      const bytes = new Uint8Array(bin.length);
+      for (let j = 0; j < bin.length; j++) bytes[j] = bin.charCodeAt(j);
+      audioBlob = new Blob([bytes], { type: rec.mimeType || "audio/webm" });
+    }
+
+    let driveItem: DriveFileItem | null = null;
+    if (audioBlob) {
+      driveItem = await uploadFileToDrive({
+        name: fname,
+        mimeType: rec.mimeType || "audio/webm",
+        dataBlob: audioBlob,
+        folderType: "Counselling Voice Vault",
+        description: `Meeting audio recording for enquiry ${enquiry.enquiryNo} (${student})`
+      });
+    }
+
+    // Also auto-upload text transcript report to Google Drive
+    if (rec.meetingTextSummary) {
+      const txtBlob = new Blob([rec.meetingTextSummary], { type: "text/plain;charset=utf-8" });
+      await uploadFileToDrive({
+        name: `${fname}.txt`,
+        mimeType: "text/plain",
+        dataBlob: txtBlob,
+        folderType: "Counselling Voice Vault",
+        description: `Meeting transcript text report for enquiry ${enquiry.enquiryNo} (${student})`
+      }).catch(() => {});
+    }
+
+    return {
+      success: Boolean(driveItem && (driveItem.id || driveItem.webViewLink)),
+      driveFileUrl: driveItem?.webViewLink
+    };
+  } catch (err) {
+    console.warn(`[24/7 Drive Auto-Sync] Notice for ${student}:`, err);
+    return { success: false };
+  }
+};
+
+

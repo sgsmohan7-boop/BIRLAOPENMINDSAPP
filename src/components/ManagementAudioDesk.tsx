@@ -36,7 +36,8 @@ import {
   ExternalLink,
   Eye,
   Languages,
-  Users
+  Users,
+  Send
 } from "lucide-react";
 import { CounsellingEnquiry, CounsellingAudioRecord, AdmissionStatus, CounsellorAccount } from "../types";
 import { 
@@ -60,6 +61,7 @@ import {
 import MeetingMomGeneratorModal from "./MeetingMomGeneratorModal";
 import CctvNvrStorageModal from "./CctvNvrStorageModal";
 import AudioTranslationModal, { AudioTranslationData } from "./AudioTranslationModal";
+import CounsellingReportModal from "./CounsellingReportModal";
 
 interface ManagementAudioDeskProps {
   enquiries: CounsellingEnquiry[];
@@ -96,10 +98,11 @@ export default function ManagementAudioDesk({
   const [resolvedAudioUrl, setResolvedAudioUrl] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // AI MOM & CCTV NVR Modals
+  // AI MOM & CCTV NVR & Report Modals
   const [showMomModal, setShowMomModal] = useState<boolean>(false);
   const [showNvrModal, setShowNvrModal] = useState<boolean>(false);
   const [showTranslationModal, setShowTranslationModal] = useState<boolean>(false);
+  const [showReportModal, setShowReportModal] = useState<boolean>(false);
 
   // Filters & Pagination
   const [searchQuery, setSearchQuery] = useState("");
@@ -529,6 +532,10 @@ export default function ManagementAudioDesk({
           audioRef.current.src = resolvedAudioUrl;
           audioRef.current.load();
         }
+        if (audioRef.current.ended || (effectiveTotalDuration > 0 && currentTime >= effectiveTotalDuration)) {
+          audioRef.current.currentTime = 0;
+          setCurrentTime(0);
+        }
         await audioRef.current.play();
         setIsPlaying(true);
         playedHtml5 = true;
@@ -629,20 +636,31 @@ export default function ManagementAudioDesk({
     }
   };
 
-  // Accurately compute dynamic total duration for the scrubber slider
+  // Accurately compute dynamic total duration for the scrubber slider (JioSaavn / Spotify precision)
   const effectiveTotalDuration = useMemo(() => {
-    let dur = 0;
+    // 1. True audio element duration if loaded and valid
     if (isFinite(duration) && duration > 0) {
-      dur = duration;
-    } else if (activeEnquiry?.audioRecording?.durationSeconds && isFinite(activeEnquiry.audioRecording.durationSeconds) && activeEnquiry.audioRecording.durationSeconds > 0) {
-      dur = activeEnquiry.audioRecording.durationSeconds;
+      return duration;
     }
-    // If the audio has played past the recorded header length (e.g. 20+ minute meeting), dynamically expand track
-    if (currentTime > dur) {
-      dur = currentTime + 1;
+    // 2. Saved enquiry duration recorded from counselling session (e.g. 21s or 20m)
+    const saved = activeEnquiry?.audioRecording?.durationSeconds;
+    if (saved && isFinite(saved) && saved > 0) {
+      return Math.max(saved, currentTime);
     }
-    return Math.max(dur, 60);
+    // 3. Current playback progress
+    if (currentTime > 0) {
+      return currentTime;
+    }
+    return 0;
   }, [duration, activeEnquiry?.audioRecording?.durationSeconds, currentTime]);
+
+  const handleEnded = () => {
+    setIsPlaying(false);
+    if (audioRef.current) {
+      audioRef.current.currentTime = 0;
+    }
+    setCurrentTime(0);
+  };
 
   const handleSpeedChange = (spd: number) => {
     setPlaybackSpeed(spd);
@@ -915,7 +933,17 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT COACHING ONLY
                   className="px-3 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 cursor-pointer"
                 >
                   <Download size={13} />
-                  <span className="hidden sm:inline">Export CSV</span>
+                  <span className="hidden sm:inline">CSV</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowReportModal(true)}
+                  title="Generate 1-Click Day, Week, and Month reports for WhatsApp"
+                  className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 cursor-pointer shadow-xs active:scale-95"
+                >
+                  <Send size={13} />
+                  <span>WhatsApp Report</span>
                 </button>
               </div>
 
@@ -1378,7 +1406,7 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT COACHING ONLY
                       preload="auto"
                       onLoadedMetadata={handleLoadedMetadata}
                       onTimeUpdate={handleTimeUpdate}
-                      onEnded={() => setIsPlaying(false)}
+                      onEnded={handleEnded}
                       onPlay={() => setIsPlaying(true)}
                       onPause={() => setIsPlaying(false)}
                       onError={(e) => console.warn("Management audio playback error:", e)}
@@ -1407,21 +1435,24 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT COACHING ONLY
                         </div>
                       </div>
 
-                      {/* Scrubber & Timers */}
+                      {/* Scrubber & Timers - JioSaavn / Spotify style filled progress bar */}
                       <div className="flex-1 min-w-[180px] flex items-center gap-2 px-1">
-                        <span className="text-[10px] font-mono text-slate-500 shrink-0 min-w-[36px]">
+                        <span className="text-[10px] font-mono font-bold text-slate-600 dark:text-slate-300 shrink-0 min-w-[36px]">
                           {formatAudioDuration(currentTime)}
                         </span>
                         <input
                           type="range"
                           min={0}
-                          max={effectiveTotalDuration}
-                          step={0.5}
-                          value={Math.min(currentTime, effectiveTotalDuration)}
+                          max={effectiveTotalDuration || 1}
+                          step={0.1}
+                          value={Math.min(currentTime, effectiveTotalDuration || 1)}
                           onChange={handleSeek}
-                          className="flex-1 h-1.5 bg-slate-200 dark:bg-slate-800 rounded-lg appearance-none cursor-pointer accent-orange-600"
+                          className="flex-1 h-2 rounded-lg appearance-none cursor-pointer accent-orange-600 bg-slate-200 dark:bg-slate-700"
+                          style={{
+                            backgroundImage: `linear-gradient(to right, #ea580c 0%, #ea580c ${(effectiveTotalDuration > 0 ? (Math.min(currentTime, effectiveTotalDuration) / effectiveTotalDuration) * 100 : 0)}%, transparent ${(effectiveTotalDuration > 0 ? (Math.min(currentTime, effectiveTotalDuration) / effectiveTotalDuration) * 100 : 0)}%, transparent 100%)`
+                          }}
                         />
-                        <span className="text-[10px] font-mono text-slate-500 shrink-0 min-w-[36px] text-right">
+                        <span className="text-[10px] font-mono font-bold text-slate-600 dark:text-slate-300 shrink-0 min-w-[36px] text-right">
                           {formatAudioDuration(effectiveTotalDuration)}
                         </span>
                       </div>
@@ -1865,6 +1896,14 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT COACHING ONLY
           }}
         />
       )}
+
+      {/* 1-Click WhatsApp Counselling & Admissions Report Modal */}
+      <CounsellingReportModal
+        isOpen={showReportModal}
+        onClose={() => setShowReportModal(false)}
+        enquiries={enquiries}
+        userRole={userRole}
+      />
     </div>
   );
 }

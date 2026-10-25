@@ -261,6 +261,7 @@ export interface CounsellingEnquiry {
   // 1. Student & Parent Details
   studentName: string;
   applyingForClass: string;
+  academicYear?: string; // "2026-2027" | "2027-2028" | "2028-2029" | "2025-2026"
   dateOfBirth: string;
   gender: "Male" | "Female" | "Other";
   fatherName: string;
