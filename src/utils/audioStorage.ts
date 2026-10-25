@@ -221,12 +221,16 @@ export async function deleteAudioRecordingBlob(id: string): Promise<boolean> {
 }
 
 /**
- * Convert seconds into clean human-readable MM:SS or HH:MM:SS format
+ * Convert seconds into clean human-readable MM:SS or HH:MM:SS format safely without NaN/Infinity
  */
-export function formatAudioDuration(totalSeconds: number): string {
-  const seconds = Math.floor(totalSeconds % 60);
-  const minutes = Math.floor((totalSeconds / 60) % 60);
-  const hours = Math.floor(totalSeconds / 3600);
+export function formatAudioDuration(totalSeconds: number | null | undefined): string {
+  if (totalSeconds === null || totalSeconds === undefined || isNaN(totalSeconds) || !isFinite(totalSeconds) || totalSeconds <= 0) {
+    return "00:00";
+  }
+  const cleanSec = Math.max(0, Math.floor(totalSeconds));
+  const seconds = cleanSec % 60;
+  const minutes = Math.floor((cleanSec / 60) % 60);
+  const hours = Math.floor(cleanSec / 3600);
 
   const secStr = String(seconds).padStart(2, "0");
   const minStr = String(minutes).padStart(2, "0");
@@ -235,6 +239,43 @@ export function formatAudioDuration(totalSeconds: number): string {
     return `${hours}:${minStr}:${secStr}`;
   }
   return `${minStr}:${secStr}`;
+}
+
+/**
+ * Accurately calculate exact audio duration in seconds using browser Web Audio decoder.
+ * Fixes Chromium MediaRecorder WebM files that lack EBML duration headers.
+ */
+export async function getAudioBlobExactDuration(blobOrData: Blob | string): Promise<number> {
+  if (!blobOrData) return 0;
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return 0;
+    const ctx = new AudioCtx();
+    let arrayBuffer: ArrayBuffer;
+    if (blobOrData instanceof Blob) {
+      arrayBuffer = await blobOrData.arrayBuffer();
+    } else if (typeof blobOrData === "string") {
+      if (blobOrData.startsWith("blob:") || blobOrData.startsWith("http")) {
+        const res = await fetch(blobOrData);
+        if (!res.ok) return 0;
+        arrayBuffer = await res.arrayBuffer();
+      } else {
+        const raw = blobOrData.includes(",") ? blobOrData.split(",")[1] : blobOrData;
+        const bstr = atob(raw.replace(/\s/g, ""));
+        const u8 = new Uint8Array(bstr.length);
+        for (let i = 0; i < bstr.length; i++) u8[i] = bstr.charCodeAt(i);
+        arrayBuffer = u8.buffer;
+      }
+    } else {
+      return 0;
+    }
+    const decoded = await ctx.decodeAudioData(arrayBuffer.slice(0));
+    const dur = decoded.duration;
+    ctx.close().catch(() => {});
+    return isFinite(dur) && dur > 0 ? dur : 0;
+  } catch {
+    return 0;
+  }
 }
 
 /**

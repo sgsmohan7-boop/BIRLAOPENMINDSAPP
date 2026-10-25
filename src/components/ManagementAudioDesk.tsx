@@ -47,7 +47,8 @@ import {
   generateFallbackAudioBlob, 
   ensurePlayableAudioUrl, 
   playWithWebAudio, 
-  stopWebAudio 
+  stopWebAudio,
+  getAudioBlobExactDuration
 } from "../utils/audioStorage";
 import { loadR2Credentials, getR2AudioBlobDirect } from "../utils/cloudflareR2Client";
 import { 
@@ -292,9 +293,19 @@ export default function ManagementAudioDesk({
       }
       const rec = activeEnquiry.audioRecording;
 
+      const detectDuration = async (src: Blob | string) => {
+        try {
+          const exact = await getAudioBlobExactDuration(src);
+          if (exact > 0 && active && isFinite(exact)) {
+            setDuration(exact);
+          }
+        } catch (_) {}
+      };
+
       // 1. Direct base64 audioData (Instant & zero-latency)
       if (rec.audioData && typeof rec.audioData === "string" && rec.audioData.length > 50) {
         setResolvedAudioUrl(ensurePlayableAudioUrl(rec.audioData));
+        detectDuration(rec.audioData);
         return;
       }
 
@@ -314,6 +325,7 @@ export default function ManagementAudioDesk({
           } else {
             setResolvedAudioUrl(URL.createObjectURL(idbBlob));
           }
+          detectDuration(idbBlob);
           return;
         }
       } catch (e) {
@@ -327,6 +339,7 @@ export default function ManagementAudioDesk({
           const r2Blob = await getR2AudioBlobDirect(creds, rec.fileName);
           if (r2Blob && active) {
             setResolvedAudioUrl(URL.createObjectURL(r2Blob));
+            detectDuration(r2Blob);
             return;
           }
         } catch (r2Err) {
@@ -337,10 +350,12 @@ export default function ManagementAudioDesk({
       // 4. Check external audioUrl or driveFileUrl (only valid http/https URLs)
       if (rec.audioUrl && (rec.audioUrl.startsWith("http://") || rec.audioUrl.startsWith("https://") || rec.audioUrl.startsWith("blob:"))) {
         setResolvedAudioUrl(ensurePlayableAudioUrl(rec.audioUrl));
+        detectDuration(rec.audioUrl);
         return;
       }
       if (rec.driveFileUrl && (rec.driveFileUrl.startsWith("http://") || rec.driveFileUrl.startsWith("https://") || rec.driveFileUrl.startsWith("blob:"))) {
         setResolvedAudioUrl(ensurePlayableAudioUrl(rec.driveFileUrl));
+        detectDuration(rec.driveFileUrl);
         return;
       }
 
@@ -573,20 +588,61 @@ export default function ManagementAudioDesk({
     }
   };
 
+  const handleLoadedMetadata = () => {
+    if (!audioRef.current) return;
+    const aud = audioRef.current;
+    const d = aud.duration;
+    if (isFinite(d) && d > 0) {
+      setDuration(d);
+    } else if (d === Infinity) {
+      // Chromium WebM seek trick to discover true duration
+      const handleTimeUpdateOnce = () => {
+        aud.removeEventListener("timeupdate", handleTimeUpdateOnce);
+        if (isFinite(aud.duration) && aud.duration > 0) {
+          setDuration(aud.duration);
+        } else if (aud.currentTime > 0) {
+          setDuration(aud.currentTime);
+        }
+        aud.currentTime = 0;
+      };
+      aud.addEventListener("timeupdate", handleTimeUpdateOnce);
+      aud.currentTime = 1e101;
+    }
+  };
+
   const handleTimeUpdate = () => {
     if (audioRef.current) {
-      setCurrentTime(audioRef.current.currentTime);
-      setDuration(audioRef.current.duration || 0);
+      const cur = audioRef.current.currentTime || 0;
+      setCurrentTime(cur);
+      const d = audioRef.current.duration;
+      if (isFinite(d) && d > 0) {
+        setDuration(d);
+      }
     }
   };
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const targetTime = parseFloat(e.target.value);
-    if (audioRef.current) {
+    if (isFinite(targetTime) && audioRef.current) {
       audioRef.current.currentTime = targetTime;
       setCurrentTime(targetTime);
     }
   };
+
+  // Accurately compute dynamic total duration for the scrubber slider
+  const effectiveTotalDuration = useMemo(() => {
+    let dur = 0;
+    if (isFinite(duration) && duration > 0) {
+      dur = duration;
+    } else if (activeEnquiry?.audioRecording?.durationSeconds && isFinite(activeEnquiry.audioRecording.durationSeconds) && activeEnquiry.audioRecording.durationSeconds > 0) {
+      dur = activeEnquiry.audioRecording.durationSeconds;
+    }
+    // If the audio has played past the recorded header length (e.g. 20+ minute meeting), dynamically expand track
+    if (currentTime > dur) {
+      dur = currentTime + 1;
+    }
+    return Math.max(dur, 60);
+  }, [duration, activeEnquiry?.audioRecording?.durationSeconds, currentTime]);
 
   const handleSpeedChange = (spd: number) => {
     setPlaybackSpeed(spd);
@@ -1320,6 +1376,7 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT COACHING ONLY
                       ref={audioRef}
                       src={resolvedAudioUrl || undefined}
                       preload="auto"
+                      onLoadedMetadata={handleLoadedMetadata}
                       onTimeUpdate={handleTimeUpdate}
                       onEnded={() => setIsPlaying(false)}
                       onPlay={() => setIsPlaying(true)}
@@ -1352,19 +1409,20 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT COACHING ONLY
 
                       {/* Scrubber & Timers */}
                       <div className="flex-1 min-w-[180px] flex items-center gap-2 px-1">
-                        <span className="text-[10px] font-mono text-slate-500 shrink-0">
+                        <span className="text-[10px] font-mono text-slate-500 shrink-0 min-w-[36px]">
                           {formatAudioDuration(currentTime)}
                         </span>
                         <input
                           type="range"
                           min={0}
-                          max={duration || activeEnquiry.audioRecording.durationSeconds || 100}
-                          value={currentTime}
+                          max={effectiveTotalDuration}
+                          step={0.5}
+                          value={Math.min(currentTime, effectiveTotalDuration)}
                           onChange={handleSeek}
                           className="flex-1 h-1.5 bg-slate-200 dark:bg-slate-800 rounded-lg appearance-none cursor-pointer accent-orange-600"
                         />
-                        <span className="text-[10px] font-mono text-slate-500 shrink-0">
-                          {formatAudioDuration(duration || activeEnquiry.audioRecording.durationSeconds)}
+                        <span className="text-[10px] font-mono text-slate-500 shrink-0 min-w-[36px] text-right">
+                          {formatAudioDuration(effectiveTotalDuration)}
                         </span>
                       </div>
 
