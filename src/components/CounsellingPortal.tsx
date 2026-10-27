@@ -80,19 +80,39 @@ import {
   CounsellingAudioRecord,
   ParentSelfEntry
 } from "../types";
-import { loadCounsellorAccounts, saveCounsellorAccounts, DEMO_COUNSELLING, mergeWithDefaultCounsellorAccounts, recordDeletedCounsellorAccountId, getAllowCounsellorMultiDelete, setAllowCounsellorMultiDelete, loadParentSelfEntries, saveParentSelfEntries } from "../utils/storage";
+import { 
+  loadCounsellorAccounts, 
+  saveCounsellorAccounts, 
+  DEMO_COUNSELLING, 
+  mergeWithDefaultCounsellorAccounts, 
+  recordDeletedCounsellorAccountId, 
+  getAllowCounsellorMultiDelete, 
+  setAllowCounsellorMultiDelete, 
+  loadParentSelfEntries, 
+  saveParentSelfEntries,
+  getDismissedParentEntryIds,
+  recordDismissedParentEntryId
+} from "../utils/storage";
 import { deleteAudioRecordingBlob, formatAudioDuration } from "../utils/audioStorage";
-import { isFirebaseConfigured, syncCollection } from "../utils/firebase";
+import { isFirebaseConfigured, syncCollection, saveDocument, deleteDocument } from "../utils/firebase";
 
 function deduplicateParentEntries(entries: ParentSelfEntry[]): ParentSelfEntry[] {
+  const dismissedSet = new Set(getDismissedParentEntryIds());
   const map = new Map<string, ParentSelfEntry>();
   for (const item of entries) {
     if (!item || !item.id) continue;
+    // If this item was previously dismissed by counsellor, permanently enforce status: "dismissed"
+    if (dismissedSet.has(item.id)) {
+      item.status = "dismissed";
+    }
     if (!map.has(item.id)) {
       map.set(item.id, item);
     } else {
       const existing = map.get(item.id)!;
-      if (item.status === "claimed" || (item.claimedAt && !existing.claimedAt)) {
+      // If either has been dismissed or claimed, preserve that state so old snapshots don't revive it
+      if (item.status === "dismissed" || existing.status === "dismissed") {
+        map.set(item.id, { ...existing, ...item, status: "dismissed" });
+      } else if (item.status === "claimed" || (item.claimedAt && !existing.claimedAt)) {
         map.set(item.id, item);
       }
     }
@@ -354,8 +374,9 @@ export default function CounsellingPortal({
   }, []);
 
   const pendingParentEntries = useMemo(() => {
+    const dismissedSet = new Set(getDismissedParentEntryIds());
     return (parentSelfEntries || [])
-      .filter(e => e.status === "pending")
+      .filter(e => e.status === "pending" && !dismissedSet.has(e.id))
       .sort((a, b) => {
         const aDate = a.dateKey || a.entryDate || (a.formattedDate ? a.formattedDate.split(" ")[0] : "");
         const bDate = b.dateKey || b.entryDate || (b.formattedDate ? b.formattedDate.split(" ")[0] : "");
@@ -366,8 +387,29 @@ export default function CounsellingPortal({
       });
   }, [parentSelfEntries]);
 
+  const isEntryToday = (e: ParentSelfEntry) => {
+    const now = new Date();
+    const todayDMY = now.toLocaleDateString("en-GB").replace(/\//g, "-");
+    const todayYMD = now.toISOString().split("T")[0];
+    const eDate = e.dateKey || e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
+    if (eDate === todayYMD || eDate === todayDMY) return true;
+    if (e.claimedAt) {
+      const cDate = new Date(e.claimedAt).toISOString().split("T")[0];
+      if (cDate === todayYMD) return true;
+    }
+    const time = new Date(e.claimedAt || e.submittedAt).getTime();
+    if (!isNaN(time) && now.getTime() - time < 24 * 60 * 60 * 1000) {
+      return true;
+    }
+    return false;
+  };
+
   const claimedParentEntries = useMemo(() => {
     return (parentSelfEntries || []).filter(e => e.status === "claimed");
+  }, [parentSelfEntries]);
+
+  const todayClaimedParentEntries = useMemo(() => {
+    return (parentSelfEntries || []).filter(e => e.status === "claimed" && isEntryToday(e));
   }, [parentSelfEntries]);
 
   const handleAddParentSelfEntry = (entry: ParentSelfEntry) => {
@@ -381,31 +423,72 @@ export default function CounsellingPortal({
     }).catch(() => {});
   };
 
-  const handleDismissParentEntry = (entryId: string) => {
+  const handleDismissParentEntry = async (entryId: string) => {
+    // 1. Immediately record in permanent dismissed IDs list in localStorage (never resurrects on refresh)
+    recordDismissedParentEntryId(entryId);
+
+    // 2. Remove / mark dismissed in React state immediately for snappy UI
     const updated = parentSelfEntries.map(e => e.id === entryId ? { ...e, status: "dismissed" as const } : e);
     setParentSelfEntries(updated);
     saveParentSelfEntries(updated);
+
+    // 3. Mark dismissed & delete document from Firestore parent_self_entries collection
+    try {
+      await saveDocument("parent_self_entries", entryId, { 
+        status: "dismissed", 
+        dismissedAt: new Date().toISOString() 
+      });
+      await deleteDocument("parent_self_entries", entryId);
+    } catch (e) {
+      console.warn("Firestore parent entry dismiss notice:", e);
+    }
+
+    // 4. Update backend server disk
+    fetch(`/api/parent-self-entry/${encodeURIComponent(entryId)}`, {
+      method: "DELETE"
+    }).catch(() => {});
     fetch("/api/parent-self-entry/claim", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: entryId, status: "dismissed" })
     }).catch(() => {});
+
+    setDeleteToast("✓ Parent entry dismissed from lounge.");
+    setTimeout(() => setDeleteToast(null), 3000);
   };
 
-  const handleClearAllPending = () => {
+  const handleClearAllPending = async () => {
     if (pendingParentEntries.length === 0) return;
     const count = pendingParentEntries.length;
     const pendingIds = pendingParentEntries.map(e => e.id);
+
+    // 1. Record all dismissed IDs permanently in localStorage
+    pendingIds.forEach(id => recordDismissedParentEntryId(id));
+
+    // 2. Clear from React state and localStorage
     const updated = parentSelfEntries.map(e => e.status === "pending" ? { ...e, status: "dismissed" as const } : e);
     setParentSelfEntries(updated);
     saveParentSelfEntries(updated);
+
+    // 3. Delete from Firestore collection
     for (const id of pendingIds) {
-      fetch("/api/parent-self-entry/claim", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, status: "dismissed" })
-      }).catch(() => {});
+      try {
+        await saveDocument("parent_self_entries", id, { 
+          status: "dismissed", 
+          dismissedAt: new Date().toISOString() 
+        });
+        await deleteDocument("parent_self_entries", id);
+      } catch {}
+      fetch(`/api/parent-self-entry/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
     }
+
+    // 4. Update backend server disk
+    fetch("/api/parent-self-entry/clear-pending", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: pendingIds })
+    }).catch(() => {});
+
     setDeleteToast(`🧹 Cleared ${count} waiting parents from reception lounge.`);
     setTimeout(() => setDeleteToast(null), 4000);
   };
@@ -425,6 +508,16 @@ export default function CounsellingPortal({
 
     setParentSelfEntries(updatedEntries);
     saveParentSelfEntries(updatedEntries);
+
+    // Update Firestore so other counsellors immediately see this parent is claimed
+    try {
+      await saveDocument("parent_self_entries", entry.id, {
+        status: "claimed",
+        claimedBy: currentCounsellorId,
+        claimedByName: currentCounsellorName,
+        claimedAt: new Date().toISOString()
+      });
+    } catch {}
 
     try {
       await fetch("/api/parent-self-entry/claim", {
@@ -1998,16 +2091,6 @@ export default function CounsellingPortal({
 
           <button
             type="button"
-            onClick={() => setIsAppInstallModalOpen(true)}
-            className="px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer border bg-emerald-500/20 hover:bg-emerald-500/30 text-white border-emerald-400/30"
-            title="Install on Android phone or Windows/Mac PC"
-          >
-            <Smartphone size={15} className="text-emerald-300" />
-            <span>📱 Install App (Mobile/PC)</span>
-          </button>
-
-          <button
-            type="button"
             onClick={() => {
               setParentKioskDefaultMode("print_qr");
               setIsParentKioskModalOpen(true);
@@ -2168,10 +2251,10 @@ export default function CounsellingPortal({
                     ? "bg-white/20 hover:bg-white/30 text-white border-white/30"
                     : "bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700"
                 }`}
-                title="View full reception queue history and claimed records"
+                title={`View reception queue history (Today's claims: ${todayClaimedParentEntries.length}, All archive: ${claimedParentEntries.length})`}
               >
                 <Users size={13} />
-                <span>📋 History ({claimedParentEntries.length})</span>
+                <span>📋 Today's Claims ({todayClaimedParentEntries.length})</span>
               </button>
 
               <button
@@ -5461,6 +5544,7 @@ export default function CounsellingPortal({
         onClose={() => setIsReceptionQueueModalOpen(false)}
         entries={parentSelfEntries}
         onClaimEntry={handleClaimAndAutoFill}
+        onDismissEntry={handleDismissParentEntry}
         onOpenQrPoster={() => {
           setIsReceptionQueueModalOpen(false);
           setParentKioskDefaultMode("print_qr");

@@ -15,12 +15,14 @@ import {
   School
 } from "lucide-react";
 import { ParentSelfEntry } from "../types";
+import { getDismissedParentEntryIds } from "../utils/storage";
 
 interface ReceptionQueueModalProps {
   isOpen: boolean;
   onClose: () => void;
   entries: ParentSelfEntry[];
   onClaimEntry: (entry: ParentSelfEntry) => void;
+  onDismissEntry?: (entryId: string) => void;
   onOpenQrPoster: () => void;
   currentCounsellorName?: string;
 }
@@ -30,15 +32,36 @@ export default function ReceptionQueueModal({
   onClose,
   entries = [],
   onClaimEntry,
+  onDismissEntry,
   onOpenQrPoster,
   currentCounsellorName = "Counsellor"
 }: ReceptionQueueModalProps) {
   const [activeTab, setActiveTab] = useState<"pending" | "claimed">("pending");
   const [searchQuery, setSearchQuery] = useState("");
+  const [claimedFilter, setClaimedFilter] = useState<"today" | "all">("today");
 
   if (!isOpen) return null;
 
-  const pendingList = [...entries.filter(e => e.status === "pending")].sort((a, b) => {
+  const now = new Date();
+  const todayDMY = now.toLocaleDateString("en-GB").replace(/\//g, "-");
+  const todayYMD = now.toISOString().split("T")[0];
+
+  const isEntryToday = (e: ParentSelfEntry) => {
+    const eDate = e.dateKey || e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
+    if (eDate === todayYMD || eDate === todayDMY) return true;
+    if (e.claimedAt) {
+      const cDate = new Date(e.claimedAt).toISOString().split("T")[0];
+      if (cDate === todayYMD) return true;
+    }
+    const time = new Date(e.claimedAt || e.submittedAt).getTime();
+    if (!isNaN(time) && now.getTime() - time < 24 * 60 * 60 * 1000) {
+      return true;
+    }
+    return false;
+  };
+
+  const dismissedSet = new Set(getDismissedParentEntryIds());
+  const pendingList = [...entries.filter(e => e.status === "pending" && !dismissedSet.has(e.id))].sort((a, b) => {
     // Group by day, order by dailyTokenNo ascending (1, 2, 3...)
     const aDate = a.dateKey || a.entryDate || (a.formattedDate ? a.formattedDate.split(" ")[0] : "");
     const bDate = b.dateKey || b.entryDate || (b.formattedDate ? b.formattedDate.split(" ")[0] : "");
@@ -48,9 +71,14 @@ export default function ReceptionQueueModal({
     return new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime();
   });
 
-  const claimedList = [...entries.filter(e => e.status === "claimed")].sort((a, b) => {
+  const allClaimedList = [...entries.filter(e => e.status === "claimed")].sort((a, b) => {
     return new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime();
   });
+
+  const todayClaimedList = allClaimedList.filter(isEntryToday);
+
+  // Default to today's 24-hr session claims so the desk stays fresh and resets each morning
+  const claimedList = claimedFilter === "today" ? todayClaimedList : allClaimedList;
 
   const displayList = (activeTab === "pending" ? pendingList : claimedList).filter(e => {
     if (!searchQuery.trim()) return true;
@@ -144,7 +172,7 @@ export default function ReceptionQueueModal({
               <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
                 activeTab === "claimed" ? "bg-white text-emerald-950" : "bg-slate-800 text-slate-300"
               }`}>
-                {claimedList.length}
+                {todayClaimedList.length}
               </span>
             </button>
           </div>
@@ -161,6 +189,42 @@ export default function ReceptionQueueModal({
           </div>
         </div>
 
+        {/* Sub-bar for Claimed Tab: Today vs All-Time Archive filter */}
+        {activeTab === "claimed" && (
+          <div className="px-5 py-2.5 bg-slate-950 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-bold text-slate-400">View Scope:</span>
+              <button
+                type="button"
+                onClick={() => setClaimedFilter("today")}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  claimedFilter === "today"
+                    ? "bg-emerald-500 text-white font-black shadow-sm"
+                    : "bg-slate-800 text-slate-400 hover:text-white"
+                }`}
+              >
+                <span>📅 Today's Claims ({todayClaimedList.length})</span>
+                <span className="text-[10px] bg-black/20 px-1 py-0.2 rounded">Active 24h</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setClaimedFilter("all")}
+                className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  claimedFilter === "all"
+                    ? "bg-emerald-500 text-white font-black shadow-sm"
+                    : "bg-slate-800 text-slate-400 hover:text-white"
+                }`}
+              >
+                <span>📁 All Archive ({allClaimedList.length})</span>
+              </button>
+            </div>
+
+            <span className="text-[10px] text-slate-500 hidden sm:inline">
+              ⚡ Automatically resets daily at midnight • Forms safely recorded in Admission Enquiries
+            </span>
+          </div>
+        )}
+
         {/* Content Area */}
         <div className="flex-1 p-4 sm:p-6 overflow-y-auto space-y-3 custom-scrollbar">
           {displayList.length === 0 ? (
@@ -172,13 +236,26 @@ export default function ReceptionQueueModal({
                 <h4 className="text-sm font-bold text-slate-300">
                   {activeTab === "pending"
                     ? "No Parents Waiting in Lounge Right Now"
+                    : claimedFilter === "today"
+                    ? "No Parents Claimed Today (Fresh Daily Slate)"
                     : "No Claimed Registrations in History"}
                 </h4>
                 <p className="text-xs text-slate-500 max-w-sm mx-auto">
                   {activeTab === "pending"
                     ? "When a parent scans the QR code at the reception desk, their registration will instantly appear here."
+                    : claimedFilter === "today"
+                    ? "The lounge auto-resets each day to keep the desk tidy. All previously claimed forms are safely preserved in the Admission Enquiries table."
                     : "Registrations claimed by counsellors will be archived here."}
                 </p>
+                {activeTab === "claimed" && claimedFilter === "today" && allClaimedList.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setClaimedFilter("all")}
+                    className="mt-3 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-emerald-400 hover:text-emerald-300 rounded-xl text-xs font-bold transition-all cursor-pointer inline-flex items-center gap-1.5"
+                  >
+                    <span>📁 View All-Time Claimed Archive ({allClaimedList.length})</span>
+                  </button>
+                )}
               </div>
             </div>
           ) : (
@@ -262,18 +339,30 @@ export default function ReceptionQueueModal({
                     </div>
 
                     {isPending ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onClaimEntry(entry);
-                          onClose();
-                        }}
-                        className="w-full py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 active:scale-95 text-white rounded-xl text-xs font-black shadow-lg transition-all cursor-pointer flex items-center justify-center gap-2"
-                      >
-                        <Sparkles size={15} />
-                        <span>⚡ Claim &amp; Auto-Fill Form</span>
-                        <ArrowRight size={15} />
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onClaimEntry(entry);
+                            onClose();
+                          }}
+                          className="flex-1 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 active:scale-95 text-white rounded-xl text-xs font-black shadow-lg transition-all cursor-pointer flex items-center justify-center gap-2"
+                        >
+                          <Sparkles size={15} />
+                          <span>⚡ Claim &amp; Auto-Fill Form</span>
+                          <ArrowRight size={15} />
+                        </button>
+                        {onDismissEntry && (
+                          <button
+                            type="button"
+                            onClick={() => onDismissEntry(entry.id)}
+                            className="p-2.5 bg-slate-800 hover:bg-rose-500/30 text-slate-400 hover:text-rose-300 rounded-xl transition-all cursor-pointer border border-slate-700"
+                            title="Dismiss entry if parent departed"
+                          >
+                            <X size={15} />
+                          </button>
+                        )}
+                      </div>
                     ) : (
                       <div className="text-center py-1 text-xs text-slate-500 font-bold">
                         🔒 Form Picked Up • In Counselling Session

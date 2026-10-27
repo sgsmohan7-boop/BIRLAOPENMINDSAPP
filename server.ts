@@ -869,6 +869,18 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
   parentSelfEntriesInMemory = loadParentSelfEntriesFromDisk();
 
   app.get("/api/parent-self-entry", (req, res) => {
+    const scope = req.query.scope;
+    if (scope === "today") {
+      const now = new Date();
+      const todayDMY = now.toLocaleDateString("en-GB").replace(/\//g, "-");
+      const todayYMD = now.toISOString().split("T")[0];
+      const filtered = parentSelfEntriesInMemory.filter(e => {
+        if (e.status === "pending") return true;
+        const eDate = e.dateKey || e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
+        return eDate === todayYMD || eDate === todayDMY;
+      });
+      return res.json({ success: true, entries: filtered });
+    }
     return res.json({ success: true, entries: parentSelfEntriesInMemory });
   });
 
@@ -919,7 +931,17 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
 
       const item = parentSelfEntriesInMemory.find(e => e.id === targetId);
       if (!item) {
-        return res.status(404).json({ success: false, error: "Parent entry not found." });
+        // Record as dismissed or claimed tombstone so it never resurrects
+        const tombstone = {
+          id: targetId,
+          status: (status as any) || "dismissed",
+          claimedBy: counsellorId || "COUNSELLOR-01",
+          claimedByName: counsellorName || "Admissions Counsellor",
+          claimedAt: new Date().toISOString()
+        };
+        parentSelfEntriesInMemory.push(tombstone);
+        saveParentSelfEntriesToDisk(parentSelfEntriesInMemory);
+        return res.json({ success: true, entry: tombstone });
       }
 
       item.status = (status as any) || "claimed";
@@ -929,6 +951,33 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
 
       saveParentSelfEntriesToDisk(parentSelfEntriesInMemory);
       return res.json({ success: true, entry: item });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.delete("/api/parent-self-entry/:id", (req, res) => {
+    try {
+      const targetId = req.params.id;
+      parentSelfEntriesInMemory = parentSelfEntriesInMemory.map(e => e.id === targetId ? { ...e, status: "dismissed" } : e);
+      saveParentSelfEntriesToDisk(parentSelfEntriesInMemory);
+      return res.json({ success: true, id: targetId });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post("/api/parent-self-entry/clear-pending", (req, res) => {
+    try {
+      const { ids } = req.body;
+      if (Array.isArray(ids) && ids.length > 0) {
+        const idSet = new Set(ids);
+        parentSelfEntriesInMemory = parentSelfEntriesInMemory.map(e => idSet.has(e.id) ? { ...e, status: "dismissed" } : e);
+      } else {
+        parentSelfEntriesInMemory = parentSelfEntriesInMemory.map(e => e.status === "pending" ? { ...e, status: "dismissed" } : e);
+      }
+      saveParentSelfEntriesToDisk(parentSelfEntriesInMemory);
+      return res.json({ success: true });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message });
     }

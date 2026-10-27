@@ -1061,13 +1061,39 @@ export function saveArchivedITStaffAccounts(accounts: ArchivedITStaffAccount[]):
   } catch {}
 }
 
+export function getDismissedParentEntryIds(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem("sgs_dismissed_parent_entries");
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return [];
+}
+
+export function recordDismissedParentEntryId(id: string): void {
+  if (typeof window === "undefined" || !id) return;
+  try {
+    const existing = getDismissedParentEntryIds();
+    if (!existing.includes(id)) {
+      existing.push(id);
+      localStorage.setItem("sgs_dismissed_parent_entries", JSON.stringify(existing));
+    }
+  } catch {}
+}
+
 export function loadParentSelfEntries(): any[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem("sgs_parent_self_entries");
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
+      if (Array.isArray(parsed)) {
+        const dismissedSet = new Set(getDismissedParentEntryIds());
+        return parsed.map(e => (dismissedSet.has(e.id) ? { ...e, status: "dismissed" } : e));
+      }
     }
   } catch {}
   return [];
