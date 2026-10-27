@@ -20,6 +20,10 @@ import {
   Sparkles,
   Users,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
+  Maximize2,
+  Minimize2,
   Eye,
   EyeOff,
   RefreshCw,
@@ -50,13 +54,17 @@ import {
   ThumbsUp,
   AlertTriangle,
   X,
-  Smartphone
+  Smartphone,
+  Bell,
+  School
 } from "lucide-react";
 import AudioMeetingRecorder from "./AudioMeetingRecorder";
 import ManagementAudioDesk from "./ManagementAudioDesk";
 import AppInstallModal from "./AppInstallModal";
 import AppUpdateNotifier from "./AppUpdateNotifier";
 import CounsellingReportModal from "./CounsellingReportModal";
+import ParentKioskModal from "./ParentKioskModal";
+import ReceptionQueueModal from "./ReceptionQueueModal";
 import { 
   CounsellingEnquiry, 
   AdmissionStatus, 
@@ -69,9 +77,10 @@ import {
   CounsellorAccount,
   DEFAULT_COUNSELLOR_ACCOUNTS,
   CounsellingFollowUpLog,
-  CounsellingAudioRecord
+  CounsellingAudioRecord,
+  ParentSelfEntry
 } from "../types";
-import { loadCounsellorAccounts, saveCounsellorAccounts, DEMO_COUNSELLING, mergeWithDefaultCounsellorAccounts, recordDeletedCounsellorAccountId, getAllowCounsellorMultiDelete, setAllowCounsellorMultiDelete } from "../utils/storage";
+import { loadCounsellorAccounts, saveCounsellorAccounts, DEMO_COUNSELLING, mergeWithDefaultCounsellorAccounts, recordDeletedCounsellorAccountId, getAllowCounsellorMultiDelete, setAllowCounsellorMultiDelete, loadParentSelfEntries, saveParentSelfEntries } from "../utils/storage";
 import { deleteAudioRecordingBlob, formatAudioDuration } from "../utils/audioStorage";
 
 interface CounsellingPortalProps {
@@ -161,6 +170,7 @@ export default function CounsellingPortal({
   const [followUpNotes, setFollowUpNotes] = useState<string>("");
   const [followUpSentiment, setFollowUpSentiment] = useState<"Positive" | "Hesitant" | "Budget Concern" | "Ready to Join">("Positive");
   const [followUpNextDate, setFollowUpNextDate] = useState<string>("");
+  const [deleteToast, setDeleteToast] = useState<string | null>(null);
 
   // Multi-selection & Super Admin Access Control States
   const [selectedEnquiryIds, setSelectedEnquiryIds] = useState<string[]>([]);
@@ -207,6 +217,217 @@ export default function CounsellingPortal({
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
   const [accountModalMode, setAccountModalMode] = useState<"create" | "edit">("create");
 
+  // Parent Self Registration Kiosk State & Realtime Queue
+  const [parentSelfEntries, setParentSelfEntries] = useState<ParentSelfEntry[]>(() => loadParentSelfEntries());
+  const [isParentKioskModalOpen, setIsParentKioskModalOpen] = useState(false);
+  const [parentKioskDefaultMode, setParentKioskDefaultMode] = useState<"register" | "print_qr">("register");
+  const [isReceptionQueueModalOpen, setIsReceptionQueueModalOpen] = useState(false);
+
+  // Reception Lounge Controls: Collapse (Minimize), Hide (Close), and Maximize (Full-height)
+  const [isLoungeCollapsed, setIsLoungeCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("counselling_lounge_collapsed") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const [isLoungeHidden, setIsLoungeHidden] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("counselling_lounge_hidden") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const [isLoungeMaximized, setIsLoungeMaximized] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("counselling_lounge_maximized") === "true";
+    } catch {
+      return false;
+    }
+  });
+
+  const toggleLoungeCollapsed = () => {
+    setIsLoungeCollapsed(prev => {
+      const next = !prev;
+      try { localStorage.setItem("counselling_lounge_collapsed", String(next)); } catch {}
+      return next;
+    });
+  };
+
+  const toggleLoungeHidden = (hide?: boolean) => {
+    setIsLoungeHidden(prev => {
+      const next = typeof hide === "boolean" ? hide : !prev;
+      try { localStorage.setItem("counselling_lounge_hidden", String(next)); } catch {}
+      return next;
+    });
+  };
+
+  const toggleLoungeMaximized = () => {
+    setIsLoungeMaximized(prev => {
+      const next = !prev;
+      try { localStorage.setItem("counselling_lounge_maximized", String(next)); } catch {}
+      return next;
+    });
+  };
+
+  // Fetch parent self-entries from server on mount & interval (2.5s real-time check)
+  React.useEffect(() => {
+    const fetchParentEntries = async () => {
+      try {
+        const res = await fetch("/api/parent-self-entry");
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && Array.isArray(json.entries)) {
+            setParentSelfEntries(json.entries);
+            saveParentSelfEntries(json.entries);
+          }
+        }
+      } catch {}
+    };
+    fetchParentEntries();
+    const interval = setInterval(fetchParentEntries, 2500); // 2.5s fast real-time poll
+
+    const handleRealtimeEntry = () => {
+      fetchParentEntries();
+    };
+    window.addEventListener("parent_self_entry_added", handleRealtimeEntry);
+    window.addEventListener("storage", handleRealtimeEntry);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("parent_self_entry_added", handleRealtimeEntry);
+      window.removeEventListener("storage", handleRealtimeEntry);
+    };
+  }, []);
+
+  const pendingParentEntries = useMemo(() => {
+    return (parentSelfEntries || []).filter(e => e.status === "pending");
+  }, [parentSelfEntries]);
+
+  const claimedParentEntries = useMemo(() => {
+    return (parentSelfEntries || []).filter(e => e.status === "claimed");
+  }, [parentSelfEntries]);
+
+  const handleAddParentSelfEntry = (entry: ParentSelfEntry) => {
+    const updated = [entry, ...parentSelfEntries.filter(e => e.id !== entry.id)];
+    setParentSelfEntries(updated);
+    saveParentSelfEntries(updated);
+    fetch("/api/parent-self-entry", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(entry)
+    }).catch(() => {});
+  };
+
+  const handleDismissParentEntry = (entryId: string) => {
+    const updated = parentSelfEntries.map(e => e.id === entryId ? { ...e, status: "dismissed" as const } : e);
+    setParentSelfEntries(updated);
+    saveParentSelfEntries(updated);
+    fetch("/api/parent-self-entry/claim", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: entryId, status: "dismissed" })
+    }).catch(() => {});
+  };
+
+  const handleClearAllPending = () => {
+    if (pendingParentEntries.length === 0) return;
+    const count = pendingParentEntries.length;
+    const pendingIds = pendingParentEntries.map(e => e.id);
+    const updated = parentSelfEntries.map(e => e.status === "pending" ? { ...e, status: "dismissed" as const } : e);
+    setParentSelfEntries(updated);
+    saveParentSelfEntries(updated);
+    for (const id of pendingIds) {
+      fetch("/api/parent-self-entry/claim", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, status: "dismissed" })
+      }).catch(() => {});
+    }
+    setDeleteToast(`🧹 Cleared ${count} waiting parents from reception lounge.`);
+    setTimeout(() => setDeleteToast(null), 4000);
+  };
+
+  const handleClaimAndAutoFill = async (entry: ParentSelfEntry) => {
+    const currentCounsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR-01";
+    const currentCounsellorName = activeCounsellor ? activeCounsellor.name : "Admissions Counsellor";
+
+    // Mark claimed
+    const updatedEntries = parentSelfEntries.map(e => e.id === entry.id ? {
+      ...e,
+      status: "claimed" as const,
+      claimedBy: currentCounsellorId,
+      claimedByName: currentCounsellorName,
+      claimedAt: new Date().toISOString()
+    } : e);
+
+    setParentSelfEntries(updatedEntries);
+    saveParentSelfEntries(updatedEntries);
+
+    try {
+      await fetch("/api/parent-self-entry/claim", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: entry.id,
+          counsellorId: currentCounsellorId,
+          counsellorName: currentCounsellorName
+        })
+      });
+    } catch {}
+
+    // Generate clean Enquiry ID and auto-fill form
+    const draftNo = getNextEnquiryNo(safeEnquiries);
+    setFormData({
+      id: draftNo,
+      enquiryNo: draftNo,
+      date: new Date().toLocaleDateString("en-GB").replace(/\//g, "-"),
+      studentName: entry.studentName,
+      applyingForClass: entry.applyingForClass || "Grade 1",
+      academicYear: "2026-2027",
+      dateOfBirth: entry.dateOfBirth || "",
+      gender: entry.gender || "Male",
+      fatherName: entry.fatherName || "",
+      motherName: entry.motherName || "",
+      contactNo: entry.contactNo || "",
+      whatsappNo: entry.whatsappNo || entry.contactNo || "",
+      previousSchool: entry.previousSchool || "",
+      previousClass: entry.previousClass || "",
+      heardAboutSchool: entry.heardAboutSchool && entry.heardAboutSchool.length > 0 ? entry.heardAboutSchool : ["Google/Online"],
+      reasonForChoosing: entry.reasonForChoosing || "",
+      preferredContact: entry.preferredContact || "Call",
+      bestTimeToContact: "Morning 10 AM",
+      academicPerformance: "Good",
+      studentInterests: "Sports & Academics",
+      strengths: "Quick Learner",
+      areasNeedingSupport: "Standard",
+      transportRequired: entry.transportRequired || false,
+      hostelRequired: false,
+      specialLearningSupport: entry.specialLearningSupport || false,
+      specialLearningDetails: "",
+      pointsDiscussed: `Parent ${entry.fatherName || entry.motherName || ''} submitted reception mobile QR registration for ${entry.studentName} (Class ${entry.applyingForClass}).`,
+      counsellorObservations: `Mobile QR entry registered by parent at reception on ${entry.formattedDate || new Date().toLocaleDateString()}.`,
+      explainedSchoolFacilities: true,
+      explainedAcademicProgramme: true,
+      explainedFeeStructure: true,
+      explainedTransportDetails: true,
+      explainedSchoolRules: true,
+      explainedActivitiesSports: true,
+      admissionStatus: "Interested",
+      followUpDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toLocaleDateString("en-GB").replace(/\//g, "-"),
+      counsellorId: currentCounsellorId,
+      counsellorName: currentCounsellorName,
+      parentSignatureRecorded: true,
+      createdAt: `${new Date().toLocaleDateString("en-GB").replace(/\//g, "-")} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+      updatedAt: new Date().toLocaleDateString()
+    });
+
+    setSelectedEnquiry(null);
+    setActiveView("form");
+    setDeleteToast(`✓ Claimed ${entry.studentName}'s enquiry! Form auto-populated successfully.`);
+    setTimeout(() => setDeleteToast(null), 4000);
+  };
+
   // Password Reset / Change Modal State for Counsellor
   const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
   const [currentPasswordInput, setCurrentPasswordInput] = useState("");
@@ -236,7 +457,6 @@ export default function CounsellingPortal({
   // In-app Delete Confirmation State (Avoids sandboxed iframe window.confirm blocking)
   const [enquiryToDelete, setEnquiryToDelete] = useState<CounsellingEnquiry | null>(null);
   const [accountToDelete, setAccountToDelete] = useState<CounsellorAccount | null>(null);
-  const [deleteToast, setDeleteToast] = useState<string | null>(null);
 
   // Active Counsellor resolution with tab-isolated URL param & sessionStorage precedence
   const [selectedCounsellorIdOverride, setSelectedCounsellorIdOverride] = useState<string | null>(() => {
@@ -1724,6 +1944,28 @@ export default function CounsellingPortal({
             <span>📱 Install App (Mobile/PC)</span>
           </button>
 
+          <button
+            type="button"
+            onClick={() => {
+              setParentKioskDefaultMode("print_qr");
+              setIsParentKioskModalOpen(true);
+            }}
+            className="px-4 py-2.5 rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer border bg-indigo-600 hover:bg-indigo-700 text-white shadow-md active:scale-95 border-indigo-400"
+            title="Open or Print Reception Self-Registration QR Kiosk Poster"
+          >
+            <Smartphone size={15} className="text-indigo-200" />
+            <span>📱 Reception QR Desk</span>
+            {pendingParentEntries.length > 0 ? (
+              <span className="px-2 py-0.5 rounded-full bg-red-500 text-white text-[10px] font-black animate-pulse shadow-sm">
+                {pendingParentEntries.length} IN LOUNGE
+              </span>
+            ) : (
+              <span className="px-1.5 py-0.5 rounded-full bg-emerald-400 text-slate-900 text-[9px] font-black">
+                LIVE
+              </span>
+            )}
+          </button>
+
           {userRole !== "Counsellor" && (
             <button
               onClick={() => { window.location.href = "/?portal=management"; }}
@@ -1764,6 +2006,296 @@ export default function CounsellingPortal({
           </button>
         </div>
       </div>
+
+      {/* Permanent Reception Walk-In Lounge & Parent QR Kiosk Desk */}
+      {isLoungeHidden ? (
+        /* Minimized / Closed Dock Bar */
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 bg-gradient-to-r from-amber-500/10 via-orange-500/10 to-rose-500/10 dark:bg-slate-900/80 border border-amber-300/40 dark:border-slate-800 rounded-2xl shadow-xs">
+          <div className="flex items-center gap-3">
+            <span className="p-2 rounded-xl bg-orange-100 dark:bg-orange-950/60 text-orange-600 dark:text-orange-400 shrink-0">
+              <Bell size={18} />
+            </span>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-black tracking-wide text-slate-800 dark:text-slate-100">
+                  🏛️ RECEPTION WALK-IN QUEUE & PARENT QR KIOSK
+                </span>
+                {pendingParentEntries.length > 0 ? (
+                  <span className="px-2.5 py-0.5 bg-orange-600 text-white rounded-full text-xs font-black animate-pulse shadow-sm">
+                    🔥 {pendingParentEntries.length} Parent(s) Waiting in Lounge
+                  </span>
+                ) : (
+                  <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
+                    • 0 Waiting (Lounge Clear)
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                Lounge view is currently closed/hidden. Click "Open / Show Lounge" to view and claim waiting parents.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => toggleLoungeHidden(false)}
+              className="px-4 py-2 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white rounded-xl text-xs font-black shadow-sm active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer"
+            >
+              <Eye size={15} />
+              <span>Open / Show Lounge {pendingParentEntries.length > 0 ? `(${pendingParentEntries.length})` : ""}</span>
+            </button>
+          </div>
+        </div>
+      ) : (
+        /* Full or Collapsed Lounge Card */
+        <div className={`p-4.5 rounded-2xl shadow-md transition-all border-2 ${
+          pendingParentEntries.length > 0
+            ? "bg-gradient-to-r from-amber-500 via-orange-500 to-rose-600 text-white border-amber-300 ring-4 ring-amber-400/20"
+            : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-100"
+        }`}>
+          {/* Header Bar */}
+          <div className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+            isLoungeCollapsed ? "" : "mb-3 pb-3 border-b border-black/10 dark:border-white/10"
+          }`}>
+            <div className="flex items-center gap-3">
+              <span className={`p-2.5 rounded-xl shrink-0 ${
+                pendingParentEntries.length > 0
+                  ? "bg-white/20 text-white animate-bounce"
+                  : "bg-orange-100 dark:bg-orange-950/60 text-orange-600 dark:text-orange-400"
+              }`}>
+                <Bell size={22} />
+              </span>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className={`text-sm font-black tracking-wide ${
+                    pendingParentEntries.length > 0 ? "text-white" : "text-slate-900 dark:text-white"
+                  }`}>
+                    🏛️ RECEPTION WALK-IN QUEUE & PARENT QR KIOSK
+                  </h3>
+                  {pendingParentEntries.length > 0 ? (
+                    <span className="px-2.5 py-0.5 bg-white text-orange-900 rounded-full text-xs font-black animate-pulse shadow-sm">
+                      🔥 {pendingParentEntries.length} Parent(s) Waiting in Lounge
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 rounded-full text-xs font-bold border border-emerald-300 dark:border-emerald-800">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                      <span>Live Desk Active (0 Waiting)</span>
+                    </span>
+                  )}
+                </div>
+                <p className={`text-xs mt-0.5 ${
+                  pendingParentEntries.length > 0 ? "text-amber-100 font-medium" : "text-slate-500 dark:text-slate-400"
+                }`}>
+                  {pendingParentEntries.length > 0
+                    ? isLoungeCollapsed
+                      ? "Queue is minimized. Click 'Expand' to view waiting parent cards or 'Claim'."
+                      : "Parents arrived and scanned reception QR on mobile! Click '⚡ Claim & Auto-Fill Form' to pull their details directly into your admission form."
+                    : "Parents visiting the school scan the Reception QR on their phone. When they submit, their card chimes and appears here in real-time."}
+                </p>
+              </div>
+            </div>
+
+            {/* Action & Window Control Buttons */}
+            <div className="flex items-center gap-1.5 flex-wrap shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsReceptionQueueModalOpen(true)}
+                className={`px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer shadow-xs active:scale-95 flex items-center gap-1 border ${
+                  pendingParentEntries.length > 0
+                    ? "bg-white/20 hover:bg-white/30 text-white border-white/30"
+                    : "bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700"
+                }`}
+                title="View full reception queue history and claimed records"
+              >
+                <Users size={13} />
+                <span>📋 History ({claimedParentEntries.length})</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setParentKioskDefaultMode("print_qr");
+                  setIsParentKioskModalOpen(true);
+                }}
+                className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all shrink-0 cursor-pointer shadow-xs active:scale-95 flex items-center gap-1 ${
+                  pendingParentEntries.length > 0
+                    ? "bg-white text-orange-950 hover:bg-orange-50"
+                    : "bg-indigo-600 hover:bg-indigo-700 text-white"
+                }`}
+                title="Open or Print Reception Self-Registration QR Kiosk Poster"
+              >
+                <Smartphone size={13} className={pendingParentEntries.length > 0 ? "text-orange-600" : "text-white"} />
+                <span>📱 Poster</span>
+              </button>
+
+              {/* Clear All Waiting Test Entries (when entries exist) */}
+              {pendingParentEntries.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleClearAllPending}
+                  className="px-2.5 py-1.5 bg-black/20 hover:bg-red-600 text-white border border-white/30 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer shadow-xs active:scale-95 flex items-center gap-1"
+                  title="Clear / Dismiss all currently waiting entries"
+                >
+                  <Trash2 size={13} />
+                  <span>🧹 Clear ({pendingParentEntries.length})</span>
+                </button>
+              )}
+
+              {/* Maximize / Compact Scroll Toggle (when entries > 3 and not collapsed) */}
+              {!isLoungeCollapsed && pendingParentEntries.length > 3 && (
+                <button
+                  type="button"
+                  onClick={toggleLoungeMaximized}
+                  className="px-2.5 py-1.5 bg-white/20 hover:bg-white/30 text-white border border-white/30 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer active:scale-95 flex items-center gap-1"
+                  title={isLoungeMaximized ? "Switch to compact scroll view" : "Expand to full grid"}
+                >
+                  {isLoungeMaximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                  <span>{isLoungeMaximized ? "Compact View" : "Expand Grid"}</span>
+                </button>
+              )}
+
+              {/* Minimize / Collapse Toggle Button */}
+              <button
+                type="button"
+                onClick={toggleLoungeCollapsed}
+                className={`px-2.5 py-1.5 rounded-xl text-xs font-black transition-all shrink-0 cursor-pointer shadow-xs active:scale-95 flex items-center gap-1 border ${
+                  pendingParentEntries.length > 0
+                    ? "bg-white/25 hover:bg-white/40 text-white border-white/40"
+                    : "bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-700"
+                }`}
+                title={isLoungeCollapsed ? "Expand queue cards" : "Minimize / Collapse queue cards"}
+              >
+                {isLoungeCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                <span>{isLoungeCollapsed ? `Expand (${pendingParentEntries.length})` : "Minimize"}</span>
+              </button>
+
+              {/* Close / Hide Button */}
+              <button
+                type="button"
+                onClick={() => toggleLoungeHidden(true)}
+                className={`p-1.5 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer active:scale-95 border ${
+                  pendingParentEntries.length > 0
+                    ? "bg-white/15 hover:bg-red-500/80 text-white border-white/30"
+                    : "bg-slate-100 hover:bg-red-50 dark:bg-slate-800 text-slate-500 hover:text-red-600 border-slate-200 dark:border-slate-700"
+                }`}
+                title="Hide Reception Lounge banner (You can reopen anytime)"
+              >
+                <X size={15} />
+              </button>
+            </div>
+          </div>
+
+          {/* Lounge Content: Only shown when NOT collapsed */}
+          {!isLoungeCollapsed && (
+            <>
+              {pendingParentEntries.length > 0 ? (
+                <div className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 ${
+                  isLoungeMaximized ? "" : "max-h-[380px] overflow-y-auto pr-1"
+                }`}>
+                  {pendingParentEntries.map(entry => (
+                    <div key={entry.id} className="bg-slate-900/90 backdrop-blur-md border border-white/30 rounded-xl p-4 flex flex-col justify-between gap-3 text-white shadow-xl">
+                      <div>
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="text-base font-black text-amber-300">{entry.studentName}</p>
+                              <span className="px-2 py-0.5 rounded-md bg-amber-400/20 text-amber-200 text-[10px] font-bold border border-amber-400/30">
+                                Class: {entry.applyingForClass}
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-200 mt-1.5">
+                              Parent: <strong className="text-white">{entry.fatherName || entry.motherName || "Parent"}</strong>
+                            </p>
+                            <div className="flex items-center gap-2 mt-1">
+                              <a 
+                                href={`tel:${entry.contactNo}`} 
+                                className="text-xs text-emerald-300 font-mono font-bold hover:underline flex items-center gap-1"
+                              >
+                                📞 {entry.contactNo}
+                              </a>
+                              {entry.whatsappNo && (
+                                <a 
+                                  href={`https://wa.me/91${entry.whatsappNo.replace(/[^0-9]/g, '')}`} 
+                                  target="_blank" 
+                                  rel="noopener noreferrer"
+                                  className="text-[10px] bg-emerald-500/30 hover:bg-emerald-500/50 text-emerald-200 px-1.5 py-0.5 rounded font-bold"
+                                >
+                                  WhatsApp
+                                </a>
+                              )}
+                            </div>
+                            {entry.previousSchool && (
+                              <p className="text-[11px] text-slate-300 mt-1 truncate">
+                                🏫 Prev: <span className="text-slate-100">{entry.previousSchool}</span>
+                              </p>
+                            )}
+                          </div>
+                          <span className="px-2 py-1 rounded-md bg-slate-800 text-slate-300 text-[10px] font-mono font-bold shrink-0 border border-slate-700">
+                            🕒 {entry.formattedDate ? (entry.formattedDate.split(" ")[1] || entry.formattedDate) : "Now"}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 pt-2 border-t border-white/10">
+                        <button
+                          type="button"
+                          onClick={() => handleClaimAndAutoFill(entry)}
+                          className="flex-1 py-2.5 bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white rounded-lg text-xs font-black shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ring-2 ring-emerald-300/40"
+                          title="Claim this enquiry exclusively: auto-fills all fields into your admission form"
+                        >
+                          <CheckCircle2 size={16} />
+                          <span>⚡ Claim & Auto-Fill Form</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDismissParentEntry(entry.id)}
+                          className="p-2.5 bg-white/10 hover:bg-red-500/40 text-slate-300 hover:text-white rounded-lg text-xs font-bold transition-all cursor-pointer"
+                          title="Dismiss if parent left lounge without meeting"
+                        >
+                          <X size={15} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                /* Empty Lounge State - Clean, Professional Production Ready */
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-3.5 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-dashed border-slate-300 dark:border-slate-700">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                      <School size={20} />
+                    </div>
+                    <div className="text-left">
+                      <p className="text-xs font-bold text-slate-700 dark:text-slate-200 flex items-center gap-2">
+                        <span>☕ Reception Lounge is Clear — Live Desk Ready</span>
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping inline-block" />
+                      </p>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        When visiting parents scan the Reception QR Poster on their phone, their verified details will chime and appear here in real-time.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setParentKioskDefaultMode("print_qr");
+                        setIsParentKioskModalOpen(true);
+                      }}
+                      className="w-full sm:w-auto px-4 py-2 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white rounded-xl text-xs font-black shadow-sm active:scale-95 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <Smartphone size={14} className="text-amber-200" />
+                      <span>📱 View / Print QR Poster</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {/* KPI Stats Strip - Interactive 5 Metric Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
@@ -2567,12 +3099,25 @@ export default function CounsellingPortal({
                 </div>
               )}
 
-              {/* If Counsellor, show their isolated badge & multi-delete status badge */}
+              {/* If Counsellor, show their isolated badge, reception walk-ins pill & multi-delete status badge */}
               {userRole === "Counsellor" && activeCounsellor && (
                 <div className="flex items-center gap-2 shrink-0">
                   <div className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-100 dark:bg-orange-950/40 border border-orange-300 dark:border-orange-800 rounded-xl text-xs font-bold text-orange-800 dark:text-orange-300">
                     <span>🔒 {activeCounsellor.name} ({counsellorScopeEnquiries.length} Enquiries)</span>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsReceptionQueueModalOpen(true)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold border flex items-center gap-1.5 cursor-pointer transition-all ${
+                      pendingParentEntries.length > 0
+                        ? "bg-amber-100 dark:bg-amber-950/80 text-amber-900 dark:text-amber-200 border-amber-400 animate-pulse shadow-sm"
+                        : "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-200"
+                    }`}
+                    title="Open Reception Walk-in Lounge Queue"
+                  >
+                    <Bell size={13} className={pendingParentEntries.length > 0 ? "text-amber-600 animate-bounce" : "text-slate-500"} />
+                    <span>Reception Lounge: {pendingParentEntries.length} Waiting</span>
+                  </button>
                   <div className={`px-3 py-1.5 rounded-xl text-xs font-bold border flex items-center gap-1.5 ${
                     allowCounsellorMultiDelete
                       ? "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800"
@@ -4816,6 +5361,28 @@ export default function CounsellingPortal({
         enquiries={safeEnquiries}
         currentCounsellorName={activeCounsellor?.name}
         userRole={userRole}
+      />
+
+      {/* Reception Self-Registration Parent Kiosk Modal */}
+      <ParentKioskModal
+        isOpen={isParentKioskModalOpen}
+        onClose={() => setIsParentKioskModalOpen(false)}
+        onSubmitParentEntry={handleAddParentSelfEntry}
+        defaultMode={parentKioskDefaultMode}
+      />
+
+      {/* Walk-in Reception Parent Queue & Claim Modal */}
+      <ReceptionQueueModal
+        isOpen={isReceptionQueueModalOpen}
+        onClose={() => setIsReceptionQueueModalOpen(false)}
+        entries={parentSelfEntries}
+        onClaimEntry={handleClaimAndAutoFill}
+        onOpenQrPoster={() => {
+          setIsReceptionQueueModalOpen(false);
+          setParentKioskDefaultMode("print_qr");
+          setIsParentKioskModalOpen(true);
+        }}
+        currentCounsellorName={activeCounsellor?.name}
       />
 
       {/* Real-Time In-App Live Auto-Update Notifier */}

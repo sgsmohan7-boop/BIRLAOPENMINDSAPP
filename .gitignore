@@ -1,8 +1,13 @@
 node_modules/
+.aistudio/
+dist/
 dist-electron/
+
 electron-app/
 coverage/
 .DS_Store
 *.log
 .env*
 !.env.example
+
+

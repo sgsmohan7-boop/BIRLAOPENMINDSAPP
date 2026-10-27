@@ -333,6 +333,32 @@ export interface CounsellingEnquiry {
   updatedAt: string;
 }
 
+export interface ParentSelfEntry {
+  id: string; // e.g. "PSE-2026-001"
+  studentName: string;
+  applyingForClass: string;
+  academicYear?: string;
+  dateOfBirth?: string;
+  gender?: "Male" | "Female" | "Other";
+  fatherName?: string;
+  motherName?: string;
+  contactNo: string;
+  whatsappNo?: string;
+  previousSchool?: string;
+  previousClass?: string;
+  heardAboutSchool?: string[];
+  reasonForChoosing?: string;
+  preferredContact?: "Call" | "WhatsApp";
+  transportRequired?: boolean;
+  specialLearningSupport?: boolean;
+  submittedAt: string; // ISO string
+  formattedDate: string; // "DD-MM-YYYY HH:MM"
+  status: "pending" | "claimed" | "dismissed";
+  claimedBy?: string; // counsellorId
+  claimedByName?: string; // counsellorName
+  claimedAt?: string;
+}
+
 export interface CounsellingFollowUpLog {
   id: string;
   timestamp: string;

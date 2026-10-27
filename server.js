@@ -11,15 +11,10 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 dotenv.config({ override: true });
 const getPort = () => {
   const envPort = process.env.PORT ? parseInt(process.env.PORT, 10) : void 0;
-  const defaultAppPort = process.env.DEFAULT_APP_PORT ? parseInt(process.env.DEFAULT_APP_PORT, 10) : 3e3;
-  const nginxPort = process.env.NGINX_PORT ? parseInt(process.env.NGINX_PORT, 10) : void 0;
-  if (nginxPort && (envPort === nginxPort || nginxPort === 8080)) {
-    return defaultAppPort || 3e3;
+  if (envPort && envPort !== 8080 && envPort > 0) {
+    return envPort;
   }
-  if (process.env.DEFAULT_APP_PORT) {
-    return defaultAppPort;
-  }
-  return envPort || 3e3;
+  return 3000;
 };
 const PORT = getPort();
 let mongoClient = null;
@@ -182,6 +177,23 @@ async function getMongoDB() {
   }
 }
 const app = express();
+
+app.all([
+  "/_status",
+  "/status",
+  "/healthz",
+  "/health"
+], (req, res) => {
+  res.setHeader("Content-Type", "application/json");
+  return res.status(200).json({
+    status: "ready",
+    ready: true,
+    healthy: true,
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
+
 app.use(express.json({ limit: "150mb" }));
 app.use(express.urlencoded({ limit: "150mb", extended: true }));
 const isPrivateIp = (ip) => {

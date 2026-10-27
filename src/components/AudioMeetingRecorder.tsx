@@ -2670,7 +2670,7 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
                 className="px-5 py-2.5 bg-gradient-to-r from-red-600 to-indigo-700 hover:from-red-700 hover:to-indigo-800 text-white rounded-xl text-xs font-black transition-all shadow-lg flex items-center gap-2 cursor-pointer active:scale-95"
               >
                 <Square size={14} className="fill-current" />
-                <span>{isProcessing ? "Saving..." : "Stop & Save Meeting"}</span>
+                <span>{isProcessing ? "Processing..." : "Stop Recording"}</span>
               </button>
             </div>
           </div>

@@ -44,9 +44,11 @@ interface LoginProps {
   toggleTheme?: () => void;
   counsellorAccounts?: CounsellorAccount[];
   managementAccounts?: ManagementAccount[];
+  onOpenParentKiosk?: () => void;
 }
 
-export default function Login({ onLogin, theme = "light", toggleTheme, counsellorAccounts, managementAccounts }: LoginProps) {
+
+export default function Login({ onLogin, theme = "light", toggleTheme, counsellorAccounts, managementAccounts, onOpenParentKiosk }: LoginProps) {
   // Check if URL explicitly locks to a specific department portal (e.g. ?portal=management, /counselling, ?portal=it, or custom domain)
   const lockedPortal = React.useMemo<"teacher" | "admin" | "driver" | "student" | "counsellor" | "management" | "it" | null>(() => {
     if (typeof window === "undefined") return null;
@@ -1144,6 +1146,28 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
                 Locked
               </span>
             </div>
+          )}
+
+          {/* PROMINENT PARENT SELF-SERVICE KIOSK BANNER */}
+          {onOpenParentKiosk && (
+            <button
+              type="button"
+              onClick={onOpenParentKiosk}
+              className="w-full mb-4 p-3 bg-gradient-to-r from-orange-600 via-amber-600 to-yellow-600 hover:from-orange-700 hover:to-amber-700 text-white rounded-2xl shadow-lg border border-orange-400/40 flex items-center justify-between font-extrabold text-xs cursor-pointer transition-all active:scale-[0.99]"
+            >
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-white/20 backdrop-blur-md flex items-center justify-center shrink-0 border border-white/30 text-white">
+                  <Smartphone size={18} />
+                </div>
+                <div className="text-left space-y-0.5">
+                  <p className="font-black text-xs text-white">📱 Parent Mobile Enquiry Self-Registration</p>
+                  <p className="text-[10px] text-amber-100 font-medium">Scanning QR Code? Click here to fill student enquiry form</p>
+                </div>
+              </div>
+              <span className="px-3 py-1 bg-white text-orange-950 rounded-xl font-black text-[11px] shrink-0 shadow-sm">
+                Open Form →
+              </span>
+            </button>
           )}
 
           {/* CASE 2: Super Admin Master Mode (Only shown on base URL when no portal parameter is present and not on management portal) */}

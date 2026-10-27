@@ -42,9 +42,15 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Always use network for API requests, audio streaming, cloud storage, and database synchronization
+  // Always use network for dev modules, API requests, audio streaming, cloud storage, and database synchronization
   if (
+    url.pathname.startsWith('/src/') ||
+    url.pathname.startsWith('/@') ||
+    url.pathname.startsWith('/node_modules/') ||
+    url.search.includes('v=') ||
+    url.search.includes('t=') ||
     url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/__') ||
     url.hostname.includes('r2.cloudflarestorage.com') ||
     url.hostname.includes('firestore.googleapis.com') ||
     url.hostname.includes('firebaseio.com') ||

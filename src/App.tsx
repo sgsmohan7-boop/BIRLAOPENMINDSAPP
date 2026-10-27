@@ -9,27 +9,31 @@ import Login from "./components/Login";
 import Sidebar from "./components/Sidebar";
 import Dashboard from "./components/Dashboard";
 import InventoryMaster from "./components/InventoryMaster";
-import SchoolStoreHub from "./components/SchoolStoreHub";
 import RoomMaster from "./components/RoomMaster";
 import EmployeeMaster from "./components/EmployeeMaster";
-import WarrantyTracker from "./components/WarrantyTracker";
-import RaiseTicket from "./components/RaiseTicket";
-import NetworkSpeed from "./components/NetworkSpeed";
-import SettingsView from "./components/Settings";
-import Analytics from "./components/Analytics";
-import TeacherPortal from "./components/TeacherPortal";
-import AiAssistant from "./components/AiAssistant";
-import CctvMonitor from "./components/CctvMonitor";
-import TransportDashboard from "./components/TransportDashboard";
-import DriverPortal from "./components/DriverPortal";
-import StudentPortal from "./components/StudentPortal";
-import CounsellingPortal from "./components/CounsellingPortal";
-import ManagementPortal from "./components/ManagementPortal";
-import GoogleDriveManager from "./components/GoogleDriveManager";
-import CctvNvrStorageModal from "./components/CctvNvrStorageModal";
-import PortalLinksModal from "./components/PortalLinksModal";
-import AppInstallModal from "./components/AppInstallModal";
 import AppUpdateNotifier from "./components/AppUpdateNotifier";
+
+// Lazy-load non-critical portals and modals to reduce initial bundle and boot instantly
+const SchoolStoreHub = React.lazy(() => import("./components/SchoolStoreHub"));
+const WarrantyTracker = React.lazy(() => import("./components/WarrantyTracker"));
+const RaiseTicket = React.lazy(() => import("./components/RaiseTicket"));
+const NetworkSpeed = React.lazy(() => import("./components/NetworkSpeed"));
+const SettingsView = React.lazy(() => import("./components/Settings"));
+const Analytics = React.lazy(() => import("./components/Analytics"));
+const TeacherPortal = React.lazy(() => import("./components/TeacherPortal"));
+const AiAssistant = React.lazy(() => import("./components/AiAssistant"));
+const CctvMonitor = React.lazy(() => import("./components/CctvMonitor"));
+const TransportDashboard = React.lazy(() => import("./components/TransportDashboard"));
+const DriverPortal = React.lazy(() => import("./components/DriverPortal"));
+const StudentPortal = React.lazy(() => import("./components/StudentPortal"));
+const CounsellingPortal = React.lazy(() => import("./components/CounsellingPortal"));
+const ManagementPortal = React.lazy(() => import("./components/ManagementPortal"));
+const GoogleDriveManager = React.lazy(() => import("./components/GoogleDriveManager"));
+const CctvNvrStorageModal = React.lazy(() => import("./components/CctvNvrStorageModal"));
+const PortalLinksModal = React.lazy(() => import("./components/PortalLinksModal"));
+const AppInstallModal = React.lazy(() => import("./components/AppInstallModal"));
+const ParentFormMobileOnly = React.lazy(() => import("./components/ParentFormMobileOnly"));
+
 
 import { loadData, saveData, calculateExpiryDate, resetToDefaults, clearAllData, loadCounselling, saveCounselling, deduplicateEnquiries, loadCounsellorAccounts, saveCounsellorAccounts, mergeWithDemoEnquiries, mergeWithDefaultCounsellorAccounts, recordDeletedCounsellorAccountId, recordDeletedCounsellorAccountIds, recordDeletedEnquiryId, recordDeletedEnquiryIds, getDeletedEnquiryIds, unmarkDeletedEnquiryId, mergeWithDefaultITStaffAccounts, saveITStaffAccounts, loadITStaffAccounts, recordDeletedITStaffAccountId } from "./utils/storage";
 import { AlertTriangle, X, Bell, ArrowRight, RefreshCw, Share2, Smartphone } from "lucide-react";
@@ -143,6 +147,21 @@ export default function App() {
       return "dashboard";
     }
   };
+
+  const checkInitialParentKiosk = () => {
+    if (typeof window === "undefined") return false;
+    const params = new URLSearchParams(window.location.search);
+    const mode = (params.get("mode") || params.get("portal") || params.get("tab") || "").toLowerCase();
+    const hash = (window.location.hash || "").replace("#", "").toLowerCase();
+    const path = (window.location.pathname || "").toLowerCase();
+    return (
+      mode === "parent_kiosk" || mode === "parent-kiosk" || mode === "parent" ||
+      hash === "parent_kiosk" || hash === "parent-kiosk" || hash === "parent" ||
+      path.includes("parent-kiosk") || path.includes("parent_kiosk") || path === "/parent"
+    );
+  };
+
+  const [isParentKioskMode, setIsParentKioskMode] = useState<boolean>(() => checkInitialParentKiosk());
 
   // Session details states with synchronous initialization
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
@@ -1578,6 +1597,18 @@ export default function App() {
     }
   };
 
+  if (isParentKioskMode) {
+    return (
+      <React.Suspense fallback={<div className="flex h-screen w-screen items-center justify-center bg-slate-900"><AnimatedLoading size="w-16 h-16" /></div>}>
+        <ParentFormMobileOnly
+          onSubmitSuccess={(entry) => {
+            setCounsellingEnquiries(prev => deduplicateEnquiries([entry as any, ...prev]));
+          }}
+        />
+      </React.Suspense>
+    );
+  }
+
   if (!isLoggedIn) {
     return (
       <Login 
@@ -1586,92 +1617,102 @@ export default function App() {
         toggleTheme={toggleTheme} 
         counsellorAccounts={counsellorAccounts} 
         managementAccounts={managementAccounts} 
+        onOpenParentKiosk={() => setIsParentKioskMode(true)}
       />
     );
   }
 
   if (userRole === "Teacher") {
     return (
-      <TeacherPortal
-        rooms={rooms}
-        tickets={tickets}
-        history={history}
-        userBranch={userBranch}
-        userEmail={userEmail}
-        onLogout={handleLogout}
-        updateTickets={handleUpdateTickets}
-        theme={theme}
-        toggleTheme={toggleTheme}
-        onSyncRefresh={handleSyncRefresh}
-      />
+      <React.Suspense fallback={<div className="flex h-screen w-screen items-center justify-center bg-slate-900"><AnimatedLoading size="w-16 h-16" /></div>}>
+        <TeacherPortal
+          rooms={rooms}
+          tickets={tickets}
+          history={history}
+          userBranch={userBranch}
+          userEmail={userEmail}
+          onLogout={handleLogout}
+          updateTickets={handleUpdateTickets}
+          theme={theme}
+          toggleTheme={toggleTheme}
+          onSyncRefresh={handleSyncRefresh}
+        />
+      </React.Suspense>
     );
   }
 
   if (userRole === "Driver") {
     return (
-      <div className="min-h-screen w-full overflow-y-auto bg-slate-900 custom-scrollbar">
-        <DriverPortal onLogout={handleLogout} />
-      </div>
+      <React.Suspense fallback={<div className="flex h-screen w-screen items-center justify-center bg-slate-900"><AnimatedLoading size="w-16 h-16" /></div>}>
+        <div className="min-h-screen w-full overflow-y-auto bg-slate-900 custom-scrollbar">
+          <DriverPortal onLogout={handleLogout} />
+        </div>
+      </React.Suspense>
     );
   }
 
   if (userRole === "Student") {
     return (
-      <div className="min-h-screen w-full overflow-y-auto bg-slate-100 dark:bg-slate-950 custom-scrollbar">
-        <StudentPortal onLogout={handleLogout} />
-      </div>
+      <React.Suspense fallback={<div className="flex h-screen w-screen items-center justify-center bg-slate-900"><AnimatedLoading size="w-16 h-16" /></div>}>
+        <div className="min-h-screen w-full overflow-y-auto bg-slate-100 dark:bg-slate-950 custom-scrollbar">
+          <StudentPortal onLogout={handleLogout} />
+        </div>
+      </React.Suspense>
     );
   }
 
   if (userRole === "Counsellor") {
     return (
-      <div className="min-h-screen w-full overflow-y-auto bg-slate-100 dark:bg-slate-950 custom-scrollbar">
-        <CounsellingPortal
-          enquiries={counsellingEnquiries}
-          onSaveEnquiry={handleSaveCounselling}
-          onDeleteEnquiry={handleDeleteCounselling}
-          onDeleteMultipleEnquiries={handleDeleteMultipleCounselling}
-          counsellorAccounts={counsellorAccounts}
-          onSaveCounsellorAccount={handleSaveCounsellorAccount}
-          onDeleteCounsellorAccount={handleDeleteCounsellorAccount}
-          userRole={userRole}
-          userEmail={userEmail}
-          onLogout={handleLogout}
-          standalone={true}
-          theme={theme}
-          toggleTheme={toggleTheme}
-          onSyncRefresh={handleSyncRefresh}
-        />
-      </div>
+      <React.Suspense fallback={<div className="flex h-screen w-screen items-center justify-center bg-slate-900"><AnimatedLoading size="w-16 h-16" /></div>}>
+        <div className="min-h-screen w-full overflow-y-auto bg-slate-100 dark:bg-slate-950 custom-scrollbar">
+          <CounsellingPortal
+            enquiries={counsellingEnquiries}
+            onSaveEnquiry={handleSaveCounselling}
+            onDeleteEnquiry={handleDeleteCounselling}
+            onDeleteMultipleEnquiries={handleDeleteMultipleCounselling}
+            counsellorAccounts={counsellorAccounts}
+            onSaveCounsellorAccount={handleSaveCounsellorAccount}
+            onDeleteCounsellorAccount={handleDeleteCounsellorAccount}
+            userRole={userRole}
+            userEmail={userEmail}
+            onLogout={handleLogout}
+            standalone={true}
+            theme={theme}
+            toggleTheme={toggleTheme}
+            onSyncRefresh={handleSyncRefresh}
+          />
+        </div>
+      </React.Suspense>
     );
   }
 
-
   if (userRole === "Management") {
     return (
-      <div className="min-h-screen w-full overflow-y-auto bg-slate-100 dark:bg-slate-950 custom-scrollbar">
-        <ManagementPortal
-          enquiries={counsellingEnquiries}
-          onSaveEnquiry={handleSaveCounselling}
-          onDeleteEnquiry={handleDeleteCounselling}
-          counsellorAccounts={counsellorAccounts}
-          managementAccounts={managementAccounts}
-          onSaveManagementAccount={handleSaveManagementAccount}
-          onDeleteManagementAccount={handleDeleteManagementAccount}
-          onSaveCounsellorAccount={handleSaveCounsellorAccount}
-          onDeleteCounsellorAccount={handleDeleteCounsellorAccount}
-          tickets={tickets}
-          rooms={rooms}
-          inventory={inventory}
-          userRole={userRole}
-          userEmail={userEmail}
-          onLogout={handleLogout}
-          standalone={true}
-          theme={theme}
-          toggleTheme={toggleTheme}
-          onSyncRefresh={handleSyncRefresh}
-        />
-      </div>
+      <React.Suspense fallback={<div className="flex h-screen w-screen items-center justify-center bg-slate-900"><AnimatedLoading size="w-16 h-16" /></div>}>
+        <div className="min-h-screen w-full overflow-y-auto bg-slate-100 dark:bg-slate-950 custom-scrollbar">
+          <ManagementPortal
+            enquiries={counsellingEnquiries}
+            onSaveEnquiry={handleSaveCounselling}
+            onDeleteEnquiry={handleDeleteCounselling}
+            counsellorAccounts={counsellorAccounts}
+            managementAccounts={managementAccounts}
+            onSaveManagementAccount={handleSaveManagementAccount}
+            onDeleteManagementAccount={handleDeleteManagementAccount}
+            onSaveCounsellorAccount={handleSaveCounsellorAccount}
+            onDeleteCounsellorAccount={handleDeleteCounsellorAccount}
+            tickets={tickets}
+            rooms={rooms}
+            inventory={inventory}
+            userRole={userRole}
+            userEmail={userEmail}
+            onLogout={handleLogout}
+            standalone={true}
+            theme={theme}
+            toggleTheme={toggleTheme}
+            onSyncRefresh={handleSyncRefresh}
+          />
+        </div>
+      </React.Suspense>
     );
   }
 
@@ -1824,18 +1865,20 @@ export default function App() {
         )}
 
         <div className="flex-1 overflow-auto relative">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={currentTab}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.2 }}
-              className="h-full w-full"
-            >
-              {renderTabContent()}
-            </motion.div>
-          </AnimatePresence>
+          <React.Suspense fallback={<div className="flex h-full w-full items-center justify-center p-8"><AnimatedLoading size="w-16 h-16" /></div>}>
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={currentTab}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.2 }}
+                className="h-full w-full"
+              >
+                {renderTabContent()}
+              </motion.div>
+            </AnimatePresence>
+          </React.Suspense>
         </div>
       </main>
 
@@ -1933,17 +1976,23 @@ export default function App() {
       )}
 
       {/* Staff Department Portal Links Modal (Super Admin Directory) */}
-      <PortalLinksModal
-        isOpen={isPortalLinksModalOpen}
-        onClose={() => setIsPortalLinksModalOpen(false)}
-        theme={theme}
-      />
+      <React.Suspense fallback={null}>
+        {isPortalLinksModalOpen && (
+          <PortalLinksModal
+            isOpen={isPortalLinksModalOpen}
+            onClose={() => setIsPortalLinksModalOpen(false)}
+            theme={theme}
+          />
+        )}
 
-      {/* Android & Desktop App Deployment Center Modal */}
-      <AppInstallModal
-        isOpen={isAppInstallModalOpen}
-        onClose={() => setIsAppInstallModalOpen(false)}
-      />
+        {/* Android & Desktop App Deployment Center Modal */}
+        {isAppInstallModalOpen && (
+          <AppInstallModal
+            isOpen={isAppInstallModalOpen}
+            onClose={() => setIsAppInstallModalOpen(false)}
+          />
+        )}
+      </React.Suspense>
 
       {/* Real-Time In-App Live Auto-Update Notifier */}
       <AppUpdateNotifier />

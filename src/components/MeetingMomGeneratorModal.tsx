@@ -479,7 +479,7 @@ export default function MeetingMomGeneratorModal({
                 className="px-4 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 transition-all shadow-md cursor-pointer active:scale-95"
               >
                 <Save size={14} />
-                <span>Save to Enquiry Remarks</span>
+                <span>Apply to Remarks</span>
               </button>
             )}
 

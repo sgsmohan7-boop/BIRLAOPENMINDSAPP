@@ -1061,3 +1061,22 @@ export function saveArchivedITStaffAccounts(accounts: ArchivedITStaffAccount[]):
   } catch {}
 }
 
+export function loadParentSelfEntries(): any[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem("sgs_parent_self_entries");
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return [];
+}
+
+export function saveParentSelfEntries(entries: any[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem("sgs_parent_self_entries", JSON.stringify(entries));
+  } catch {}
+}
+

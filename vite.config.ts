@@ -24,6 +24,19 @@ export default defineConfig(() => {
       'process.env.GOOGLE_MAPS_PLATFORM_KEY': JSON.stringify(process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_PLATFORM_KEY || 'AIzaSyBTrMUwQ5igCTHC5LTR9XQp8YSFlH2Acsw')
     },
     plugins: [react(), tailwindcss()],
+    optimizeDeps: {
+      include: [
+        'react',
+        'react-dom',
+        'react-dom/client',
+        'lucide-react',
+        'motion/react',
+        'framer-motion',
+        'firebase/app',
+        'firebase/firestore',
+        'firebase/auth'
+      ]
+    },
     build: {
       outDir: 'dist',
       emptyOutDir: true,

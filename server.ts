@@ -13,24 +13,24 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 dotenv.config({ override: true });
 
 const getPort = (): number => {
+  // In AI Studio and Cloud Run containers, port 8080 is reserved for the NGINX reverse proxy.
+  // The Node.js application MUST run on port 3000 as per environment constraints.
   const envPort = process.env.PORT ? parseInt(process.env.PORT, 10) : undefined;
-  const defaultAppPort = process.env.DEFAULT_APP_PORT ? parseInt(process.env.DEFAULT_APP_PORT, 10) : 3000;
-  const nginxPort = process.env.NGINX_PORT ? parseInt(process.env.NGINX_PORT, 10) : undefined;
-
-  // If running behind Nginx proxy listening on 8080 or envPort, app must listen on 3000 (DEFAULT_APP_PORT)
-  if (nginxPort && (envPort === nginxPort || nginxPort === 8080)) {
-    return defaultAppPort || 3000;
+  if (envPort && envPort !== 8080 && envPort > 0) {
+    return envPort;
   }
-
-  // If DEFAULT_APP_PORT is set by AI Studio container
-  if (process.env.DEFAULT_APP_PORT) {
-    return defaultAppPort;
-  }
-
-  return envPort || 3000;
+  return 3000;
 };
 
 const PORT = getPort();
+
+// Global process error handlers to prevent dev server crash
+process.on("uncaughtException", (err) => {
+  console.error("⚠️ Uncaught Exception in server process:", err?.message || err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("⚠️ Unhandled Rejection in server process:", reason);
+});
 
 // Lazy-loaded MongoDB connection elements
 let mongoClient: MongoClient | null = null;
@@ -222,6 +222,25 @@ async function getMongoDB(): Promise<Db | null> {
 }
 
 const app = express();
+
+  // Container Health Check endpoints
+  app.all([
+    "/_status",
+    "/status",
+    "/healthz",
+    "/health",
+    "/api/health"
+  ], (_req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    return res.status(200).json({
+      status: "ready",
+      ready: true,
+      healthy: true,
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime()
+    });
+  });
+
   app.use(express.json({ limit: "150mb" }));
   app.use(express.urlencoded({ limit: "150mb", extended: true }));
 
@@ -814,8 +833,88 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
         }
       });
     } catch (err: any) {
-      console.error("Audit API error:", err);
+      console.error("Audit meeting error:", err);
       return res.status(500).json({ success: false, error: err?.message || String(err) });
+    }
+  });
+
+  // Parent Self-Service Registration Kiosk & Live Queue Endpoints
+  const PARENT_SELF_ENTRIES_FILE = path.join(process.cwd(), "data", "parent_self_entries.json");
+  let parentSelfEntriesInMemory: any[] = [];
+
+  function loadParentSelfEntriesFromDisk(): any[] {
+    try {
+      const dir = path.dirname(PARENT_SELF_ENTRIES_FILE);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      if (fs.existsSync(PARENT_SELF_ENTRIES_FILE)) {
+        const raw = fs.readFileSync(PARENT_SELF_ENTRIES_FILE, "utf-8");
+        return JSON.parse(raw);
+      }
+    } catch (err) {
+      console.warn("Notice loading parent_self_entries.json:", err);
+    }
+    return [];
+  }
+
+  function saveParentSelfEntriesToDisk(entries: any[]): void {
+    try {
+      const dir = path.dirname(PARENT_SELF_ENTRIES_FILE);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(PARENT_SELF_ENTRIES_FILE, JSON.stringify(entries, null, 2), "utf-8");
+    } catch (err) {
+      console.warn("Notice saving parent_self_entries.json:", err);
+    }
+  }
+
+  parentSelfEntriesInMemory = loadParentSelfEntriesFromDisk();
+
+  app.get("/api/parent-self-entry", (req, res) => {
+    return res.json({ success: true, entries: parentSelfEntriesInMemory });
+  });
+
+  app.post("/api/parent-self-entry", (req, res) => {
+    try {
+      const entry = req.body;
+      if (!entry || !entry.studentName || !entry.contactNo) {
+        return res.status(400).json({ success: false, error: "studentName and contactNo are required." });
+      }
+
+      const idx = parentSelfEntriesInMemory.findIndex(e => e.id === entry.id);
+      if (idx >= 0) {
+        parentSelfEntriesInMemory[idx] = entry;
+      } else {
+        parentSelfEntriesInMemory.unshift(entry);
+      }
+
+      saveParentSelfEntriesToDisk(parentSelfEntriesInMemory);
+      return res.json({ success: true, entry });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post("/api/parent-self-entry/claim", (req, res) => {
+    try {
+      const { id, counsellorId, counsellorName, status } = req.body;
+      const targetId = id || req.body.entryId;
+      if (!targetId) {
+        return res.status(400).json({ success: false, error: "Entry id is required." });
+      }
+
+      const item = parentSelfEntriesInMemory.find(e => e.id === targetId);
+      if (!item) {
+        return res.status(404).json({ success: false, error: "Parent entry not found." });
+      }
+
+      item.status = (status as any) || "claimed";
+      item.claimedBy = counsellorId || counsellorName || "COUNSELLOR-01";
+      item.claimedByName = counsellorName || counsellorId || "Admissions Counsellor";
+      item.claimedAt = new Date().toISOString();
+
+      saveParentSelfEntriesToDisk(parentSelfEntriesInMemory);
+      return res.json({ success: true, entry: item });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
     }
   });
 
@@ -2198,6 +2297,71 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
     }
   });
 
+  // --------------------------------------------------------------------------------
+  // PARENT SELF-REGISTRATION (RECEPTION QR KIOSK) API ENDPOINTS
+  // --------------------------------------------------------------------------------
+  const PARENT_SELF_FILE = path.join(process.cwd(), "data", "parent_self_entries.json");
+
+  const readParentSelfEntries = (): any[] => {
+    try {
+      if (fs.existsSync(PARENT_SELF_FILE)) {
+        const raw = fs.readFileSync(PARENT_SELF_FILE, "utf-8");
+        return JSON.parse(raw);
+      }
+    } catch {}
+    return [];
+  };
+
+  const writeParentSelfEntries = (data: any[]) => {
+    try {
+      const dir = path.dirname(PARENT_SELF_FILE);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(PARENT_SELF_FILE, JSON.stringify(data, null, 2), "utf-8");
+    } catch {}
+  };
+
+  // GET /api/parent-self-entry
+  app.get("/api/parent-self-entry", (_req, res) => {
+    const entries = readParentSelfEntries();
+    return res.json({ success: true, entries });
+  });
+
+  // POST /api/parent-self-entry
+  app.post("/api/parent-self-entry", (req, res) => {
+    try {
+      const entry = req.body;
+      if (!entry || !entry.id) {
+        return res.status(400).json({ success: false, message: "Invalid parent self entry payload" });
+      }
+      const current = readParentSelfEntries();
+      const updated = [entry, ...current.filter((e: any) => e.id !== entry.id)];
+      writeParentSelfEntries(updated);
+      return res.json({ success: true, entries: updated });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message });
+    }
+  });
+
+  // POST /api/parent-self-entry/claim
+  app.post("/api/parent-self-entry/claim", (req, res) => {
+    try {
+      const { id, counsellorId, counsellorName } = req.body;
+      if (!id) return res.status(400).json({ success: false, message: "Entry ID required" });
+      const current = readParentSelfEntries();
+      const updated = current.map((e: any) => e.id === id ? {
+        ...e,
+        status: "claimed",
+        claimedBy: counsellorId || "COUNSELLOR-01",
+        claimedByName: counsellorName || "Admissions Counsellor",
+        claimedAt: new Date().toISOString()
+      } : e);
+      writeParentSelfEntries(updated);
+      return res.json({ success: true, entries: updated });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message });
+    }
+  });
+
   // GET /api/counselling
   app.get("/api/counselling", (req, res) => {
     const list = readCounsellingData();
@@ -3545,6 +3709,104 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
     return res.json({ success: true, itStaff: data.itStaff, deletedItStaff: data.deletedItStaff });
   });
 
+  // --------------------------------------------------------------------------------
+  // RECEPTION PARENT SELF-ENTRY KIOSK API ENDPOINTS
+  // --------------------------------------------------------------------------------
+  const PARENT_ENTRIES_FILE = path.join(process.cwd(), "data", "parent_self_entries.json");
+
+  const readParentEntries = () => {
+    try {
+      if (fs.existsSync(PARENT_ENTRIES_FILE)) {
+        const raw = fs.readFileSync(PARENT_ENTRIES_FILE, "utf-8");
+        return JSON.parse(raw);
+      }
+    } catch (_) {}
+    return [];
+  };
+
+  const writeParentEntries = (entries: any[]) => {
+    try {
+      if (!fs.existsSync(path.dirname(PARENT_ENTRIES_FILE))) {
+        fs.mkdirSync(path.dirname(PARENT_ENTRIES_FILE), { recursive: true });
+      }
+      fs.writeFileSync(PARENT_ENTRIES_FILE, JSON.stringify(entries, null, 2), "utf-8");
+      return true;
+    } catch (_) {
+      return false;
+    }
+  };
+
+  // GET parent entries
+  app.get("/api/parent-self-entry", (_req, res) => {
+    const entries = readParentEntries();
+    return res.json({ success: true, entries });
+  });
+
+  // POST new parent entry
+  app.post("/api/parent-self-entry", (req, res) => {
+    const entry = req.body;
+    if (!entry || !entry.studentName) {
+      return res.status(400).json({ success: false, message: "Missing student name" });
+    }
+    const current = readParentEntries();
+    const updated = [entry, ...current];
+    writeParentEntries(updated);
+
+    // Also inject into counselling enquiries file so Counsellor dashboard picks it up immediately!
+    try {
+      const counsellingData = readCounsellingData();
+      const now = new Date();
+      const dmy = now.toLocaleDateString("en-GB").replace(/\//g, "-");
+      const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+      const newEnquiry = {
+        id: entry.id || `ENQ-${now.getFullYear()}-${Math.floor(100 + Math.random() * 900)}`,
+        enquiryNo: `ENQ-${now.getFullYear()}-${Math.floor(100 + Math.random() * 900)}`,
+        date: dmy,
+        time: timeStr,
+        studentName: entry.studentName,
+        applyingClass: entry.applyingForClass || "Grade 1",
+        fatherName: entry.fatherName || "",
+        motherName: entry.motherName || "",
+        fatherMobile: entry.contactNo || "",
+        motherMobile: entry.whatsappNo || entry.contactNo || "",
+        whatsappNo: entry.whatsappNo || entry.contactNo || "",
+        previousSchool: entry.previousSchool || "",
+        heardAboutSchool: entry.heardAboutSchool || ["Google/Online"],
+        reasonForChoosing: entry.reasonForChoosing || "Parent Mobile Self-Registration Kiosk",
+        counsellorName: "Unassigned (Pending Claim)",
+        status: "New",
+        remarks: `[PARENT MOBILE KIOSK SELF-ENTRY] Student: ${entry.studentName}, Phone: ${entry.contactNo}`,
+        meetingNotes: `Parent submitted self-registration from mobile phone at ${dmy} ${timeStr}.`
+      };
+
+      const updatedCounselling = [newEnquiry, ...counsellingData];
+      writeCounsellingData(updatedCounselling);
+    } catch (e) {
+      console.warn("Could not auto-inject into counselling json:", e);
+    }
+
+    return res.json({ success: true, entry });
+  });
+
+  // POST claim parent entry
+  app.post("/api/parent-self-entry/claim", (req, res) => {
+    const entryId = req.body.entryId || req.body.id;
+    const counsellorName = req.body.counsellorName || req.body.counsellorId || "Counsellor";
+    if (!entryId) {
+      return res.status(400).json({ success: false, message: "Missing entryId" });
+    }
+    const current = readParentEntries();
+    const idx = current.findIndex((e: any) => e.id === entryId);
+    if (idx >= 0) {
+      current[idx].status = "claimed";
+      current[idx].claimedBy = counsellorName;
+      current[idx].claimedAt = new Date().toISOString();
+      writeParentEntries(current);
+    }
+    return res.json({ success: true, entries: current });
+  });
+
   // Cloud Run & Load Balancer Health Check
   app.get(["/healthz", "/health", "/api/health"], (_req, res) => {
     res.status(200).json({ status: "healthy", timestamp: new Date().toISOString() });
@@ -3574,22 +3836,24 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
   const distPath = path.join(process.cwd(), "dist");
   const hasDist = fs.existsSync(path.join(distPath, "index.html"));
 
+  let isListening = false;
   const startListening = () => {
-    if (!process.env.VERCEL) {
-      const server = app.listen(PORT, "0.0.0.0", () => {
-        console.log(`🚀 Birla IT Helpdesk full-stack server running on port ${PORT}`);
-      });
-      server.on("error", (err: any) => {
-        if (err.code === "EADDRINUSE" && PORT !== 3000) {
-          console.warn(`⚠️ Port ${PORT} already in use, starting fallback on port 3000...`);
-          app.listen(3000, "0.0.0.0", () => {
-            console.log(`🚀 Birla IT Helpdesk fallback server running on port 3000`);
-          });
-        } else {
-          console.error("Server listen error:", err);
-        }
-      });
-    }
+    if (isListening || process.env.VERCEL) return;
+    isListening = true;
+    const server = app.listen(PORT, "0.0.0.0", () => {
+      console.log(`🚀 Birla IT Helpdesk full-stack server running on port ${PORT}`);
+    });
+    server.on("error", (err: any) => {
+      isListening = false;
+      if (err.code === "EADDRINUSE") {
+        console.warn(`⚠️ Port ${PORT} temporarily busy, retrying in 1.5s...`);
+        setTimeout(() => {
+          startListening();
+        }, 1500);
+      } else {
+        console.error("Server listen error:", err);
+      }
+    });
   };
 
   const isProduction = process.env.NODE_ENV === "production" && hasDist;
@@ -3607,6 +3871,9 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
     });
     startListening();
   } else {
+    // Start listening immediately on port 3000 so AI Studio supervisor & container health checks pass instantly
+    startListening();
+
     // Development mode with Vite dev middleware
     (async () => {
       try {
@@ -3625,8 +3892,6 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
             res.sendFile(path.join(distPath, "index.html"));
           });
         }
-      } finally {
-        startListening();
       }
     })();
   }
