@@ -19,6 +19,7 @@ import {
   ArrowLeft
 } from "lucide-react";
 import { ParentSelfEntry } from "../types";
+import { isFirebaseConfigured, saveDocument } from "../utils/firebase";
 
 interface ParentKioskViewProps {
   isStandalone?: boolean;
@@ -161,8 +162,21 @@ export default function ParentKioskView({
     setIsSubmitting(true);
     const now = new Date();
     const dmy = now.toLocaleDateString("en-GB").replace(/\//g, "-");
+    const dateKey = now.toISOString().split("T")[0]; // YYYY-MM-DD
     const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const id = `PSE-${now.getFullYear()}-${Math.floor(100 + Math.random() * 900)}`;
+    const id = `PSE-${now.getFullYear()}-${Math.floor(100 + Math.random() * 900)}-${Date.now()}`;
+
+    // Calculate daily token S.No (1, 2, 3...) resetting daily each morning
+    let todayCount = 0;
+    try {
+      const existingRaw = localStorage.getItem("parent_self_entries");
+      const existingList: ParentSelfEntry[] = existingRaw ? JSON.parse(existingRaw) : [];
+      todayCount = existingList.filter(e => {
+        const itemDate = e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
+        return itemDate === dmy || e.dateKey === dateKey;
+      }).length;
+    } catch {}
+    const dailyTokenNo = todayCount + 1;
 
     const newEntry: ParentSelfEntry = {
       id,
@@ -177,11 +191,23 @@ export default function ParentKioskView({
       reasonForChoosing: reasonForChoosing.trim(),
       submittedAt: now.toISOString(),
       formattedDate: `${dmy} ${timeStr}`,
-      status: "pending"
+      status: "pending",
+      dailyTokenNo,
+      entryDate: dmy,
+      dateKey
     };
 
+    // 1. Direct real-time Firebase Firestore save so counsellor sees it within 100ms on desktop!
     try {
-      // 1. Post to 24/7 server endpoint
+      if (isFirebaseConfigured()) {
+        await saveDocument("parent_self_entries", id, newEntry);
+      }
+    } catch (fErr) {
+      console.warn("Firestore parent entry save warning:", fErr);
+    }
+
+    try {
+      // 2. Post to 24/7 server endpoint
       await fetch("/api/parent-self-entry", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

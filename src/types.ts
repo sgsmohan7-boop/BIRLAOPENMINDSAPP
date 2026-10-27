@@ -357,6 +357,9 @@ export interface ParentSelfEntry {
   claimedBy?: string; // counsellorId
   claimedByName?: string; // counsellorName
   claimedAt?: string;
+  dailyTokenNo?: number; // Daily arrival token/S.No (resets to 1 each new day)
+  entryDate?: string; // "DD-MM-YYYY" e.g. "27-10-2026"
+  dateKey?: string; // "YYYY-MM-DD" e.g. "2026-10-27"
 }
 
 export interface CounsellingFollowUpLog {

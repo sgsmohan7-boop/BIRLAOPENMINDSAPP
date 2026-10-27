@@ -879,9 +879,25 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
         return res.status(400).json({ success: false, error: "studentName and contactNo are required." });
       }
 
+      const now = new Date();
+      const dmy = now.toLocaleDateString("en-GB").replace(/\//g, "-");
+      const dateKey = now.toISOString().split("T")[0];
+
+      if (!entry.entryDate) entry.entryDate = dmy;
+      if (!entry.dateKey) entry.dateKey = dateKey;
+
+      // Compute daily token number if not already present
+      if (!entry.dailyTokenNo) {
+        const todayCount = parentSelfEntriesInMemory.filter(e => {
+          const eDate = e.dateKey || e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
+          return eDate === dateKey || eDate === dmy;
+        }).length;
+        entry.dailyTokenNo = todayCount + 1;
+      }
+
       const idx = parentSelfEntriesInMemory.findIndex(e => e.id === entry.id);
       if (idx >= 0) {
-        parentSelfEntriesInMemory[idx] = entry;
+        parentSelfEntriesInMemory[idx] = { ...parentSelfEntriesInMemory[idx], ...entry };
       } else {
         parentSelfEntriesInMemory.unshift(entry);
       }

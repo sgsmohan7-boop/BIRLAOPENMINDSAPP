@@ -82,6 +82,29 @@ import {
 } from "../types";
 import { loadCounsellorAccounts, saveCounsellorAccounts, DEMO_COUNSELLING, mergeWithDefaultCounsellorAccounts, recordDeletedCounsellorAccountId, getAllowCounsellorMultiDelete, setAllowCounsellorMultiDelete, loadParentSelfEntries, saveParentSelfEntries } from "../utils/storage";
 import { deleteAudioRecordingBlob, formatAudioDuration } from "../utils/audioStorage";
+import { isFirebaseConfigured, syncCollection } from "../utils/firebase";
+
+function deduplicateParentEntries(entries: ParentSelfEntry[]): ParentSelfEntry[] {
+  const map = new Map<string, ParentSelfEntry>();
+  for (const item of entries) {
+    if (!item || !item.id) continue;
+    if (!map.has(item.id)) {
+      map.set(item.id, item);
+    } else {
+      const existing = map.get(item.id)!;
+      if (item.status === "claimed" || (item.claimedAt && !existing.claimedAt)) {
+        map.set(item.id, item);
+      }
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => {
+    // Today's entries ordered by daily token number ascending
+    if (a.dateKey && a.dateKey === b.dateKey && a.dailyTokenNo && b.dailyTokenNo) {
+      return a.dailyTokenNo - b.dailyTokenNo;
+    }
+    return new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime();
+  });
+}
 
 interface CounsellingPortalProps {
   enquiries: CounsellingEnquiry[];
@@ -270,31 +293,61 @@ export default function CounsellingPortal({
     });
   };
 
-  // Fetch parent self-entries from server on mount & interval (2.5s real-time check)
+  // Real-time Firestore sync & server sync for parent self-entries
   React.useEffect(() => {
-    const fetchParentEntries = async () => {
+    let unsubscribeFirestore: (() => void) | undefined;
+
+    const fetchServerEntries = async () => {
       try {
         const res = await fetch("/api/parent-self-entry");
         if (res.ok) {
           const json = await res.json();
           if (json.success && Array.isArray(json.entries)) {
-            setParentSelfEntries(json.entries);
-            saveParentSelfEntries(json.entries);
+            setParentSelfEntries(prev => {
+              const combined = deduplicateParentEntries([...json.entries, ...(prev || [])]);
+              saveParentSelfEntries(combined);
+              return combined;
+            });
           }
         }
       } catch {}
     };
-    fetchParentEntries();
-    const interval = setInterval(fetchParentEntries, 2500); // 2.5s fast real-time poll
+
+    fetchServerEntries();
+
+    // Real-time Firestore subscription so any phone scan instantly updates across all devices
+    if (isFirebaseConfigured()) {
+      try {
+        unsubscribeFirestore = syncCollection(
+          "parent_self_entries",
+          (firestoreEntries: any[]) => {
+            if (Array.isArray(firestoreEntries) && firestoreEntries.length > 0) {
+              setParentSelfEntries(prev => {
+                const combined = deduplicateParentEntries([...firestoreEntries, ...(prev || [])]);
+                saveParentSelfEntries(combined);
+                return combined;
+              });
+            }
+          },
+          []
+        );
+      } catch (err) {
+        console.warn("Firestore parent_self_entries sync notice:", err);
+      }
+    }
+
+    // Relaxed background check (15s) instead of tight 2.5s loop
+    const interval = setInterval(fetchServerEntries, 15000);
 
     const handleRealtimeEntry = () => {
-      fetchParentEntries();
+      fetchServerEntries();
     };
     window.addEventListener("parent_self_entry_added", handleRealtimeEntry);
     window.addEventListener("storage", handleRealtimeEntry);
 
     return () => {
       clearInterval(interval);
+      if (unsubscribeFirestore) unsubscribeFirestore();
       window.removeEventListener("parent_self_entry_added", handleRealtimeEntry);
       window.removeEventListener("storage", handleRealtimeEntry);
     };

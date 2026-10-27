@@ -38,8 +38,19 @@ export default function ReceptionQueueModal({
 
   if (!isOpen) return null;
 
-  const pendingList = entries.filter(e => e.status === "pending");
-  const claimedList = entries.filter(e => e.status === "claimed");
+  const pendingList = [...entries.filter(e => e.status === "pending")].sort((a, b) => {
+    // Group by day, order by dailyTokenNo ascending (1, 2, 3...)
+    const aDate = a.dateKey || a.entryDate || (a.formattedDate ? a.formattedDate.split(" ")[0] : "");
+    const bDate = b.dateKey || b.entryDate || (b.formattedDate ? b.formattedDate.split(" ")[0] : "");
+    if (aDate === bDate && a.dailyTokenNo && b.dailyTokenNo) {
+      return a.dailyTokenNo - b.dailyTokenNo;
+    }
+    return new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime();
+  });
+
+  const claimedList = [...entries.filter(e => e.status === "claimed")].sort((a, b) => {
+    return new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime();
+  });
 
   const displayList = (activeTab === "pending" ? pendingList : claimedList).filter(e => {
     if (!searchQuery.trim()) return true;
@@ -49,7 +60,8 @@ export default function ReceptionQueueModal({
       (e.fatherName && e.fatherName.toLowerCase().includes(q)) ||
       (e.motherName && e.motherName.toLowerCase().includes(q)) ||
       e.contactNo.includes(q) ||
-      (e.applyingForClass && e.applyingForClass.toLowerCase().includes(q))
+      (e.applyingForClass && e.applyingForClass.toLowerCase().includes(q)) ||
+      (e.dailyTokenNo && String(e.dailyTokenNo).includes(q))
     );
   });
 
@@ -183,22 +195,38 @@ export default function ReceptionQueueModal({
                     }`}
                   >
                     <div className="space-y-2.5">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h3 className="text-base font-black text-white">{entry.studentName}</h3>
-                            <span className="px-2.5 py-0.5 rounded-full bg-orange-500/20 text-orange-300 border border-orange-500/30 text-[10px] font-black uppercase">
-                              Class {entry.applyingForClass}
-                            </span>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-600 text-white flex flex-col items-center justify-center font-black shadow-md border border-amber-400/40 shrink-0">
+                            <span className="text-[9px] uppercase tracking-wider font-extrabold opacity-90 leading-none">Token</span>
+                            <span className="text-lg font-black leading-tight">#{entry.dailyTokenNo || 1}</span>
                           </div>
-                          <p className="text-xs text-slate-400 mt-0.5">
-                            Parent: <strong className="text-slate-200">{entry.fatherName || entry.motherName || "Parent"}</strong>
-                          </p>
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h3 className="text-base font-black text-white">{entry.studentName}</h3>
+                              <span className="px-2.5 py-0.5 rounded-full bg-orange-500/20 text-orange-300 border border-orange-500/30 text-[10px] font-black uppercase">
+                                Class {entry.applyingForClass}
+                              </span>
+                              {entry.dailyTokenNo && (
+                                <span className="px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-bold">
+                                  {entry.dailyTokenNo === 1 ? "🥇 1st Parent Arrived" : entry.dailyTokenNo === 2 ? "🥈 2nd Parent Arrived" : entry.dailyTokenNo === 3 ? "🥉 3rd Parent Arrived" : `${entry.dailyTokenNo}th Parent Arrived`}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs text-slate-400 mt-0.5">
+                              Parent: <strong className="text-slate-200">{entry.fatherName || entry.motherName || "Parent"}</strong>
+                            </p>
+                          </div>
                         </div>
 
-                        <span className="text-[11px] font-mono text-slate-400 bg-slate-950 px-2 py-1 rounded-lg border border-slate-800 shrink-0">
-                          {entry.formattedDate || "Just Now"}
-                        </span>
+                        <div className="text-right shrink-0">
+                          <span className="text-[11px] font-mono text-amber-300 bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800 block font-bold">
+                            {entry.formattedDate || "Just Now"}
+                          </span>
+                          <span className="text-[9px] text-slate-500 block mt-1 font-semibold">
+                            Day Queue S.No: #{entry.dailyTokenNo || 1}
+                          </span>
+                        </div>
                       </div>
 
                       <div className="grid grid-cols-2 gap-2 text-xs bg-slate-950 p-2.5 rounded-xl border border-slate-800/80">

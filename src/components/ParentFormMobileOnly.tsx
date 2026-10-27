@@ -12,6 +12,7 @@ import {
   Building2
 } from "lucide-react";
 import { ParentSelfEntry } from "../types";
+import { isFirebaseConfigured, saveDocument } from "../utils/firebase";
 
 interface ParentFormMobileOnlyProps {
   onSubmitSuccess?: (entry: ParentSelfEntry) => void;
@@ -50,6 +51,7 @@ const SOURCES = [
 export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobileOnlyProps) {
   const [isSubmittedSuccess, setIsSubmittedSuccess] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [assignedToken, setAssignedToken] = useState<number>(1);
 
   // Form fields
   const [studentName, setStudentName] = useState("");
@@ -76,8 +78,22 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
     setIsSubmitting(true);
     const now = new Date();
     const dmy = now.toLocaleDateString("en-GB").replace(/\//g, "-");
+    const dateKey = now.toISOString().split("T")[0]; // YYYY-MM-DD
     const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const id = `PSE-${now.getFullYear()}-${Math.floor(100 + Math.random() * 900)}`;
+    const id = `PSE-${now.getFullYear()}-${Math.floor(100 + Math.random() * 900)}-${Date.now()}`;
+
+    // Calculate daily token S.No (1, 2, 3...) resetting daily each morning
+    let todayCount = 0;
+    try {
+      const existingRaw = localStorage.getItem("parent_self_entries");
+      const existingList: ParentSelfEntry[] = existingRaw ? JSON.parse(existingRaw) : [];
+      todayCount = existingList.filter(e => {
+        const itemDate = e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
+        return itemDate === dmy || e.dateKey === dateKey;
+      }).length;
+    } catch {}
+    const dailyTokenNo = todayCount + 1;
+    setAssignedToken(dailyTokenNo);
 
     const newEntry: ParentSelfEntry = {
       id,
@@ -92,11 +108,23 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
       reasonForChoosing: reasonForChoosing.trim(),
       submittedAt: now.toISOString(),
       formattedDate: `${dmy} ${timeStr}`,
-      status: "pending"
+      status: "pending",
+      dailyTokenNo,
+      entryDate: dmy,
+      dateKey
     };
 
+    // 1. Direct real-time Firebase Firestore save so counsellor sees it within 100ms on desktop!
     try {
-      // 1. Send to server endpoint
+      if (isFirebaseConfigured()) {
+        await saveDocument("parent_self_entries", id, newEntry);
+      }
+    } catch (fErr) {
+      console.warn("Firestore parent entry save warning:", fErr);
+    }
+
+    // 2. Server persistence fallback
+    try {
       await fetch("/api/parent-self-entry", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -106,8 +134,8 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
       console.warn("Server parent entry post error:", err);
     }
 
+    // 3. Save locally for instantaneous offline updates
     try {
-      // 2. Save locally for instantaneous offline updates
       const existingRaw = localStorage.getItem("parent_self_entries");
       const existing: ParentSelfEntry[] = existingRaw ? JSON.parse(existingRaw) : [];
       const updated = [newEntry, ...existing];
