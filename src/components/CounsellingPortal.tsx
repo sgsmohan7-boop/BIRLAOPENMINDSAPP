@@ -354,7 +354,16 @@ export default function CounsellingPortal({
   }, []);
 
   const pendingParentEntries = useMemo(() => {
-    return (parentSelfEntries || []).filter(e => e.status === "pending");
+    return (parentSelfEntries || [])
+      .filter(e => e.status === "pending")
+      .sort((a, b) => {
+        const aDate = a.dateKey || a.entryDate || (a.formattedDate ? a.formattedDate.split(" ")[0] : "");
+        const bDate = b.dateKey || b.entryDate || (b.formattedDate ? b.formattedDate.split(" ")[0] : "");
+        if (aDate === bDate && a.dailyTokenNo && b.dailyTokenNo) {
+          return a.dailyTokenNo - b.dailyTokenNo;
+        }
+        return new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime();
+      });
   }, [parentSelfEntries]);
 
   const claimedParentEntries = useMemo(() => {
@@ -2247,67 +2256,89 @@ export default function CounsellingPortal({
                   isLoungeMaximized ? "" : "max-h-[380px] overflow-y-auto pr-1"
                 }`}>
                   {pendingParentEntries.map(entry => (
-                    <div key={entry.id} className="bg-slate-900/90 backdrop-blur-md border border-white/30 rounded-xl p-4 flex flex-col justify-between gap-3 text-white shadow-xl">
-                      <div>
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <p className="text-base font-black text-amber-300">{entry.studentName}</p>
-                              <span className="px-2 py-0.5 rounded-md bg-amber-400/20 text-amber-200 text-[10px] font-bold border border-amber-400/30">
-                                Class: {entry.applyingForClass}
-                              </span>
-                            </div>
-                            <p className="text-xs text-slate-200 mt-1.5">
-                              Parent: <strong className="text-white">{entry.fatherName || entry.motherName || "Parent"}</strong>
-                            </p>
-                            <div className="flex items-center gap-2 mt-1">
-                              <a 
-                                href={`tel:${entry.contactNo}`} 
-                                className="text-xs text-emerald-300 font-mono font-bold hover:underline flex items-center gap-1"
-                              >
-                                📞 {entry.contactNo}
-                              </a>
-                              {entry.whatsappNo && (
-                                <a 
-                                  href={`https://wa.me/91${entry.whatsappNo.replace(/[^0-9]/g, '')}`} 
-                                  target="_blank" 
-                                  rel="noopener noreferrer"
-                                  className="text-[10px] bg-emerald-500/30 hover:bg-emerald-500/50 text-emerald-200 px-1.5 py-0.5 rounded font-bold"
-                                >
-                                  WhatsApp
-                                </a>
-                              )}
-                            </div>
-                            {entry.previousSchool && (
-                              <p className="text-[11px] text-slate-300 mt-1 truncate">
-                                🏫 Prev: <span className="text-slate-100">{entry.previousSchool}</span>
-                              </p>
-                            )}
-                          </div>
-                          <span className="px-2 py-1 rounded-md bg-slate-800 text-slate-300 text-[10px] font-mono font-bold shrink-0 border border-slate-700">
-                            🕒 {entry.formattedDate ? (entry.formattedDate.split(" ")[1] || entry.formattedDate) : "Now"}
+                    <div key={entry.id} className="relative pt-3 group">
+                      {/* Prominent High-Visibility Token Header Perched on Top of Card */}
+                      <div className="absolute top-0 left-3 z-10 flex items-center gap-1 shadow-lg">
+                        <div className="flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-yellow-300 via-amber-400 to-yellow-400 text-slate-950 rounded-lg border-2 border-slate-950 font-black text-xs shadow-md tracking-wider">
+                          <span className="w-2 h-2 rounded-full bg-emerald-600 animate-ping inline-block" />
+                          <span className="text-[10px] uppercase font-black opacity-80">TOKEN</span>
+                          <span className="text-base font-black">#{entry.dailyTokenNo || 1}</span>
+                          <span className="px-1.5 py-0.2 bg-slate-950/15 rounded text-[10px] font-extrabold text-slate-950">
+                            {entry.dailyTokenNo === 1 ? "🥇 1st Arrived" : entry.dailyTokenNo === 2 ? "🥈 2nd Arrived" : entry.dailyTokenNo === 3 ? "🥉 3rd Arrived" : `${entry.dailyTokenNo}th Arrived`}
                           </span>
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2 pt-2 border-t border-white/10">
-                        <button
-                          type="button"
-                          onClick={() => handleClaimAndAutoFill(entry)}
-                          className="flex-1 py-2.5 bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-white rounded-lg text-xs font-black shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ring-2 ring-emerald-300/40"
-                          title="Claim this enquiry exclusively: auto-fills all fields into your admission form"
-                        >
-                          <CheckCircle2 size={16} />
-                          <span>⚡ Claim & Auto-Fill Form</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDismissParentEntry(entry.id)}
-                          className="p-2.5 bg-white/10 hover:bg-red-500/40 text-slate-300 hover:text-white rounded-lg text-xs font-bold transition-all cursor-pointer"
-                          title="Dismiss if parent left lounge without meeting"
-                        >
-                          <X size={15} />
-                        </button>
+                      <div className="bg-slate-900/95 backdrop-blur-md border-2 border-amber-400/60 hover:border-amber-400 rounded-2xl p-4 pt-5 flex flex-col justify-between gap-3 text-white shadow-2xl transition-all">
+                        <div>
+                          {/* Top Bar with Time & Status */}
+                          <div className="flex items-center justify-between gap-2 pb-2 mb-2 border-b border-white/10">
+                            <span className="text-[10px] font-bold text-amber-300 uppercase tracking-wider pl-1">
+                              Walk-in Parent Queue
+                            </span>
+                            <span className="px-2 py-0.5 rounded-md bg-slate-800 text-slate-300 text-[10px] font-mono font-bold shrink-0 border border-slate-700 flex items-center gap-1">
+                              <Clock size={11} className="text-amber-400" />
+                              <span>{entry.formattedDate ? (entry.formattedDate.split(" ")[1] || entry.formattedDate) : "Now"}</span>
+                            </span>
+                          </div>
+
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <p className="text-base font-black text-amber-300">{entry.studentName}</p>
+                                <span className="px-2 py-0.5 rounded-md bg-amber-400/20 text-amber-200 text-[10px] font-bold border border-amber-400/30">
+                                  Class: {entry.applyingForClass}
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-200 mt-1.5">
+                                Parent: <strong className="text-white">{entry.fatherName || entry.motherName || "Parent"}</strong>
+                              </p>
+                              <div className="flex items-center gap-2 mt-1">
+                                <a 
+                                  href={`tel:${entry.contactNo}`} 
+                                  className="text-xs text-emerald-300 font-mono font-bold hover:underline flex items-center gap-1"
+                                >
+                                  📞 {entry.contactNo}
+                                </a>
+                                {entry.whatsappNo && (
+                                  <a 
+                                    href={`https://wa.me/91${entry.whatsappNo.replace(/[^0-9]/g, '')}`} 
+                                    target="_blank" 
+                                    rel="noopener noreferrer"
+                                    className="text-[10px] bg-emerald-500/30 hover:bg-emerald-500/50 text-emerald-200 px-1.5 py-0.5 rounded font-bold"
+                                  >
+                                    WhatsApp
+                                  </a>
+                                )}
+                              </div>
+                              {entry.previousSchool && (
+                                <p className="text-[11px] text-slate-300 mt-1 truncate">
+                                  🏫 Prev: <span className="text-slate-100">{entry.previousSchool}</span>
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 pt-2 border-t border-white/10">
+                          <button
+                            type="button"
+                            onClick={() => handleClaimAndAutoFill(entry)}
+                            className="flex-1 py-2.5 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 active:scale-95 text-white rounded-xl text-xs font-black shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ring-2 ring-emerald-300/40"
+                            title={`Claim Token #${entry.dailyTokenNo || 1} exclusively: auto-fills all fields into your admission form`}
+                          >
+                            <CheckCircle2 size={16} />
+                            <span>⚡ Claim Token #{entry.dailyTokenNo || 1} &amp; Auto-Fill</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDismissParentEntry(entry.id)}
+                            className="p-2.5 bg-white/10 hover:bg-red-500/40 text-slate-300 hover:text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                            title="Dismiss if parent left lounge without meeting"
+                          >
+                            <X size={15} />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))}
