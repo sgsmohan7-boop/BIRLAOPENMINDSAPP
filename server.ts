@@ -3936,29 +3936,62 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
     });
     startListening();
   } else {
-    // Start listening immediately on port 3000 so AI Studio supervisor & container health checks pass instantly
-    startListening();
+    // Serve dist/assets if available so stale cached bundles never 404
+    if (fs.existsSync(path.join(distPath, "assets"))) {
+      app.use("/assets", express.static(path.join(distPath, "assets")));
+    }
 
     // Development mode with Vite dev middleware
+    let viteDevServer: any = null;
+
     (async () => {
       try {
         const { createServer: createViteServer } = await import("vite");
-        const vite = await createViteServer({
+        viteDevServer = await createViteServer({
           server: { middlewareMode: true },
           appType: "spa",
         });
-        app.use(vite.middlewares);
+        app.use(viteDevServer.middlewares);
+
+        // Serve Vite-transformed index.html for all non-API navigation routes
+        app.use("*", async (req, res, next) => {
+          if (req.path.startsWith("/api/")) return next();
+          try {
+            const indexPath = path.resolve(process.cwd(), "index.html");
+            if (fs.existsSync(indexPath)) {
+              let template = fs.readFileSync(indexPath, "utf-8");
+              if (viteDevServer) {
+                template = await viteDevServer.transformIndexHtml(req.originalUrl || "/", template);
+              }
+              return res.status(200).set({ "Content-Type": "text/html" }).send(template);
+            }
+            next();
+          } catch (e: any) {
+            if (viteDevServer && viteDevServer.ssrFixStacktrace) {
+              viteDevServer.ssrFixStacktrace(e);
+            }
+            console.warn("Dev index.html transform warning:", e?.message || e);
+            const rawIndex = path.resolve(process.cwd(), "index.html");
+            if (fs.existsSync(rawIndex)) {
+              return res.sendFile(rawIndex);
+            }
+            next(e);
+          }
+        });
       } catch (err) {
         console.error("Vite middleware dev server error:", err);
-        if (fs.existsSync(path.join(distPath, "index.html"))) {
-          app.use(express.static(distPath));
-          app.get("*", (req, res, next) => {
-            if (req.path.startsWith("/api/")) return next();
-            res.sendFile(path.join(distPath, "index.html"));
-          });
-        }
+        const fallbackIndex = fs.existsSync(path.join(distPath, "index.html"))
+          ? path.join(distPath, "index.html")
+          : path.join(process.cwd(), "index.html");
+        app.use("*", (req, res, next) => {
+          if (req.path.startsWith("/api/")) return next();
+          res.sendFile(fallbackIndex);
+        });
       }
     })();
+
+    // Start listening on port 3000
+    startListening();
   }
 
 export default app;

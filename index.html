@@ -18,6 +18,28 @@
     <meta property="og:description" content="A comprehensive IT command center for managing assets, tickets, rooms, AI-powered IT troubleshooting, and Birla Institute CCTV dynamic attendance monitoring." />
     <meta property="og:type" content="website" />
     
+    <!-- Immediate Dev/Preview Cache & ServiceWorker Buster to Prevent Blank Screens -->
+    <script>
+      (function() {
+        try {
+          if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then(function(registrations) {
+              for (var i = 0; i < registrations.length; i++) {
+                registrations[i].unregister();
+              }
+            });
+          }
+          if ('caches' in window) {
+            caches.keys().then(function(names) {
+              for (var i = 0; i < names.length; i++) {
+                caches.delete(names[i]);
+              }
+            });
+          }
+        } catch (e) {}
+      })();
+    </script>
+
     <!-- Instant Theme Match Script to Prevent White Flash -->
     <script>
       (function() {

@@ -1,7 +1,6 @@
 try {
   window.localStorage.getItem('test');
 } catch (e) {
-  // console.warn("localStorage is disabled or restricted. Utilizing memory fallback to prevent crashes.");
   const memoryStorage = {
     _data: {} as Record<string, string>,
     setItem: function(id: string, val: string) { return this._data[id] = String(val); },
@@ -11,9 +10,22 @@ try {
   };
   try {
     Object.defineProperty(window, 'localStorage', { value: memoryStorage, writable: true, configurable: true });
-  } catch(err) {
-    // console.error("Failed to inject localStorage replacement:", err);
-  }
+  } catch(err) {}
+}
+
+try {
+  window.sessionStorage.getItem('test');
+} catch (e) {
+  const memorySessionStorage = {
+    _data: {} as Record<string, string>,
+    setItem: function(id: string, val: string) { return this._data[id] = String(val); },
+    getItem: function(id: string) { return Object.prototype.hasOwnProperty.call(this._data, id) ? this._data[id] : null; },
+    removeItem: function(id: string) { return delete this._data[id]; },
+    clear: function() { this._data = {}; }
+  };
+  try {
+    Object.defineProperty(window, 'sessionStorage', { value: memorySessionStorage, writable: true, configurable: true });
+  } catch(err) {}
 }
 
 // Global protection against quota exhaustion crashes, uncaught rejections, and console log spam

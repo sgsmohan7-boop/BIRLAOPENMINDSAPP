@@ -256,6 +256,191 @@ export default function ParentKioskView({
     setTimeout(() => setCopiedUrl(false), 2000);
   };
 
+  const handlePrintPoster = () => {
+    const posterHtml = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>BIRLA OPEN MINDS - Reception QR Standee Poster</title>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <style>
+          @page {
+            size: A4 portrait;
+            margin: 12mm;
+          }
+          * {
+            box-sizing: border-box;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+          body {
+            margin: 0;
+            padding: 24px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: #ffffff;
+            color: #0f172a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 95vh;
+          }
+          .poster-container {
+            width: 100%;
+            max-width: 480px;
+            background: #ffffff;
+            border: 6px solid #ea580c;
+            border-radius: 32px;
+            padding: 40px 32px;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.06);
+            margin: 0 auto;
+          }
+          .welcome-badge {
+            display: inline-block;
+            background: #ffedd5;
+            color: #c2410c;
+            padding: 6px 20px;
+            border-radius: 999px;
+            font-size: 13px;
+            font-weight: 900;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            margin-bottom: 14px;
+            border: 1px solid #fed7aa;
+          }
+          .school-name {
+            font-size: 30px;
+            font-weight: 900;
+            color: #0f172a;
+            margin: 0;
+            letter-spacing: -0.5px;
+            text-transform: uppercase;
+          }
+          .school-tagline {
+            font-size: 14px;
+            font-weight: 800;
+            color: #ea580c;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            margin: 4px 0 24px 0;
+          }
+          .qr-box {
+            display: inline-block;
+            padding: 18px;
+            background: #f8fafc;
+            border: 3px dashed #fdba74;
+            border-radius: 24px;
+            margin-bottom: 24px;
+          }
+          .qr-img {
+            width: 290px;
+            height: 290px;
+            display: block;
+            margin: 0 auto;
+            border-radius: 14px;
+          }
+          .action-header {
+            font-size: 19px;
+            font-weight: 900;
+            color: #0f172a;
+            margin: 0 0 8px 0;
+          }
+          .action-desc {
+            font-size: 13px;
+            color: #475569;
+            font-weight: 600;
+            line-height: 1.5;
+            max-width: 380px;
+            margin: 0 auto 24px auto;
+          }
+          .footer-note {
+            display: flex;
+            justify-content: space-between;
+            padding-top: 16px;
+            border-top: 2px solid #f1f5f9;
+            font-size: 11px;
+            color: #94a3b8;
+            font-family: monospace;
+            font-weight: bold;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="poster-container">
+          <div class="welcome-badge">Welcome Parents!</div>
+          <h1 class="school-name">BIRLA OPEN MINDS</h1>
+          <div class="school-tagline">International School</div>
+
+          <div class="qr-box">
+            <img class="qr-img" id="qr-poster-img" src="${qrImageApiUrl}" alt="Scan QR Code to Register" />
+          </div>
+
+          <h2 class="action-header">📱 Scan QR Code on Phone to Register</h2>
+          <p class="action-desc">
+            Open your mobile camera to scan this QR code and fill in your student's admission enquiry details. 
+            Your response goes directly to our Counsellor's Desk in real time!
+          </p>
+
+          <div class="footer-note">
+            <span>Admissions Front Desk</span>
+            <span>Birla Open Minds Reception Standee</span>
+          </div>
+        </div>
+        <script>
+          const img = document.getElementById('qr-poster-img');
+          const doPrint = function() {
+            window.focus();
+            window.print();
+          };
+          if (img.complete) {
+            setTimeout(doPrint, 350);
+          } else {
+            img.onload = function() {
+              setTimeout(doPrint, 350);
+            };
+            img.onerror = doPrint;
+          }
+        </script>
+      </body>
+      </html>
+    `;
+
+    try {
+      const printWindow = window.open("", "_blank", "width=850,height=950");
+      if (printWindow) {
+        printWindow.document.open();
+        printWindow.document.write(posterHtml);
+        printWindow.document.close();
+        return;
+      }
+    } catch {}
+
+    // Fallback if popup blocked: use hidden iframe
+    try {
+      let iframe = document.getElementById("qr-standee-print-frame") as HTMLIFrameElement;
+      if (!iframe) {
+        iframe = document.createElement("iframe");
+        iframe.id = "qr-standee-print-frame";
+        iframe.style.position = "fixed";
+        iframe.style.right = "0";
+        iframe.style.bottom = "0";
+        iframe.style.width = "0";
+        iframe.style.height = "0";
+        iframe.style.border = "none";
+        document.body.appendChild(iframe);
+      }
+      const doc = iframe.contentWindow?.document;
+      if (doc) {
+        doc.open();
+        doc.write(posterHtml);
+        doc.close();
+      }
+    } catch {
+      window.print();
+    }
+  };
+
   return (
     <div className="min-h-screen w-full bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-orange-600 selection:text-white">
       {/* Top Header */}
@@ -550,38 +735,13 @@ export default function ParentKioskView({
 
                   <button
                     type="button"
-                    onClick={() => window.print()}
-                    className="px-5 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-black shadow-md flex items-center gap-2 cursor-pointer transition-all"
+                    onClick={handlePrintPoster}
+                    className="px-5 py-2.5 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white rounded-xl text-xs font-black shadow-lg flex items-center gap-2 cursor-pointer transition-all active:scale-95"
+                    title="Generate and print full-size A4 reception standee poster"
                   >
-                    <Printer size={15} />
+                    <Printer size={16} />
                     <span>Print A4 Poster</span>
                   </button>
-                </div>
-              </div>
-
-              {/* Target Domain Input Override */}
-              <div className="p-3 bg-slate-950 border border-slate-800 rounded-2xl space-y-1.5">
-                <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between">
-                  <span>🌐 QR Target Public URL:</span>
-                  <span className="text-orange-400 font-mono text-[10px]">{targetQrUrl}</span>
-                </label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={customQrDomain}
-                    onChange={(e) => setCustomQrDomain(e.target.value)}
-                    placeholder="e.g. https://ais-pre-hdxvdxvb3o37jyrarxjlig-623128014596.asia-southeast1.run.app"
-                    className="flex-1 px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-orange-500 font-mono"
-                  />
-                  {customQrDomain && (
-                    <button
-                      type="button"
-                      onClick={() => setCustomQrDomain("")}
-                      className="px-2.5 py-1.5 bg-slate-800 text-slate-300 rounded-lg text-xs font-bold cursor-pointer"
-                    >
-                      Reset
-                    </button>
-                  )}
                 </div>
               </div>
             </div>
