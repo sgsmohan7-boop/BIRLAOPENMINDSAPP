@@ -289,6 +289,17 @@ export default function CounsellingPortal({
     }
   });
 
+  // Active Draft form state for claimed parent lead recovery
+  const [activeDraft, setActiveDraft] = useState<any>(() => {
+    try {
+      if (typeof window === "undefined") return null;
+      const raw = localStorage.getItem("bomis_counsellor_active_draft");
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return null;
+  });
+
+
   const toggleLoungeCollapsed = () => {
     setIsLoungeCollapsed(prev => {
       const next = !prev;
@@ -533,7 +544,7 @@ export default function CounsellingPortal({
 
     // Generate clean Enquiry ID and auto-fill form
     const draftNo = getNextEnquiryNo(safeEnquiries);
-    setFormData({
+    const newClaimedData: CounsellingEnquiry = {
       id: draftNo,
       enquiryNo: draftNo,
       date: new Date().toLocaleDateString("en-GB").replace(/\//g, "-"),
@@ -575,7 +586,13 @@ export default function CounsellingPortal({
       parentSignatureRecorded: true,
       createdAt: `${new Date().toLocaleDateString("en-GB").replace(/\//g, "-")} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
       updatedAt: new Date().toLocaleDateString()
-    });
+    };
+
+    setFormData(newClaimedData);
+
+    const draftObj = { formData: newClaimedData, entry, claimedAt: new Date().toISOString() };
+    try { localStorage.setItem("bomis_counsellor_active_draft", JSON.stringify(draftObj)); } catch {}
+    setActiveDraft(draftObj);
 
     setSelectedEnquiry(null);
     setActiveView("form");
@@ -1238,6 +1255,9 @@ export default function CounsellingPortal({
     }
 
     onSaveEnquiry(updated);
+    try { localStorage.removeItem("bomis_counsellor_active_draft"); } catch {}
+    setActiveDraft(null);
+
     setDeleteToast(`✅ Enquiry ${updated.enquiryNo} (${updated.studentName}) saved successfully!`);
     setTimeout(() => setDeleteToast(null), 3500);
     setActiveView("list");
@@ -2151,6 +2171,57 @@ export default function CounsellingPortal({
           </button>
         </div>
       </div>
+
+      {/* Active In-Progress Claimed Lead Recovery Banner */}
+      {activeDraft && activeDraft.formData && activeDraft.formData.studentName && activeView !== "form" && (
+        <div className="p-4 bg-gradient-to-r from-orange-600 via-amber-600 to-yellow-600 text-white rounded-2xl flex flex-wrap items-center justify-between gap-3 shadow-xl border border-amber-400/40 animate-in fade-in slide-in-from-top-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-white/20 backdrop-blur-md flex items-center justify-center font-black text-xl shrink-0 border border-white/30 text-white shadow-md">
+              ⚡
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="px-2.5 py-0.5 rounded-full bg-white text-orange-950 text-[10px] font-black uppercase tracking-wider">
+                  In-Progress Claimed Lead
+                </span>
+                <span className="text-xs font-extrabold text-amber-100">
+                  Student: <strong className="text-white font-black">{activeDraft.formData.studentName}</strong> (Class {activeDraft.formData.applyingForClass})
+                </span>
+              </div>
+              <p className="text-[11px] text-amber-100 mt-0.5 font-medium">
+                Parent details auto-filled from reception kiosk. Click below to resume filling the admission form without losing data.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setFormData(activeDraft.formData);
+                setSelectedEnquiry(null);
+                setActiveView("form");
+              }}
+              className="px-4 py-2.5 bg-white hover:bg-amber-50 text-orange-950 text-xs font-black rounded-xl shadow-lg transition-all cursor-pointer flex items-center gap-1.5 active:scale-95"
+            >
+              <span>📝 Resume &amp; Complete Admission Form</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (confirm("Discard this claimed form draft?")) {
+                  try { localStorage.removeItem("bomis_counsellor_active_draft"); } catch {}
+                  setActiveDraft(null);
+                }
+              }}
+              className="p-2 bg-black/20 hover:bg-black/30 text-white rounded-xl transition-all cursor-pointer"
+              title="Discard draft"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Permanent Reception Walk-In Lounge & Parent QR Kiosk Desk */}
       {isLoungeHidden ? (

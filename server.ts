@@ -898,13 +898,23 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
       if (!entry.entryDate) entry.entryDate = dmy;
       if (!entry.dateKey) entry.dateKey = dateKey;
 
-      // Compute daily token number if not already present
-      if (!entry.dailyTokenNo) {
-        const todayCount = parentSelfEntriesInMemory.filter(e => {
-          const eDate = e.dateKey || e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
-          return eDate === dateKey || eDate === dmy;
-        }).length;
-        entry.dailyTokenNo = todayCount + 1;
+      // Compute daily token S.No (1, 2, 3...) resetting daily each morning
+      const targetDateKey = entry.dateKey || dateKey;
+      const targetDmy = entry.entryDate || dmy;
+      const todayEntries = parentSelfEntriesInMemory.filter(e => {
+        if (e.id === entry.id) return false;
+        const eDate = e.dateKey || e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
+        return eDate === targetDateKey || eDate === targetDmy;
+      });
+
+      let maxToken = 0;
+      for (const e of todayEntries) {
+        const t = Number(e.dailyTokenNo) || 0;
+        if (t > maxToken) maxToken = t;
+      }
+
+      if (!entry.dailyTokenNo || (entry.dailyTokenNo === 1 && todayEntries.length > 0)) {
+        entry.dailyTokenNo = maxToken + 1;
       }
 
       const idx = parentSelfEntriesInMemory.findIndex(e => e.id === entry.id);

@@ -364,8 +364,19 @@ export default function ReceptionQueueModal({
                         )}
                       </div>
                     ) : (
-                      <div className="text-center py-1 text-xs text-slate-500 font-bold">
-                        🔒 Form Picked Up • In Counselling Session
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onClaimEntry(entry);
+                            onClose();
+                          }}
+                          className="flex-1 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-black shadow-md transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                        >
+                          <Sparkles size={14} />
+                          <span>📝 Re-Open / Continue Admission Form</span>
+                          <ArrowRight size={14} />
+                        </button>
                       </div>
                     )}
                   </div>

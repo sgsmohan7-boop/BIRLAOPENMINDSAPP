@@ -50,7 +50,7 @@ import {
   InventoryItem,
   ADMISSION_CLASSES
 } from "../types";
-import { loadCounsellorAccounts, saveCounsellorAccounts, DEMO_COUNSELLING, mergeWithDefaultCounsellorAccounts, recordDeletedCounsellorAccountId, getAllowCounsellorMultiDelete, setAllowCounsellorMultiDelete } from "../utils/storage";
+import { loadCounsellorAccounts, saveCounsellorAccounts, DEMO_COUNSELLING, mergeWithDefaultCounsellorAccounts, recordDeletedCounsellorAccountId, unrecordDeletedCounsellorAccountId, getAllowCounsellorMultiDelete, setAllowCounsellorMultiDelete } from "../utils/storage";
 import ManagementAudioDesk from "./ManagementAudioDesk";
 import ManagementAdmissionDesk from "./ManagementAdmissionDesk";
 import { formatAudioDuration } from "../utils/audioStorage";
@@ -329,6 +329,8 @@ export default function ManagementPortal({
       createdAt: counsellorFormData.createdAt || new Date().toLocaleDateString("en-GB")
     };
 
+    unrecordDeletedCounsellorAccountId(finalAcc.id, finalAcc.username);
+
     setLocalCounsellorAccounts(prev => {
       const idx = prev.findIndex(a => a.id === finalAcc.id || a.username.toLowerCase() === cleanUser);
       let updated: CounsellorAccount[];
@@ -344,6 +346,8 @@ export default function ManagementPortal({
     });
 
     if (onSaveCounsellorAccount) onSaveCounsellorAccount(finalAcc);
+    setDeleteToast(`✓ Counsellor account "${finalAcc.name}" (${finalAcc.username}) created/saved successfully!`);
+    setTimeout(() => setDeleteToast(null), 3500);
     setIsCounsellorModalOpen(false);
   };
 

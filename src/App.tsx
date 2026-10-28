@@ -35,7 +35,7 @@ const AppInstallModal = React.lazy(() => import("./components/AppInstallModal"))
 const ParentFormMobileOnly = React.lazy(() => import("./components/ParentFormMobileOnly"));
 
 
-import { loadData, saveData, calculateExpiryDate, resetToDefaults, clearAllData, loadCounselling, saveCounselling, deduplicateEnquiries, loadCounsellorAccounts, saveCounsellorAccounts, mergeWithDemoEnquiries, mergeWithDefaultCounsellorAccounts, recordDeletedCounsellorAccountId, recordDeletedCounsellorAccountIds, recordDeletedEnquiryId, recordDeletedEnquiryIds, getDeletedEnquiryIds, unmarkDeletedEnquiryId, mergeWithDefaultITStaffAccounts, saveITStaffAccounts, loadITStaffAccounts, recordDeletedITStaffAccountId } from "./utils/storage";
+import { loadData, saveData, calculateExpiryDate, resetToDefaults, clearAllData, loadCounselling, saveCounselling, deduplicateEnquiries, loadCounsellorAccounts, saveCounsellorAccounts, mergeWithDemoEnquiries, mergeWithDefaultCounsellorAccounts, recordDeletedCounsellorAccountId, unrecordDeletedCounsellorAccountId, recordDeletedCounsellorAccountIds, recordDeletedEnquiryId, recordDeletedEnquiryIds, getDeletedEnquiryIds, unmarkDeletedEnquiryId, mergeWithDefaultITStaffAccounts, saveITStaffAccounts, loadITStaffAccounts, recordDeletedITStaffAccountId } from "./utils/storage";
 import { AlertTriangle, X, Bell, ArrowRight, RefreshCw, Share2, Smartphone } from "lucide-react";
 import { Ticket, InventoryItem, Room, EmployeeAllocation, WarrantyContract, SchoolBranch, getNextTicketId, getNowFormatted, CounsellingEnquiry, CounsellorAccount, ManagementAccount, loadManagementAccounts, saveManagementAccounts, recordDeletedManagementAccountId, mergeWithDefaultManagementAccounts, ITStaffAccount } from "./types";
 import { motion, AnimatePresence } from "motion/react";
@@ -1082,6 +1082,8 @@ export default function App() {
 
 
   const handleSaveCounsellorAccount = (account: CounsellorAccount) => {
+    unrecordDeletedCounsellorAccountId(account.id, account.username);
+
     setCounsellorAccounts((prev) => {
       const base = prev && prev.length > 0 ? prev : loadCounsellorAccounts();
       const idx = base.findIndex((a) => a.id === account.id || a.username.toLowerCase() === account.username.toLowerCase());
@@ -1095,6 +1097,10 @@ export default function App() {
       const merged = mergeWithDefaultCounsellorAccounts(nextList);
       saveCounsellorAccounts(merged);
       if (isFirebaseConfigured()) {
+        deleteDocument("deleted_counsellor_accounts", (account.id || "").toLowerCase());
+        if (account.username) {
+          deleteDocument("deleted_counsellor_accounts", account.username.toLowerCase());
+        }
         saveDocument("counsellor_accounts", account.id, account);
       }
       return merged;

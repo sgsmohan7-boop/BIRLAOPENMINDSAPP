@@ -82,20 +82,7 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
     const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const id = `PSE-${now.getFullYear()}-${Math.floor(100 + Math.random() * 900)}-${Date.now()}`;
 
-    // Calculate daily token S.No (1, 2, 3...) resetting daily each morning
-    let todayCount = 0;
-    try {
-      const existingRaw = localStorage.getItem("parent_self_entries");
-      const existingList: ParentSelfEntry[] = existingRaw ? JSON.parse(existingRaw) : [];
-      todayCount = existingList.filter(e => {
-        const itemDate = e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
-        return itemDate === dmy || e.dateKey === dateKey;
-      }).length;
-    } catch {}
-    const dailyTokenNo = todayCount + 1;
-    setAssignedToken(dailyTokenNo);
-
-    const newEntry: ParentSelfEntry = {
+    let finalEntry: ParentSelfEntry = {
       id,
       studentName: studentName.trim(),
       applyingForClass,
@@ -109,44 +96,64 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
       submittedAt: now.toISOString(),
       formattedDate: `${dmy} ${timeStr}`,
       status: "pending",
-      dailyTokenNo,
       entryDate: dmy,
       dateKey
     };
 
-    // 1. Direct real-time Firebase Firestore save so counsellor sees it within 100ms on desktop!
+    // 1. Post to Server to get official server-authoritative token sequence number
+    try {
+      const res = await fetch("/api/parent-self-entry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(finalEntry)
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.entry && json.entry.dailyTokenNo) {
+          finalEntry.dailyTokenNo = json.entry.dailyTokenNo;
+        }
+      }
+    } catch (err) {
+      console.warn("Server parent entry post error:", err);
+    }
+
+    if (!finalEntry.dailyTokenNo) {
+      let todayCount = 0;
+      try {
+        const existingRaw = localStorage.getItem("parent_self_entries");
+        const existingList: ParentSelfEntry[] = existingRaw ? JSON.parse(existingRaw) : [];
+        todayCount = existingList.filter(e => {
+          const itemDate = e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
+          return itemDate === dmy || e.dateKey === dateKey;
+        }).length;
+      } catch {}
+      finalEntry.dailyTokenNo = todayCount + 1;
+    }
+
+    setAssignedToken(finalEntry.dailyTokenNo);
+
+    // 2. Direct real-time Firebase Firestore save so counsellor sees it within 100ms on desktop!
     try {
       if (isFirebaseConfigured()) {
-        await saveDocument("parent_self_entries", id, newEntry);
+        await saveDocument("parent_self_entries", id, finalEntry);
       }
     } catch (fErr) {
       console.warn("Firestore parent entry save warning:", fErr);
-    }
-
-    // 2. Server persistence fallback
-    try {
-      await fetch("/api/parent-self-entry", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(newEntry)
-      });
-    } catch (err) {
-      console.warn("Server parent entry post error:", err);
     }
 
     // 3. Save locally for instantaneous offline updates
     try {
       const existingRaw = localStorage.getItem("parent_self_entries");
       const existing: ParentSelfEntry[] = existingRaw ? JSON.parse(existingRaw) : [];
-      const updated = [newEntry, ...existing];
+      const updated = [finalEntry, ...existing];
       localStorage.setItem("parent_self_entries", JSON.stringify(updated));
-      window.dispatchEvent(new CustomEvent("parent_self_entry_added", { detail: newEntry }));
+      window.dispatchEvent(new CustomEvent("parent_self_entry_added", { detail: finalEntry }));
     } catch (err) {
       console.warn("Local storage save error:", err);
     }
 
     if (onSubmitSuccess) {
-      onSubmitSuccess(newEntry);
+      onSubmitSuccess(finalEntry);
     }
 
     setIsSubmittedSuccess(true);

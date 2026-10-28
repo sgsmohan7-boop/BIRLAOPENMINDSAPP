@@ -683,6 +683,18 @@ export const recordDeletedCounsellorAccountIds = (ids: string[]) => {
   } catch {}
 };
 
+export const unrecordDeletedCounsellorAccountId = (id: string, username?: string) => {
+  if (typeof window === "undefined") return;
+  try {
+    const deleted = getDeletedCounsellorAccountIds();
+    const idLower = (id || "").toLowerCase();
+    const uLower = (username || "").toLowerCase();
+    const cleaned = deleted.filter(d => d !== idLower && d !== uLower);
+    localStorage.setItem(DELETED_ACCOUNTS_KEY, JSON.stringify(cleaned));
+  } catch {}
+};
+
+
 export const mergeWithDefaultCounsellorAccounts = (
   items: CounsellorAccount[],
   extraDeletedIds?: string[]

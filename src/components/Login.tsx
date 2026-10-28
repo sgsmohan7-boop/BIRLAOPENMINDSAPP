@@ -616,13 +616,65 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
       return;
     }
 
-    let found = activeCounsellorAccounts.find(a => 
-      a.username.toLowerCase() === u || 
-      a.email.toLowerCase() === u || 
-      a.id.toLowerCase() === u ||
-      a.name.toLowerCase() === u ||
-      a.name.toLowerCase().replace(/[^a-z0-9]/g, "") === u.replace(/[^a-z0-9]/g, "")
-    );
+    const matchAccount = (accList: CounsellorAccount[]) => {
+      const uNorm = u.replace(/[^a-z0-9]/g, "");
+      return accList.find(a => {
+        const usernameNorm = a.username.toLowerCase().replace(/[^a-z0-9]/g, "");
+        const idNorm = (a.id || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+        const nameNorm = a.name.toLowerCase().replace(/[^a-z0-9]/g, "");
+        const emailNorm = a.email.toLowerCase().replace(/[^a-z0-9]/g, "");
+        return (
+          a.username.toLowerCase() === u ||
+          a.email.toLowerCase() === u ||
+          a.id.toLowerCase() === u ||
+          a.name.toLowerCase() === u ||
+          usernameNorm === uNorm ||
+          idNorm === uNorm ||
+          nameNorm === uNorm ||
+          emailNorm === uNorm
+        );
+      });
+    };
+
+    // 1. Search in live state and localStorage
+    const localCounsellors = loadCounsellorAccounts();
+    let found = matchAccount([...activeCounsellorAccounts, ...localCounsellors]);
+
+    // 2. Query live server repo if not found locally
+    if (!found) {
+      try {
+        const res = await fetch("/api/accounts");
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && json.accounts && Array.isArray(json.accounts.counsellors)) {
+            const extraDeleted = Array.isArray(json.accounts.deletedCounsellors) ? json.accounts.deletedCounsellors : [];
+            const merged = mergeWithDefaultCounsellorAccounts(json.accounts.counsellors, extraDeleted);
+            setLiveCounsellorAccounts(merged);
+            saveCounsellorAccounts(merged);
+            found = matchAccount(merged);
+          }
+        }
+      } catch (e) {
+        console.warn("Direct counsellor accounts fetch failed:", e);
+      }
+    }
+
+    // 3. Query Firestore directly if configured
+    if (!found && isFirebaseConfigured()) {
+      try {
+        const snap = await getDocs(collection(db, "counsellor_accounts"));
+        const fsItems: CounsellorAccount[] = [];
+        snap.forEach(d => fsItems.push({ id: d.id, ...d.data() } as CounsellorAccount));
+        if (fsItems.length > 0) {
+          const merged = mergeWithDefaultCounsellorAccounts(fsItems);
+          setLiveCounsellorAccounts(merged);
+          saveCounsellorAccounts(merged);
+          found = matchAccount(merged);
+        }
+      } catch (err) {
+        console.warn("Firestore fallback counsellor accounts query failed:", err);
+      }
+    }
 
     // If not found in counsellor accounts, check if it was created as Management!
     if (!found) {
@@ -652,7 +704,7 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
     // Special auto-grant fallback for "radhika" so user is never blocked
     if (!found && (u === "radhika" || u.includes("radhika"))) {
       found = {
-        id: `COUNSELLOR-${activeCounsellorAccounts.length + 1}`,
+        id: "COUNSELLOR-01",
         name: "K. Radhika",
         username: "radhika",
         password: counsellorPassword.trim() || "Password@111",
