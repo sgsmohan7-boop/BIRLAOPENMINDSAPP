@@ -65,6 +65,8 @@ import AppUpdateNotifier from "./AppUpdateNotifier";
 import CounsellingReportModal from "./CounsellingReportModal";
 import ParentKioskModal from "./ParentKioskModal";
 import ReceptionQueueModal from "./ReceptionQueueModal";
+import TokenListReportModal from "./TokenListReportModal";
+import WhatsAppMessageModal from "./WhatsAppMessageModal";
 import { 
   CounsellingEnquiry, 
   AdmissionStatus, 
@@ -254,6 +256,80 @@ export default function CounsellingPortal({
     }
   }, [counsellorAccounts]);
 
+  // Active Counsellor resolution with tab-isolated URL param & sessionStorage precedence
+  const [selectedCounsellorIdOverride, setSelectedCounsellorIdOverride] = useState<string | null>(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      return params.get("counsellor") || params.get("counsellorId") || sessionStorage.getItem("sgs_counsellor_override_id");
+    }
+    return null;
+  });
+
+  const activeCounsellor: CounsellorAccount | null = useMemo(() => {
+    // For logged-in Counsellors: Strictly lock to their own account matching userEmail or saved session profile
+    if (userRole === "Counsellor") {
+      if (userEmail) {
+        const found = localAccounts.find(c => 
+          c.email.toLowerCase() === userEmail.toLowerCase() || 
+          c.username.toLowerCase() === userEmail.toLowerCase()
+        );
+        if (found) return found;
+      }
+      try {
+        const savedSession = sessionStorage.getItem("sgs_active_counsellor");
+        if (savedSession) {
+          const parsed = JSON.parse(savedSession);
+          const match = localAccounts.find(a => a.id === parsed.id || a.username?.toLowerCase() === parsed.username?.toLowerCase() || a.email?.toLowerCase() === parsed.email?.toLowerCase());
+          if (match) return match;
+        }
+      } catch {}
+      return localAccounts[0] || null;
+    }
+
+    // For Management / Super Admin / IT Admin: Allow inspecting specific counsellor via override or URL
+    if (selectedCounsellorIdOverride) {
+      const match = localAccounts.find(a => 
+        a.id.toLowerCase() === selectedCounsellorIdOverride.toLowerCase() || 
+        a.username.toLowerCase() === selectedCounsellorIdOverride.toLowerCase() ||
+        a.name.toLowerCase().includes(selectedCounsellorIdOverride.toLowerCase())
+      );
+      if (match) return match;
+    }
+
+    try {
+      if (typeof window !== "undefined") {
+        const params = new URLSearchParams(window.location.search);
+        const urlCounsellor = params.get("counsellor") || params.get("counsellorId");
+        if (urlCounsellor) {
+          const match = localAccounts.find(a => 
+            a.id.toLowerCase() === urlCounsellor.toLowerCase() || 
+            a.username.toLowerCase() === urlCounsellor.toLowerCase() ||
+            a.name.toLowerCase().includes(urlCounsellor.toLowerCase())
+          );
+          if (match) return match;
+        }
+
+        const savedSession = sessionStorage.getItem("sgs_active_counsellor");
+        if (savedSession) {
+          const parsed = JSON.parse(savedSession);
+          const match = localAccounts.find(a => a.id === parsed.id || a.username === parsed.username);
+          if (match) return match;
+          return parsed;
+        }
+      }
+    } catch {}
+
+    if (userEmail) {
+      const found = localAccounts.find(c => 
+        c.email.toLowerCase() === userEmail.toLowerCase() || 
+        c.username.toLowerCase() === userEmail.toLowerCase()
+      );
+      if (found) return found;
+    }
+
+    return localAccounts[0] || null;
+  }, [selectedCounsellorIdOverride, userEmail, userRole, localAccounts]);
+
   // Account modal states
   const [isAppInstallModalOpen, setIsAppInstallModalOpen] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
@@ -265,6 +341,8 @@ export default function CounsellingPortal({
   const [isParentKioskModalOpen, setIsParentKioskModalOpen] = useState(false);
   const [parentKioskDefaultMode, setParentKioskDefaultMode] = useState<"register" | "print_qr">("register");
   const [isReceptionQueueModalOpen, setIsReceptionQueueModalOpen] = useState(false);
+  const [isTokenListReportModalOpen, setIsTokenListReportModalOpen] = useState(false);
+  const [whatsAppModalEnquiry, setWhatsAppModalEnquiry] = useState<CounsellingEnquiry | null>(null);
 
   // Reception Lounge Controls: Collapse (Minimize), Hide (Close), and Maximize (Full-height)
   const [isLoungeCollapsed, setIsLoungeCollapsed] = useState<boolean>(() => {
@@ -385,7 +463,8 @@ export default function CounsellingPortal({
   }, []);
 
   const pendingParentEntries = useMemo(() => {
-    const dismissedSet = new Set(getDismissedParentEntryIds());
+    const counsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR";
+    const dismissedSet = new Set(getDismissedParentEntryIds(counsellorId));
     return (parentSelfEntries || [])
       .filter(e => e.status === "pending" && !dismissedSet.has(e.id))
       .sort((a, b) => {
@@ -396,7 +475,7 @@ export default function CounsellingPortal({
         }
         return new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime();
       });
-  }, [parentSelfEntries]);
+  }, [parentSelfEntries, activeCounsellor]);
 
   const isEntryToday = (e: ParentSelfEntry) => {
     const now = new Date();
@@ -435,36 +514,15 @@ export default function CounsellingPortal({
   };
 
   const handleDismissParentEntry = async (entryId: string) => {
-    // 1. Immediately record in permanent dismissed IDs list in localStorage (never resurrects on refresh)
-    recordDismissedParentEntryId(entryId);
+    const counsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR";
+    // 1. Record dismissal for THIS counsellor's workspace so it disappears locally
+    recordDismissedParentEntryId(entryId, counsellorId);
 
-    // 2. Remove / mark dismissed in React state immediately for snappy UI
+    // 2. Remove in React state for current session
     const updated = parentSelfEntries.map(e => e.id === entryId ? { ...e, status: "dismissed" as const } : e);
     setParentSelfEntries(updated);
-    saveParentSelfEntries(updated);
 
-    // 3. Mark dismissed & delete document from Firestore parent_self_entries collection
-    try {
-      await saveDocument("parent_self_entries", entryId, { 
-        status: "dismissed", 
-        dismissedAt: new Date().toISOString() 
-      });
-      await deleteDocument("parent_self_entries", entryId);
-    } catch (e) {
-      console.warn("Firestore parent entry dismiss notice:", e);
-    }
-
-    // 4. Update backend server disk
-    fetch(`/api/parent-self-entry/${encodeURIComponent(entryId)}`, {
-      method: "DELETE"
-    }).catch(() => {});
-    fetch("/api/parent-self-entry/claim", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: entryId, status: "dismissed" })
-    }).catch(() => {});
-
-    setDeleteToast("✓ Parent entry dismissed from lounge.");
+    setDeleteToast("✓ Parent entry dismissed from your workspace lounge.");
     setTimeout(() => setDeleteToast(null), 3000);
   };
 
@@ -472,35 +530,16 @@ export default function CounsellingPortal({
     if (pendingParentEntries.length === 0) return;
     const count = pendingParentEntries.length;
     const pendingIds = pendingParentEntries.map(e => e.id);
+    const counsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR";
 
-    // 1. Record all dismissed IDs permanently in localStorage
-    pendingIds.forEach(id => recordDismissedParentEntryId(id));
+    // 1. Record all dismissed IDs into THIS COUNSELLOR'S workspace dismissal list
+    pendingIds.forEach(id => recordDismissedParentEntryId(id, counsellorId));
 
-    // 2. Clear from React state and localStorage
-    const updated = parentSelfEntries.map(e => e.status === "pending" ? { ...e, status: "dismissed" as const } : e);
+    // 2. Clear from React state for this counsellor's workspace
+    const updated = parentSelfEntries.map(e => pendingIds.includes(e.id) ? { ...e, status: "dismissed" as const } : e);
     setParentSelfEntries(updated);
-    saveParentSelfEntries(updated);
 
-    // 3. Delete from Firestore collection
-    for (const id of pendingIds) {
-      try {
-        await saveDocument("parent_self_entries", id, { 
-          status: "dismissed", 
-          dismissedAt: new Date().toISOString() 
-        });
-        await deleteDocument("parent_self_entries", id);
-      } catch {}
-      fetch(`/api/parent-self-entry/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
-    }
-
-    // 4. Update backend server disk
-    fetch("/api/parent-self-entry/clear-pending", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids: pendingIds })
-    }).catch(() => {});
-
-    setDeleteToast(`🧹 Cleared ${count} waiting parents from reception lounge.`);
+    setDeleteToast(`🧹 Cleared ${count} waiting parent card(s) from your workspace desk.`);
     setTimeout(() => setDeleteToast(null), 4000);
   };
 
@@ -629,80 +668,6 @@ export default function CounsellingPortal({
   // In-app Delete Confirmation State (Avoids sandboxed iframe window.confirm blocking)
   const [enquiryToDelete, setEnquiryToDelete] = useState<CounsellingEnquiry | null>(null);
   const [accountToDelete, setAccountToDelete] = useState<CounsellorAccount | null>(null);
-
-  // Active Counsellor resolution with tab-isolated URL param & sessionStorage precedence
-  const [selectedCounsellorIdOverride, setSelectedCounsellorIdOverride] = useState<string | null>(() => {
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search);
-      return params.get("counsellor") || params.get("counsellorId") || sessionStorage.getItem("sgs_counsellor_override_id");
-    }
-    return null;
-  });
-
-  const activeCounsellor: CounsellorAccount | null = useMemo(() => {
-    // For logged-in Counsellors: Strictly lock to their own account matching userEmail or saved session profile
-    if (userRole === "Counsellor") {
-      if (userEmail) {
-        const found = localAccounts.find(c => 
-          c.email.toLowerCase() === userEmail.toLowerCase() || 
-          c.username.toLowerCase() === userEmail.toLowerCase()
-        );
-        if (found) return found;
-      }
-      try {
-        const savedSession = sessionStorage.getItem("sgs_active_counsellor");
-        if (savedSession) {
-          const parsed = JSON.parse(savedSession);
-          const match = localAccounts.find(a => a.id === parsed.id || a.username?.toLowerCase() === parsed.username?.toLowerCase() || a.email?.toLowerCase() === parsed.email?.toLowerCase());
-          if (match) return match;
-        }
-      } catch {}
-      return localAccounts[0] || null;
-    }
-
-    // For Management / Super Admin / IT Admin: Allow inspecting specific counsellor via override or URL
-    if (selectedCounsellorIdOverride) {
-      const match = localAccounts.find(a => 
-        a.id.toLowerCase() === selectedCounsellorIdOverride.toLowerCase() || 
-        a.username.toLowerCase() === selectedCounsellorIdOverride.toLowerCase() ||
-        a.name.toLowerCase().includes(selectedCounsellorIdOverride.toLowerCase())
-      );
-      if (match) return match;
-    }
-
-    try {
-      if (typeof window !== "undefined") {
-        const params = new URLSearchParams(window.location.search);
-        const urlCounsellor = params.get("counsellor") || params.get("counsellorId");
-        if (urlCounsellor) {
-          const match = localAccounts.find(a => 
-            a.id.toLowerCase() === urlCounsellor.toLowerCase() || 
-            a.username.toLowerCase() === urlCounsellor.toLowerCase() ||
-            a.name.toLowerCase().includes(urlCounsellor.toLowerCase())
-          );
-          if (match) return match;
-        }
-
-        const savedSession = sessionStorage.getItem("sgs_active_counsellor");
-        if (savedSession) {
-          const parsed = JSON.parse(savedSession);
-          const match = localAccounts.find(a => a.id === parsed.id || a.username === parsed.username);
-          if (match) return match;
-          return parsed;
-        }
-      }
-    } catch {}
-
-    if (userEmail) {
-      const found = localAccounts.find(c => 
-        c.email.toLowerCase() === userEmail.toLowerCase() || 
-        c.username.toLowerCase() === userEmail.toLowerCase()
-      );
-      if (found) return found;
-    }
-
-    return localAccounts[0] || null;
-  }, [selectedCounsellorIdOverride, userEmail, userRole, localAccounts]);
 
   // Sync active counsellor into tab sessionStorage and URL search parameter so refreshes stay in this exact workspace
   React.useEffect(() => {
@@ -1262,6 +1227,7 @@ export default function CounsellingPortal({
     setTimeout(() => setDeleteToast(null), 3500);
     setActiveView("list");
     setSelectedEnquiry(null);
+    setWhatsAppModalEnquiry(updated);
   };
 
   const handleSaveCounsellorAction = (targetEnquiry: CounsellingEnquiry, actionText: string) => {
@@ -2111,6 +2077,16 @@ export default function CounsellingPortal({
 
           <button
             type="button"
+            onClick={() => setIsTokenListReportModalOpen(true)}
+            className="px-4 py-2.5 rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer border bg-amber-400 hover:bg-amber-500 text-slate-950 shadow-md active:scale-95 border-amber-300"
+            title="View Day-Wise, Weekly & Monthly Total Token Count Report"
+          >
+            <FileText size={15} />
+            <span>🎟️ Token Count Report</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => {
               setParentKioskDefaultMode("print_qr");
               setIsParentKioskModalOpen(true);
@@ -2316,6 +2292,20 @@ export default function CounsellingPortal({
             <div className="flex items-center gap-1.5 flex-wrap shrink-0">
               <button
                 type="button"
+                onClick={() => setIsTokenListReportModalOpen(true)}
+                className={`px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer shadow-xs active:scale-95 flex items-center gap-1 border ${
+                  pendingParentEntries.length > 0
+                    ? "bg-white/20 hover:bg-white/30 text-white border-white/30"
+                    : "bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700"
+                }`}
+                title="View Day-Wise, Weekly & Monthly Total Token Count Report"
+              >
+                <FileText size={13} />
+                <span>🎟️ Token Report</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setIsReceptionQueueModalOpen(true)}
                 className={`px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer shadow-xs active:scale-95 flex items-center gap-1 border ${
                   pendingParentEntries.length > 0
@@ -2446,6 +2436,11 @@ export default function CounsellingPortal({
                               </div>
                               <p className="text-xs text-slate-200 mt-1.5">
                                 Parent: <strong className="text-white">{entry.fatherName || entry.motherName || "Parent"}</strong>
+                                {entry.dateOfBirth && (
+                                  <span className="text-amber-200 font-mono font-bold ml-2">
+                                    • 🎂 DOB: {entry.dateOfBirth}
+                                  </span>
+                                )}
                               </p>
                               <div className="flex items-center gap-2 mt-1">
                                 <a 
@@ -3659,6 +3654,14 @@ export default function CounsellingPortal({
 
                         <td className="px-4 py-3.5 align-top text-right">
                           <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setWhatsAppModalEnquiry(enquiry)}
+                              className="p-1.5 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+                              title="Send Official WhatsApp Message to Parent"
+                            >
+                              <Send size={15} />
+                            </button>
                             {enquiry.audioRecording && (
                               <button
                                 onClick={() => {
@@ -5623,6 +5626,26 @@ export default function CounsellingPortal({
         }}
         currentCounsellorName={activeCounsellor?.name}
       />
+
+      {/* Day-Wise, Weekly & Monthly Token List Report Modal */}
+      {isTokenListReportModalOpen && (
+        <TokenListReportModal
+          isOpen={isTokenListReportModalOpen}
+          onClose={() => setIsTokenListReportModalOpen(false)}
+          entries={parentSelfEntries}
+          counsellors={localAccounts}
+        />
+      )}
+
+      {/* Official Parent WhatsApp Communication Modal */}
+      {!!whatsAppModalEnquiry && (
+        <WhatsAppMessageModal
+          isOpen={!!whatsAppModalEnquiry}
+          onClose={() => setWhatsAppModalEnquiry(null)}
+          enquiry={whatsAppModalEnquiry}
+          activeCounsellor={activeCounsellor}
+        />
+      )}
 
       {/* Real-Time In-App Live Auto-Update Notifier */}
       <AppUpdateNotifier />

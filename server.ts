@@ -3946,61 +3946,49 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
     });
     startListening();
   } else {
-    // Serve dist/assets if available so stale cached bundles never 404
-    if (fs.existsSync(path.join(distPath, "assets"))) {
-      app.use("/assets", express.static(path.join(distPath, "assets")));
+    try {
+      const { createServer: createViteServer } = await import("vite");
+      const viteDevServer = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "custom",
+      });
+      app.use(viteDevServer.middlewares);
+
+      // Serve Vite-transformed index.html for all non-API navigation routes
+      app.use("*", async (req, res, next) => {
+        if (req.path.startsWith("/api/")) return next();
+        try {
+          const indexPath = path.resolve(process.cwd(), "index.html");
+          if (fs.existsSync(indexPath)) {
+            let template = fs.readFileSync(indexPath, "utf-8");
+            template = await viteDevServer.transformIndexHtml(req.originalUrl || "/", template);
+            return res.status(200).set({ "Content-Type": "text/html" }).send(template);
+          }
+          next();
+        } catch (e: any) {
+          if (viteDevServer && viteDevServer.ssrFixStacktrace) {
+            viteDevServer.ssrFixStacktrace(e);
+          }
+          console.warn("Dev index.html transform warning:", e?.message || e);
+          const rawIndex = path.resolve(process.cwd(), "index.html");
+          if (fs.existsSync(rawIndex)) {
+            return res.sendFile(rawIndex);
+          }
+          next(e);
+        }
+      });
+    } catch (err) {
+      console.error("Vite middleware dev server error:", err);
+      const fallbackIndex = fs.existsSync(path.join(distPath, "index.html"))
+        ? path.join(distPath, "index.html")
+        : path.join(process.cwd(), "index.html");
+      app.use("*", (req, res, next) => {
+        if (req.path.startsWith("/api/")) return next();
+        res.sendFile(fallbackIndex);
+      });
     }
 
-    // Development mode with Vite dev middleware
-    let viteDevServer: any = null;
-
-    (async () => {
-      try {
-        const { createServer: createViteServer } = await import("vite");
-        viteDevServer = await createViteServer({
-          server: { middlewareMode: true },
-          appType: "spa",
-        });
-        app.use(viteDevServer.middlewares);
-
-        // Serve Vite-transformed index.html for all non-API navigation routes
-        app.use("*", async (req, res, next) => {
-          if (req.path.startsWith("/api/")) return next();
-          try {
-            const indexPath = path.resolve(process.cwd(), "index.html");
-            if (fs.existsSync(indexPath)) {
-              let template = fs.readFileSync(indexPath, "utf-8");
-              if (viteDevServer) {
-                template = await viteDevServer.transformIndexHtml(req.originalUrl || "/", template);
-              }
-              return res.status(200).set({ "Content-Type": "text/html" }).send(template);
-            }
-            next();
-          } catch (e: any) {
-            if (viteDevServer && viteDevServer.ssrFixStacktrace) {
-              viteDevServer.ssrFixStacktrace(e);
-            }
-            console.warn("Dev index.html transform warning:", e?.message || e);
-            const rawIndex = path.resolve(process.cwd(), "index.html");
-            if (fs.existsSync(rawIndex)) {
-              return res.sendFile(rawIndex);
-            }
-            next(e);
-          }
-        });
-      } catch (err) {
-        console.error("Vite middleware dev server error:", err);
-        const fallbackIndex = fs.existsSync(path.join(distPath, "index.html"))
-          ? path.join(distPath, "index.html")
-          : path.join(process.cwd(), "index.html");
-        app.use("*", (req, res, next) => {
-          if (req.path.startsWith("/api/")) return next();
-          res.sendFile(fallbackIndex);
-        });
-      }
-    })();
-
-    // Start listening on port 3000
+    // Start listening on port 3000 after Vite middleware is cleanly attached
     startListening();
   }
 

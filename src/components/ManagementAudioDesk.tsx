@@ -37,7 +37,8 @@ import {
   Eye,
   Languages,
   Users,
-  Send
+  Send,
+  Ban
 } from "lucide-react";
 import { CounsellingEnquiry, CounsellingAudioRecord, AdmissionStatus, CounsellorAccount } from "../types";
 import { 
@@ -108,6 +109,7 @@ export default function ManagementAudioDesk({
   const [searchQuery, setSearchQuery] = useState("");
   const [filterCounsellor, setFilterCounsellor] = useState<string>(initialCounsellorFilter);
   const [filterStatus, setFilterStatus] = useState<string>("ALL");
+  const [filterAdmissionStatus, setFilterAdmissionStatus] = useState<string>("ALL");
   const [filterDate, setFilterDate] = useState<string>("");
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(10);
@@ -115,7 +117,7 @@ export default function ManagementAudioDesk({
   // Reset page when search or filters change
   React.useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, filterCounsellor, filterStatus, filterDate, pageSize]);
+  }, [searchQuery, filterCounsellor, filterStatus, filterAdmissionStatus, filterDate, pageSize]);
 
   // Star / Protect audio recording from CCTV NVR auto-deletion
   const handleToggleStar = async (enquiry: CounsellingEnquiry) => {
@@ -163,6 +165,55 @@ export default function ManagementAudioDesk({
     return Array.from(set);
   }, [counsellorAccounts, recordedEnquiries, enquiries]);
 
+  // Helper for admission status styling
+  const getAdmissionStatusBadgeClass = (status?: string) => {
+    switch (status) {
+      case "Not Interested":
+        return "bg-rose-100 text-rose-800 dark:bg-rose-950/80 dark:text-rose-300 border-rose-300 dark:border-rose-800";
+      case "Follow-up Required":
+        return "bg-amber-100 text-amber-800 dark:bg-amber-950/80 dark:text-amber-300 border-amber-300 dark:border-amber-800";
+      case "Admission Confirmed":
+        return "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800";
+      case "Application Taken":
+        return "bg-blue-100 text-blue-800 dark:bg-blue-950/80 dark:text-blue-300 border-blue-300 dark:border-blue-800";
+      case "Entrance Test Required":
+        return "bg-purple-100 text-purple-800 dark:bg-purple-950/80 dark:text-purple-300 border-purple-300 dark:border-purple-800";
+      case "Interested":
+        return "bg-indigo-100 text-indigo-800 dark:bg-indigo-950/80 dark:text-indigo-300 border-indigo-300 dark:border-indigo-800";
+      default:
+        return "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border-slate-200 dark:border-slate-700";
+    }
+  };
+
+  // Admission status counts across recorded enquiries (synced with counsellor filter if selected)
+  const admissionStatusCounts = useMemo(() => {
+    const baseList = recordedEnquiries.filter(e => {
+      if (filterCounsellor === "ALL") return true;
+      const target = filterCounsellor.toLowerCase().trim();
+      const cName = (e.counsellorName || "").toLowerCase().trim();
+      return cName === target || (cName.length > 0 && target.length > 0 && (cName.includes(target) || target.includes(cName)));
+    });
+
+    const counts: Record<string, number> = {
+      ALL: baseList.length,
+      "Not Interested": 0,
+      "Follow-up Required": 0,
+      "Admission Confirmed": 0,
+      "Application Taken": 0,
+      "Entrance Test Required": 0,
+      "Interested": 0,
+    };
+
+    baseList.forEach(e => {
+      const status = e.admissionStatus || "Interested";
+      if (counts[status] !== undefined) {
+        counts[status]++;
+      }
+    });
+
+    return counts;
+  }, [recordedEnquiries, filterCounsellor]);
+
   // Filtered list
   const filteredList = useMemo(() => {
     return recordedEnquiries.filter(e => {
@@ -197,6 +248,12 @@ export default function ManagementAudioDesk({
         matchStatus = (e.audioRecording?.reviewStatus || "Pending") === filterStatus;
       }
 
+      let matchAdmissionStatus = true;
+      if (filterAdmissionStatus !== "ALL") {
+        const curStatus = e.admissionStatus || "Interested";
+        matchAdmissionStatus = curStatus === filterAdmissionStatus;
+      }
+
       let matchDate = true;
       if (filterDate) {
         // filterDate is from <input type="date"> which is YYYY-MM-DD (e.g. 2026-10-16)
@@ -228,9 +285,9 @@ export default function ManagementAudioDesk({
         });
       }
 
-      return matchQuery && matchCounsellor && matchStatus && matchDate;
+      return matchQuery && matchCounsellor && matchStatus && matchAdmissionStatus && matchDate;
     });
-  }, [recordedEnquiries, searchQuery, filterCounsellor, userRole, initialCounsellorFilter, filterStatus, filterDate]);
+  }, [recordedEnquiries, searchQuery, filterCounsellor, userRole, initialCounsellorFilter, filterStatus, filterAdmissionStatus, filterDate]);
 
   // Total pages
   const totalPages = useMemo(() => {
@@ -263,7 +320,8 @@ export default function ManagementAudioDesk({
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `Counselling_Audios_${filterCounsellor.replace(/\s+/g, "_")}_${new Date().toISOString().slice(0,10)}.csv`);
+    const statusPart = filterAdmissionStatus !== "ALL" ? `_${filterAdmissionStatus.replace(/\s+/g, "_")}` : "";
+    link.setAttribute("download", `Counselling_Audios_${filterCounsellor.replace(/\s+/g, "_")}${statusPart}_${new Date().toISOString().slice(0,10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -947,7 +1005,162 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT COACHING ONLY
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {/* Quick Status Category Filter Pills */}
+              <div className="pt-1.5 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
+                <div className="flex items-center justify-between text-[11px] font-bold">
+                  <span className="flex items-center gap-1.5 text-slate-700 dark:text-slate-300">
+                    <Filter size={12} className="text-orange-500" />
+                    <span>Filter by Parent Admission Status:</span>
+                  </span>
+                  {filterAdmissionStatus !== "ALL" && (
+                    <button
+                      type="button"
+                      onClick={() => setFilterAdmissionStatus("ALL")}
+                      className="text-orange-600 dark:text-orange-400 hover:underline cursor-pointer text-[10px] font-bold"
+                    >
+                      Clear Filter ({filterAdmissionStatus})
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {/* All Audios */}
+                  <button
+                    type="button"
+                    onClick={() => setFilterAdmissionStatus("ALL")}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      filterAdmissionStatus === "ALL"
+                        ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-sm"
+                        : "bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-750 dark:text-slate-300"
+                    }`}
+                  >
+                    <span>All Audios</span>
+                    <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-black/15 dark:bg-black/20">
+                      {admissionStatusCounts["ALL"]}
+                    </span>
+                  </button>
+
+                  {/* 1. NOT INTERESTED (Prominent highlighting as specifically requested by user) */}
+                  <button
+                    type="button"
+                    onClick={() => setFilterAdmissionStatus("Not Interested")}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-black transition-all cursor-pointer flex items-center gap-1.5 ${
+                      filterAdmissionStatus === "Not Interested"
+                        ? "bg-rose-600 text-white shadow-md shadow-rose-600/30 ring-2 ring-rose-400"
+                        : "bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-900/60"
+                    }`}
+                    title="Audit why parents were Not Interested: fee, transport, or counsellor pitch"
+                  >
+                    <Ban size={12} className={filterAdmissionStatus === "Not Interested" ? "text-white" : "text-rose-600 dark:text-rose-400"} />
+                    <span>Not Interested</span>
+                    <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                      filterAdmissionStatus === "Not Interested" ? "bg-white/25 text-white" : "bg-rose-200 text-rose-800 dark:bg-rose-900 dark:text-rose-200"
+                    }`}>
+                      {admissionStatusCounts["Not Interested"]}
+                    </span>
+                  </button>
+
+                  {/* 2. FOLLOW-UP REQUIRED */}
+                  <button
+                    type="button"
+                    onClick={() => setFilterAdmissionStatus("Follow-up Required")}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      filterAdmissionStatus === "Follow-up Required"
+                        ? "bg-amber-600 text-white shadow-md shadow-amber-600/30 ring-2 ring-amber-400"
+                        : "bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-900/60"
+                    }`}
+                    title="Filter meetings needing follow-up to review unanswered parent questions"
+                  >
+                    <Calendar size={12} className={filterAdmissionStatus === "Follow-up Required" ? "text-white" : "text-amber-600 dark:text-amber-400"} />
+                    <span>Follow-up</span>
+                    <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                      filterAdmissionStatus === "Follow-up Required" ? "bg-white/25 text-white" : "bg-amber-200 text-amber-800 dark:bg-amber-900 dark:text-amber-200"
+                    }`}>
+                      {admissionStatusCounts["Follow-up Required"]}
+                    </span>
+                  </button>
+
+                  {/* 3. ADMISSION CONFIRMED */}
+                  <button
+                    type="button"
+                    onClick={() => setFilterAdmissionStatus("Admission Confirmed")}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      filterAdmissionStatus === "Admission Confirmed"
+                        ? "bg-emerald-600 text-white shadow-md shadow-emerald-600/30 ring-2 ring-emerald-400"
+                        : "bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-900/60"
+                    }`}
+                    title="Filter successful converted admissions for best-practice training"
+                  >
+                    <CheckCircle size={12} className={filterAdmissionStatus === "Admission Confirmed" ? "text-white" : "text-emerald-600 dark:text-emerald-400"} />
+                    <span>Confirmed</span>
+                    <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                      filterAdmissionStatus === "Admission Confirmed" ? "bg-white/25 text-white" : "bg-emerald-200 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200"
+                    }`}>
+                      {admissionStatusCounts["Admission Confirmed"]}
+                    </span>
+                  </button>
+
+                  {/* 4. APPLICATION TAKEN */}
+                  <button
+                    type="button"
+                    onClick={() => setFilterAdmissionStatus("Application Taken")}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      filterAdmissionStatus === "Application Taken"
+                        ? "bg-blue-600 text-white shadow-md shadow-blue-600/30 ring-2 ring-blue-400"
+                        : "bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-900/60"
+                    }`}
+                  >
+                    <FileText size={12} className={filterAdmissionStatus === "Application Taken" ? "text-white" : "text-blue-600 dark:text-blue-400"} />
+                    <span>Application Taken</span>
+                    <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                      filterAdmissionStatus === "Application Taken" ? "bg-white/25 text-white" : "bg-blue-200 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
+                    }`}>
+                      {admissionStatusCounts["Application Taken"]}
+                    </span>
+                  </button>
+
+                  {/* 5. ENTRANCE TEST REQUIRED */}
+                  <button
+                    type="button"
+                    onClick={() => setFilterAdmissionStatus("Entrance Test Required")}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      filterAdmissionStatus === "Entrance Test Required"
+                        ? "bg-purple-600 text-white shadow-md shadow-purple-600/30 ring-2 ring-purple-400"
+                        : "bg-purple-50 hover:bg-purple-100 text-purple-800 border border-purple-200 dark:bg-purple-950/40 dark:text-purple-300 dark:border-purple-900/60"
+                    }`}
+                  >
+                    <GraduationCap size={12} className={filterAdmissionStatus === "Entrance Test Required" ? "text-white" : "text-purple-600 dark:text-purple-400"} />
+                    <span>Entrance Test</span>
+                    <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                      filterAdmissionStatus === "Entrance Test Required" ? "bg-white/25 text-white" : "bg-purple-200 text-purple-800 dark:bg-purple-900 dark:text-purple-200"
+                    }`}>
+                      {admissionStatusCounts["Entrance Test Required"]}
+                    </span>
+                  </button>
+
+                  {/* 6. INTERESTED */}
+                  <button
+                    type="button"
+                    onClick={() => setFilterAdmissionStatus("Interested")}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      filterAdmissionStatus === "Interested"
+                        ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30 ring-2 ring-indigo-400"
+                        : "bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-900/60"
+                    }`}
+                  >
+                    <Star size={12} className={filterAdmissionStatus === "Interested" ? "text-white" : "text-indigo-600 dark:text-indigo-400"} />
+                    <span>Interested</span>
+                    <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                      filterAdmissionStatus === "Interested" ? "bg-white/25 text-white" : "bg-indigo-200 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200"
+                    }`}>
+                      {admissionStatusCounts["Interested"]}
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Detailed Filter Dropdowns */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 pt-1 border-t border-slate-100 dark:border-slate-800">
                 {userRole === "Counsellor" && initialCounsellorFilter && initialCounsellorFilter !== "ALL" ? (
                   <div className="w-full px-2.5 py-1.5 bg-orange-50 dark:bg-orange-950/40 border border-orange-200 dark:border-orange-800 rounded-xl text-[11px] font-bold text-orange-700 dark:text-orange-300 flex items-center justify-between">
                     <span>🔒 {initialCounsellorFilter}</span>
@@ -957,6 +1170,7 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT COACHING ONLY
                     value={filterCounsellor}
                     onChange={(e) => setFilterCounsellor(e.target.value)}
                     className="w-full px-2.5 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] font-semibold text-slate-700 dark:text-slate-300 focus:outline-none"
+                    title="Filter by Counsellor"
                   >
                     <option value="ALL">All Counsellors ({counsellorOptions.length})</option>
                     {counsellorOptions.map(c => (
@@ -965,10 +1179,35 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT COACHING ONLY
                   </select>
                 )}
 
+                {/* Admission Status Dropdown */}
+                <select
+                  value={filterAdmissionStatus}
+                  onChange={(e) => setFilterAdmissionStatus(e.target.value)}
+                  className={`w-full px-2.5 py-1.5 rounded-xl text-[11px] font-bold focus:outline-none border transition-all ${
+                    filterAdmissionStatus === "Not Interested"
+                      ? "bg-rose-50 text-rose-800 border-rose-300 dark:bg-rose-950 dark:text-rose-300 dark:border-rose-800"
+                      : filterAdmissionStatus === "Admission Confirmed"
+                        ? "bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-800"
+                        : filterAdmissionStatus === "Follow-up Required"
+                          ? "bg-amber-50 text-amber-800 border-amber-300 dark:bg-amber-950 dark:text-amber-300 dark:border-amber-800"
+                          : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300"
+                  }`}
+                  title="Filter by Parent Admission Decision Status"
+                >
+                  <option value="ALL">All Admission Status ({admissionStatusCounts["ALL"]})</option>
+                  <option value="Not Interested">🚫 Not Interested ({admissionStatusCounts["Not Interested"]})</option>
+                  <option value="Follow-up Required">🔄 Follow-up Required ({admissionStatusCounts["Follow-up Required"]})</option>
+                  <option value="Admission Confirmed">🎉 Admission Confirmed ({admissionStatusCounts["Admission Confirmed"]})</option>
+                  <option value="Application Taken">📝 Application Taken ({admissionStatusCounts["Application Taken"]})</option>
+                  <option value="Entrance Test Required">🎓 Entrance Test ({admissionStatusCounts["Entrance Test Required"]})</option>
+                  <option value="Interested">🌟 Interested ({admissionStatusCounts["Interested"]})</option>
+                </select>
+
                 <select
                   value={filterStatus}
                   onChange={(e) => setFilterStatus(e.target.value)}
                   className="w-full px-2.5 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-[11px] font-semibold text-slate-700 dark:text-slate-300 focus:outline-none"
+                  title="Filter by Quality Audit Status"
                 >
                   <option value="ALL">All Audit Status</option>
                   <option value="Pending">🕒 Pending Audit</option>
@@ -1006,20 +1245,33 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT COACHING ONLY
                 <div className="p-8 text-center bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3">
                   <Headphones size={32} className="mx-auto text-slate-300 dark:text-slate-600 animate-bounce" />
                   <p className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                    No recorded audio meetings found {filterCounsellor !== "ALL" ? `for ${filterCounsellor}` : ""}
+                    No recorded audio meetings found {filterAdmissionStatus !== "ALL" ? `with status "${filterAdmissionStatus}"` : ""} {filterCounsellor !== "ALL" ? `for ${filterCounsellor}` : ""}
                   </p>
                   <p className="text-[11px] text-slate-400">
-                    Select "All Counsellors" or another counsellor from the dropdown to view parent data & recordings.
+                    {filterAdmissionStatus !== "ALL"
+                      ? `Try selecting "All Audios" or another status to view recordings.`
+                      : `Select "All Counsellors" or another counsellor from the dropdown to view parent data & recordings.`}
                   </p>
-                  {filterCounsellor !== "ALL" && (
-                    <button
-                      type="button"
-                      onClick={() => setFilterCounsellor("ALL")}
-                      className="px-3 py-1.5 bg-orange-100 dark:bg-orange-950 text-orange-700 dark:text-orange-300 rounded-xl text-xs font-bold hover:bg-orange-200 transition-all cursor-pointer"
-                    >
-                      Show All Counsellors
-                    </button>
-                  )}
+                  <div className="flex items-center justify-center gap-2 flex-wrap">
+                    {filterAdmissionStatus !== "ALL" && (
+                      <button
+                        type="button"
+                        onClick={() => setFilterAdmissionStatus("ALL")}
+                        className="px-3 py-1.5 bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 rounded-xl text-xs font-bold hover:bg-rose-200 transition-all cursor-pointer"
+                      >
+                        Show All Statuses
+                      </button>
+                    )}
+                    {filterCounsellor !== "ALL" && (
+                      <button
+                        type="button"
+                        onClick={() => setFilterCounsellor("ALL")}
+                        className="px-3 py-1.5 bg-orange-100 dark:bg-orange-950 text-orange-700 dark:text-orange-300 rounded-xl text-xs font-bold hover:bg-orange-200 transition-all cursor-pointer"
+                      >
+                        Show All Counsellors
+                      </button>
+                    )}
+                  </div>
                 </div>
               ) : (
                 pagedList.map((enq) => {
@@ -1039,12 +1291,19 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT COACHING ONLY
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
+                          <div className="flex items-center gap-1.5 flex-wrap">
                             <span className="font-mono text-[10px] font-bold px-2 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-md">
                               {enq.enquiryNo}
                             </span>
                             <span className="text-[10px] font-bold text-orange-600 dark:text-orange-400">
                               {enq.applyingForClass}
+                            </span>
+                            {/* Admission Status Badge */}
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-black border ${getAdmissionStatusBadgeClass(enq.admissionStatus)}`}>
+                              {enq.admissionStatus === "Not Interested" && <Ban size={10} className="shrink-0 text-rose-600 dark:text-rose-400" />}
+                              {enq.admissionStatus === "Follow-up Required" && <Calendar size={10} className="shrink-0 text-amber-600 dark:text-amber-400" />}
+                              {enq.admissionStatus === "Admission Confirmed" && <CheckCircle size={10} className="shrink-0 text-emerald-600 dark:text-emerald-400" />}
+                              <span>{enq.admissionStatus || "Interested"}</span>
                             </span>
                           </div>
                           <h4 className="font-black text-sm text-slate-900 dark:text-white mt-1 truncate">
@@ -1187,12 +1446,19 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT COACHING ONLY
                 <div className="p-4 bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 space-y-3">
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-mono text-xs font-black px-2 py-0.5 rounded-md bg-orange-500/10 text-orange-600 dark:text-orange-400 border border-orange-500/20 whitespace-nowrap">
                           {activeEnquiry.enquiryNo}
                         </span>
                         <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
                           Meeting Audio Recording
+                        </span>
+                        {/* Prominent Admission Status Badge */}
+                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-xs font-black border ${getAdmissionStatusBadgeClass(activeEnquiry.admissionStatus)}`}>
+                          {activeEnquiry.admissionStatus === "Not Interested" && <Ban size={12} className="shrink-0 text-rose-600 dark:text-rose-400" />}
+                          {activeEnquiry.admissionStatus === "Follow-up Required" && <Calendar size={12} className="shrink-0 text-amber-600 dark:text-amber-400" />}
+                          {activeEnquiry.admissionStatus === "Admission Confirmed" && <CheckCircle size={12} className="shrink-0 text-emerald-600 dark:text-emerald-400" />}
+                          <span>Admission Status: {activeEnquiry.admissionStatus || "Interested"}</span>
                         </span>
                       </div>
                       <h3 className="text-base font-black text-slate-900 dark:text-white mt-1">
@@ -1524,17 +1790,11 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT COACHING ONLY
 
                     {/* Status Badge */}
                     <div className="flex items-center gap-1.5 shrink-0">
-                      <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black border uppercase tracking-wider flex items-center gap-1 ${
-                        activeEnquiry.admissionStatus === "Admission Confirmed"
-                          ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30"
-                          : activeEnquiry.admissionStatus === "Interested" || activeEnquiry.admissionStatus === "Application Taken"
-                          ? "bg-orange-500/15 text-orange-600 dark:text-orange-400 border-orange-500/30"
-                          : activeEnquiry.admissionStatus === "Follow-up Required"
-                          ? "bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 border-cyan-500/30"
-                          : "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30"
-                      }`}>
-                        <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
-                        <span>Status: {activeEnquiry.admissionStatus || "Pending"}</span>
+                      <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black border uppercase tracking-wider flex items-center gap-1.5 ${getAdmissionStatusBadgeClass(activeEnquiry.admissionStatus)}`}>
+                        {activeEnquiry.admissionStatus === "Not Interested" && <Ban size={11} className="shrink-0" />}
+                        {activeEnquiry.admissionStatus === "Follow-up Required" && <Calendar size={11} className="shrink-0" />}
+                        {activeEnquiry.admissionStatus === "Admission Confirmed" && <CheckCircle size={11} className="shrink-0" />}
+                        <span>Status: {activeEnquiry.admissionStatus || "Interested"}</span>
                       </span>
                     </div>
                   </div>

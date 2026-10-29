@@ -292,6 +292,11 @@ export default function ReceptionQueueModal({
                             </div>
                             <p className="text-xs text-slate-400 mt-0.5">
                               Parent: <strong className="text-slate-200">{entry.fatherName || entry.motherName || "Parent"}</strong>
+                              {entry.dateOfBirth && (
+                                <span className="text-amber-300 font-mono font-bold ml-2">
+                                  • 🎂 DOB: {entry.dateOfBirth}
+                                </span>
+                              )}
                             </p>
                           </div>
                         </div>

@@ -1073,37 +1073,49 @@ export function saveArchivedITStaffAccounts(accounts: ArchivedITStaffAccount[]):
   } catch {}
 }
 
-export function getDismissedParentEntryIds(): string[] {
+export function getDismissedParentEntryIds(counsellorId?: string): string[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = localStorage.getItem("sgs_dismissed_parent_entries");
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
-    }
+    const rawGlobal = localStorage.getItem("sgs_dismissed_parent_entries");
+    const globalList: string[] = rawGlobal ? JSON.parse(rawGlobal) : [];
+    if (!counsellorId) return globalList;
+    const key = `sgs_dismissed_parent_entries_${counsellorId.toLowerCase()}`;
+    const rawLocal = localStorage.getItem(key);
+    const localList: string[] = rawLocal ? JSON.parse(rawLocal) : [];
+    return Array.from(new Set([...globalList, ...localList]));
   } catch {}
   return [];
 }
 
-export function recordDismissedParentEntryId(id: string): void {
+export function recordDismissedParentEntryId(id: string, counsellorId?: string): void {
   if (typeof window === "undefined" || !id) return;
   try {
-    const existing = getDismissedParentEntryIds();
-    if (!existing.includes(id)) {
-      existing.push(id);
-      localStorage.setItem("sgs_dismissed_parent_entries", JSON.stringify(existing));
+    if (counsellorId) {
+      const key = `sgs_dismissed_parent_entries_${counsellorId.toLowerCase()}`;
+      const raw = localStorage.getItem(key);
+      const existing: string[] = raw ? JSON.parse(raw) : [];
+      if (!existing.includes(id)) {
+        existing.push(id);
+        localStorage.setItem(key, JSON.stringify(existing));
+      }
+    } else {
+      const existing = getDismissedParentEntryIds();
+      if (!existing.includes(id)) {
+        existing.push(id);
+        localStorage.setItem("sgs_dismissed_parent_entries", JSON.stringify(existing));
+      }
     }
   } catch {}
 }
 
-export function loadParentSelfEntries(): any[] {
+export function loadParentSelfEntries(counsellorId?: string): any[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem("sgs_parent_self_entries");
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        const dismissedSet = new Set(getDismissedParentEntryIds());
+        const dismissedSet = new Set(getDismissedParentEntryIds(counsellorId));
         return parsed.map(e => (dismissedSet.has(e.id) ? { ...e, status: "dismissed" } : e));
       }
     }

@@ -55,14 +55,27 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
 
   // Form fields
   const [studentName, setStudentName] = useState("");
+  const [dateOfBirth, setDateOfBirth] = useState("");
   const [applyingForClass, setApplyingForClass] = useState("Grade 1");
   const [fatherName, setFatherName] = useState("");
   const [motherName, setMotherName] = useState("");
   const [contactNo, setContactNo] = useState("");
+  const [phoneError, setPhoneError] = useState("");
   const [whatsappNo, setWhatsappNo] = useState("");
   const [previousSchool, setPreviousSchool] = useState("");
   const [heardAboutSchool, setHeardAboutSchool] = useState<string[]>(["Google / Online Search"]);
   const [reasonForChoosing, setReasonForChoosing] = useState("");
+
+  const handlePhoneChange = (val: string) => {
+    // Strictly restrict to digits only and maximum 10 numbers
+    const digitsOnly = val.replace(/\D/g, "").slice(0, 10);
+    setContactNo(digitsOnly);
+    if (digitsOnly.length > 0 && digitsOnly.length < 10) {
+      setPhoneError(`Entered ${digitsOnly.length}/10 digits. Exactly 10 digits required.`);
+    } else {
+      setPhoneError("");
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -70,7 +83,12 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
       alert("Please enter the student's full name.");
       return;
     }
-    if (!contactNo.trim() || contactNo.trim().length < 10) {
+    if (!dateOfBirth) {
+      alert("Please enter the student's date of birth.");
+      return;
+    }
+    const cleanPhone = contactNo.replace(/\D/g, "");
+    if (cleanPhone.length !== 10) {
       alert("Please enter a valid 10-digit mobile contact number.");
       return;
     }
@@ -85,11 +103,12 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
     let finalEntry: ParentSelfEntry = {
       id,
       studentName: studentName.trim(),
+      dateOfBirth: dateOfBirth.trim(),
       applyingForClass,
       fatherName: fatherName.trim(),
       motherName: motherName.trim(),
-      contactNo: contactNo.trim(),
-      whatsappNo: whatsappNo.trim() || contactNo.trim(),
+      contactNo: cleanPhone,
+      whatsappNo: (whatsappNo.trim() || cleanPhone).replace(/\D/g, "").slice(0, 10),
       previousSchool: previousSchool.trim(),
       heardAboutSchool,
       reasonForChoosing: reasonForChoosing.trim(),
@@ -162,10 +181,12 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
 
   const handleResetForm = () => {
     setStudentName("");
+    setDateOfBirth("");
     setApplyingForClass("Grade 1");
     setFatherName("");
     setMotherName("");
     setContactNo("");
+    setPhoneError("");
     setWhatsappNo("");
     setPreviousSchool("");
     setReasonForChoosing("");
@@ -198,33 +219,80 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
       {/* Main Body */}
       <main className="flex-1 max-w-xl w-full mx-auto p-4 sm:p-6 space-y-6">
         {isSubmittedSuccess ? (
-          <div className="p-6 sm:p-8 text-center space-y-6 bg-slate-900 border-2 border-emerald-500 rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 my-4">
-            <div className="w-20 h-20 rounded-full bg-emerald-500 text-white flex items-center justify-center mx-auto shadow-xl shadow-emerald-500/30 animate-bounce">
+          <div className="p-6 sm:p-8 text-center space-y-6 bg-slate-900 border-2 border-amber-500/80 rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 my-4">
+            <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-amber-500 to-orange-600 text-white flex items-center justify-center mx-auto shadow-xl shadow-orange-500/30 animate-bounce border-2 border-amber-300">
               <CheckCircle2 size={44} />
             </div>
 
-            <div className="space-y-3">
-              <span className="px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-black uppercase tracking-widest border border-emerald-500/30">
-                Registration Confirmed
-              </span>
-              <h2 className="text-2xl font-black text-white">
-                Thank You! 🎉
-              </h2>
-              <p className="text-sm font-semibold text-slate-300 leading-relaxed max-w-md mx-auto">
-                Enquiry details for <strong className="text-amber-400 font-extrabold">{studentName}</strong> (Class {applyingForClass}) have been sent directly to our Admissions Counter.
-              </p>
-              
-              <div className="p-4 bg-slate-950 border border-slate-800 rounded-2xl text-xs text-slate-300 space-y-1.5 text-left">
-                <p className="font-extrabold text-amber-400 flex items-center gap-1.5">
-                  <span>📍 Next Step:</span>
+            {/* High Impact Token Slip Pass Card */}
+            <div className="bg-gradient-to-b from-slate-950 to-slate-900 border-2 border-amber-400 p-5 rounded-2xl shadow-xl text-center space-y-3 relative overflow-hidden">
+              <div className="absolute top-0 right-0 px-3 py-1 bg-amber-500 text-slate-950 font-black text-[9px] uppercase tracking-wider rounded-bl-xl shadow-xs">
+                Official Token Pass
+              </div>
+
+              <div className="space-y-1 pt-1">
+                <span className="text-[10px] uppercase tracking-widest text-amber-400 font-extrabold block">
+                  Birla Open Minds International School
+                </span>
+                <p className="text-xs text-slate-400 font-semibold">
+                  Reception Self-Service Registration
                 </p>
-                <p className="text-slate-400 leading-relaxed font-medium">
-                  Please take a seat in our reception waiting lounge. Our Admissions Counsellor will call your name shortly.
+              </div>
+
+              {/* Big Token Number Display */}
+              <div className="py-3 px-4 bg-slate-900 border-2 border-dashed border-amber-400/80 rounded-xl inline-block w-full max-w-xs shadow-inner">
+                <span className="text-[11px] font-black uppercase text-amber-300 tracking-wider block">
+                  YOUR RECEPTION QUEUE TOKEN
+                </span>
+                <div className="text-4xl sm:text-5xl font-black text-amber-400 my-1 tracking-tight">
+                  TOKEN #{assignedToken}
+                </div>
+                <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-extrabold border border-amber-400/40 inline-block">
+                  {assignedToken === 1 ? "🥇 1st Arrived Today" : assignedToken === 2 ? "🥈 2nd Arrived Today" : assignedToken === 3 ? "🥉 3rd Arrived Today" : `${assignedToken}th Arrived Today`}
+                </span>
+              </div>
+
+              {/* Date & Details Verification Bar */}
+              <div className="grid grid-cols-2 gap-2 text-xs bg-slate-950/80 p-3 rounded-xl border border-slate-800 text-left">
+                <div>
+                  <span className="text-[10px] text-slate-500 uppercase font-bold block">Entry Date</span>
+                  <span className="text-amber-300 font-mono font-bold">
+                    📅 {new Date().toLocaleDateString("en-GB").replace(/\//g, "-")}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-500 uppercase font-bold block">Entry Time</span>
+                  <span className="text-slate-200 font-mono font-bold">
+                    ⏰ {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                </div>
+                <div className="col-span-2 pt-1.5 border-t border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                  <div className="text-slate-300 font-bold">
+                    Student: <strong className="text-white">{studentName}</strong>
+                    {dateOfBirth && (
+                      <span className="text-amber-300 text-[11px] font-mono ml-1.5">
+                        (DOB: {dateOfBirth})
+                      </span>
+                    )}
+                  </div>
+                  <span className="px-2 py-0.5 rounded bg-orange-500/20 text-orange-300 text-[10px] font-bold w-fit">Class {applyingForClass}</span>
+                </div>
+                <div className="col-span-2 text-[11px] text-slate-400 font-mono">
+                  📞 Phone: <span className="text-emerald-400 font-bold">+91 {contactNo}</span>
+                </div>
+              </div>
+
+              <div className="p-3 bg-emerald-950/40 border border-emerald-500/30 rounded-xl text-xs text-emerald-300 text-left space-y-1">
+                <p className="font-extrabold flex items-center gap-1.5 text-emerald-400">
+                  <span>📍 Reception Lounge Notice:</span>
+                </p>
+                <p className="text-slate-300 text-[11px] leading-relaxed font-medium">
+                  Please relax in our waiting area. Your Token #{assignedToken} is live on our Admissions Counsellor's desk. You will be called shortly!
                 </p>
               </div>
             </div>
 
-            <div className="pt-2">
+            <div className="pt-1">
               <button
                 type="button"
                 onClick={handleResetForm}
@@ -268,6 +336,26 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
                 />
               </div>
 
+              {/* 1. Student Date of Birth (DOB) - Right below Student Name */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-black text-slate-200 tracking-wide">
+                    Student Date of Birth (DOB) <span className="text-orange-500">*</span>
+                  </label>
+                  <span className="text-[10px] text-amber-400 font-bold uppercase tracking-wider">
+                    Birth Date
+                  </span>
+                </div>
+                <input
+                  type="date"
+                  required
+                  value={dateOfBirth}
+                  max={new Date().toISOString().split("T")[0]}
+                  onChange={(e) => setDateOfBirth(e.target.value)}
+                  className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white font-bold placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all [color-scheme:dark]"
+                />
+              </div>
+
               {/* Class Applying */}
               <div className="space-y-1.5">
                 <label className="block text-xs font-black text-slate-200 tracking-wide">
@@ -284,19 +372,38 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
                 </select>
               </div>
 
-              {/* Contact Mobile */}
+              {/* 2. Mobile Contact Number - Strictly 10 Digits */}
               <div className="space-y-1.5">
-                <label className="block text-xs font-black text-slate-200 tracking-wide">
-                  Mobile Contact Number <span className="text-orange-500">*</span>
-                </label>
-                <input
-                  type="tel"
-                  required
-                  value={contactNo}
-                  onChange={(e) => setContactNo(e.target.value)}
-                  placeholder="10-digit mobile number"
-                  className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white font-bold placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all"
-                />
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-black text-slate-200 tracking-wide">
+                    Mobile Contact Number <span className="text-orange-500">*</span>
+                  </label>
+                  <span className={`text-[10px] font-extrabold ${contactNo.length === 10 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    {contactNo.length === 10 ? '✓ Valid 10 Digits' : `${contactNo.length}/10 digits`}
+                  </span>
+                </div>
+                <div className="relative">
+                  <div className="absolute left-3.5 top-1/2 -translate-y-1/2 flex items-center gap-1.5 text-slate-400 font-bold text-xs pointer-events-none">
+                    <span>🇮🇳 +91</span>
+                    <span className="text-slate-600">|</span>
+                  </div>
+                  <input
+                    type="tel"
+                    inputMode="numeric"
+                    pattern="[0-9]{10}"
+                    maxLength={10}
+                    required
+                    value={contactNo}
+                    onChange={(e) => handlePhoneChange(e.target.value)}
+                    placeholder="10-digit mobile number"
+                    className="w-full pl-20 pr-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white font-mono font-bold tracking-wider placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all"
+                  />
+                </div>
+                {phoneError && (
+                  <p className="text-[11px] font-bold text-rose-400 animate-in fade-in">
+                    {phoneError}
+                  </p>
+                )}
               </div>
 
               {/* Father Name */}
