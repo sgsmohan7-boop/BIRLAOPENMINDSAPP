@@ -28,44 +28,57 @@ export default function TokenListReportModal({
   entries = [],
   counsellors = []
 }: TokenListReportModalProps) {
-  const [period, setPeriod] = useState<"daily" | "weekly" | "monthly" | "all">("daily");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"ALL" | "CLAIMED" | "UNCLAIMED">("ALL");
-
+  const [filterMode, setFilterMode] = useState<"daily" | "range">("daily");
   const now = new Date();
   const todayYMD = now.toISOString().split("T")[0];
   const todayDMY = now.toLocaleDateString("en-GB").replace(/\//g, "-");
 
-  // Calculate past dates for filters
-  const getPastDateYMD = (daysAgo: number) => {
-    const d = new Date();
-    d.setDate(d.getDate() - daysAgo);
-    return d.toISOString().split("T")[0];
+  const [fromDate, setFromDate] = useState<string>(todayYMD);
+  const [toDate, setToDate] = useState<string>(todayYMD);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"ALL" | "CLAIMED" | "UNCLAIMED">("ALL");
+
+  // Helper to extract standard YYYY-MM-DD from any ParentSelfEntry
+  const getEntryDateYMD = (e: ParentSelfEntry): string => {
+    if (e.dateKey && /^\d{4}-\d{2}-\d{2}$/.test(e.dateKey)) return e.dateKey;
+    if (e.submittedAt) {
+      const ymd = e.submittedAt.split("T")[0];
+      if (/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return ymd;
+    }
+    const dmyStr = e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
+    if (dmyStr) {
+      const parts = dmyStr.split(/[\/\-]/);
+      if (parts.length === 3) {
+        if (parts[0].length === 4) {
+          return `${parts[0]}-${parts[1].padStart(2, "0")}-${parts[2].padStart(2, "0")}`;
+        } else {
+          return `${parts[2]}-${parts[1].padStart(2, "0")}-${parts[0].padStart(2, "0")}`;
+        }
+      }
+    }
+    return "";
   };
 
-  const monthStartYMD = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
-  const weekStart7DaysYMD = getPastDateYMD(7);
-
-  // Filter entries based on period
+  // Filter entries based on Day-Wise or Custom Date Range (From Date to To Date)
   const periodFilteredEntries = useMemo(() => {
     return (entries || []).filter(e => {
       if (!e) return false;
-      const dateYMD = e.dateKey || (e.submittedAt ? e.submittedAt.split("T")[0] : "");
+      const entryYMD = getEntryDateYMD(e);
       const dateDMY = e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
 
-      if (period === "daily") {
-        return dateYMD === todayYMD || dateDMY === todayDMY;
-      } else if (period === "weekly") {
-        if (dateYMD && dateYMD >= weekStart7DaysYMD) return true;
-        // fallback
-        const t = new Date(e.submittedAt).getTime();
-        return !isNaN(t) && (now.getTime() - t <= 7 * 24 * 60 * 60 * 1000);
-      } else if (period === "monthly") {
-        if (dateYMD && dateYMD >= monthStartYMD) return true;
-        const t = new Date(e.submittedAt).getTime();
-        return !isNaN(t) && (now.getTime() - t <= 30 * 24 * 60 * 60 * 1000);
+      if (filterMode === "daily") {
+        return entryYMD === todayYMD || dateDMY === todayDMY;
+      } else {
+        // "range"
+        let match = true;
+        if (fromDate && entryYMD) {
+          match = match && entryYMD >= fromDate;
+        }
+        if (toDate && entryYMD) {
+          match = match && entryYMD <= toDate;
+        }
+        return match;
       }
-      return true; // "all"
     }).sort((a, b) => {
       const aDate = a.dateKey || a.entryDate || "";
       const bDate = b.dateKey || b.entryDate || "";
@@ -74,7 +87,7 @@ export default function TokenListReportModal({
       }
       return new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime();
     });
-  }, [entries, period, todayYMD, todayDMY, weekStart7DaysYMD, monthStartYMD]);
+  }, [entries, filterMode, fromDate, toDate, todayYMD, todayDMY]);
 
   // Apply search and status filter
   const finalDisplayList = useMemo(() => {
@@ -109,7 +122,9 @@ export default function TokenListReportModal({
 
   // Print Handler
   const handlePrintReport = () => {
-    const periodLabel = period === "daily" ? "DAY-WISE (TODAY)" : period === "weekly" ? "WEEKLY (LAST 7 DAYS)" : period === "monthly" ? "MONTHLY (THIS MONTH)" : "ALL TIME ARCHIVE";
+    const periodLabel = filterMode === "daily" 
+      ? `DAY-WISE (TODAY: ${todayDMY})` 
+      : `DATE RANGE (${fromDate || "START"} TO ${toDate || "TODAY"})`;
     
     const printWindow = window.open("", "_blank", "width=900,height=800");
     if (!printWindow) {
@@ -322,7 +337,10 @@ export default function TokenListReportModal({
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `BOMIS_Token_List_${period.toUpperCase()}_${new Date().toISOString().slice(0, 10)}.csv`);
+    const filePeriodName = filterMode === "daily" 
+      ? `DAY_WISE_${todayDMY}` 
+      : `RANGE_${fromDate || "START"}_TO_${toDate || "TODAY"}`;
+    link.setAttribute("download", `BOMIS_Token_List_${filePeriodName}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -341,16 +359,19 @@ export default function TokenListReportModal({
               <FileText size={22} />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className="px-2.5 py-0.5 rounded-full bg-white/20 text-amber-100 text-[10px] font-black uppercase tracking-wider">
                   Official Reception Audit
                 </span>
                 <span className="px-2 py-0.5 rounded-full bg-emerald-400 text-slate-950 text-[10px] font-black">
                   Total: {totalCount} Tokens
                 </span>
+                <span className="px-2.5 py-0.5 rounded-full bg-black/30 border border-white/20 text-white text-[10px] font-bold">
+                  {filterMode === "daily" ? `📅 Today (${todayDMY})` : `📆 ${fromDate} to ${toDate}`}
+                </span>
               </div>
               <h2 className="text-lg font-black tracking-tight mt-0.5">
-                Day-Wise, Weekly &amp; Monthly Total Token Count Report
+                Day-Wise &amp; Custom Date Range Total Token Count Report
               </h2>
             </div>
           </div>
@@ -384,59 +405,84 @@ export default function TokenListReportModal({
           </div>
         </div>
 
-        {/* Period Selector Bar */}
-        <div className="p-4 bg-slate-950 border-b border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
-          <div className="flex items-center gap-1.5 flex-wrap w-full sm:w-auto">
+        {/* Period Selector Bar: Day-Wise + Choose Date Range (From Date to To Date side-by-side) */}
+        <div className="p-4 bg-slate-950 border-b border-slate-800 flex flex-col xl:flex-row items-start xl:items-center justify-between gap-3 shrink-0 overflow-x-auto">
+          <div className="flex items-center gap-2.5 flex-nowrap w-auto">
+            {/* 1. Day-Wise (Today) Button */}
             <button
               type="button"
-              onClick={() => setPeriod("daily")}
-              className={`px-4 py-2 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
-                period === "daily"
-                  ? "bg-orange-600 text-white shadow-md"
-                  : "bg-slate-900 text-slate-400 hover:text-white"
+              onClick={() => {
+                setFilterMode("daily");
+                setFromDate(todayYMD);
+                setToDate(todayYMD);
+              }}
+              className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
+                filterMode === "daily"
+                  ? "bg-orange-600 text-white shadow-md ring-2 ring-orange-400/40"
+                  : "bg-slate-900 text-slate-400 hover:text-white border border-slate-800"
               }`}
+              title="Filter tokens registered today"
             >
               <Calendar size={14} />
-              <span>📅 Day-Wise (Today)</span>
+              <span>Day-Wise (Today)</span>
             </button>
 
-            <button
-              type="button"
-              onClick={() => setPeriod("weekly")}
-              className={`px-4 py-2 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
-                period === "weekly"
-                  ? "bg-orange-600 text-white shadow-md"
-                  : "bg-slate-900 text-slate-400 hover:text-white"
-              }`}
-            >
-              <Calendar size={14} />
-              <span>📅 Weekly (7 Days)</span>
-            </button>
+            {/* 2. Choose Date Range: FROM and TO Strictly Side-by-Side (Pakka Pakkana) */}
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border transition-all flex-nowrap whitespace-nowrap shrink-0 ${
+              filterMode === "range"
+                ? "bg-slate-900 border-orange-500/60 ring-2 ring-orange-500/20 shadow-md"
+                : "bg-slate-900/70 border-slate-800"
+            }`}>
+              <span className="text-[11px] font-black text-amber-400 flex items-center gap-1 shrink-0">
+                <Calendar size={13} className="text-amber-400" />
+                <span>Choose Date:</span>
+              </span>
 
-            <button
-              type="button"
-              onClick={() => setPeriod("monthly")}
-              className={`px-4 py-2 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 ${
-                period === "monthly"
-                  ? "bg-orange-600 text-white shadow-md"
-                  : "bg-slate-900 text-slate-400 hover:text-white"
-              }`}
-            >
-              <Calendar size={14} />
-              <span>📅 Monthly (This Month)</span>
-            </button>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">From:</label>
+                <input
+                  type="date"
+                  value={fromDate}
+                  onChange={(e) => {
+                    setFromDate(e.target.value);
+                    setFilterMode("range");
+                  }}
+                  className="w-32 sm:w-34 px-2 py-1 bg-slate-950 border border-slate-700 focus:border-orange-500 rounded-lg text-xs text-white font-mono focus:outline-none [color-scheme:dark]"
+                  title="Choose From Date"
+                />
+              </div>
 
-            <button
-              type="button"
-              onClick={() => setPeriod("all")}
-              className={`px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                period === "all"
-                  ? "bg-orange-600 text-white font-black"
-                  : "bg-slate-900 text-slate-400 hover:text-white"
-              }`}
-            >
-              All Archive
-            </button>
+              <span className="text-slate-500 text-xs font-bold shrink-0">➔</span>
+
+              <div className="flex items-center gap-1.5 shrink-0">
+                <label className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">To:</label>
+                <input
+                  type="date"
+                  value={toDate}
+                  onChange={(e) => {
+                    setToDate(e.target.value);
+                    setFilterMode("range");
+                  }}
+                  className="w-32 sm:w-34 px-2 py-1 bg-slate-950 border border-slate-700 focus:border-orange-500 rounded-lg text-xs text-white font-mono focus:outline-none [color-scheme:dark]"
+                  title="Choose To Date"
+                />
+              </div>
+
+              {filterMode === "range" && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFilterMode("daily");
+                    setFromDate(todayYMD);
+                    setToDate(todayYMD);
+                  }}
+                  className="text-[10px] text-rose-400 hover:text-rose-300 font-bold hover:underline cursor-pointer ml-1 shrink-0 px-1 py-0.5"
+                  title="Reset to Day-Wise Today"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="flex items-center gap-2 w-full sm:w-auto">

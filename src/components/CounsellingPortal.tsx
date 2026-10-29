@@ -343,6 +343,7 @@ export default function CounsellingPortal({
   const [isReceptionQueueModalOpen, setIsReceptionQueueModalOpen] = useState(false);
   const [isTokenListReportModalOpen, setIsTokenListReportModalOpen] = useState(false);
   const [whatsAppModalEnquiry, setWhatsAppModalEnquiry] = useState<CounsellingEnquiry | null>(null);
+  const [showClearConfirmModal, setShowClearConfirmModal] = useState<boolean>(false);
 
   // Reception Lounge Controls: Collapse (Minimize), Hide (Close), and Maximize (Full-height)
   const [isLoungeCollapsed, setIsLoungeCollapsed] = useState<boolean>(() => {
@@ -2079,7 +2080,7 @@ export default function CounsellingPortal({
             type="button"
             onClick={() => setIsTokenListReportModalOpen(true)}
             className="px-4 py-2.5 rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer border bg-amber-400 hover:bg-amber-500 text-slate-950 shadow-md active:scale-95 border-amber-300"
-            title="View Day-Wise, Weekly & Monthly Total Token Count Report"
+            title="View Day-Wise & Custom Date Range Total Token Count Report"
           >
             <FileText size={15} />
             <span>🎟️ Token Count Report</span>
@@ -2335,13 +2336,13 @@ export default function CounsellingPortal({
                 <span>📱 Poster</span>
               </button>
 
-              {/* Clear All Waiting Test Entries (when entries exist) */}
+              {/* Clear All Waiting Test Entries (requires confirmation alert to prevent accidental deletion) */}
               {pendingParentEntries.length > 0 && (
                 <button
                   type="button"
-                  onClick={handleClearAllPending}
+                  onClick={() => setShowClearConfirmModal(true)}
                   className="px-2.5 py-1.5 bg-black/20 hover:bg-red-600 text-white border border-white/30 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer shadow-xs active:scale-95 flex items-center gap-1"
-                  title="Clear / Dismiss all currently waiting entries"
+                  title="Clear / Dismiss all currently waiting entries (with confirmation)"
                 >
                   <Trash2 size={13} />
                   <span>🧹 Clear ({pendingParentEntries.length})</span>
@@ -2415,19 +2416,26 @@ export default function CounsellingPortal({
 
                       <div className="bg-slate-900/95 backdrop-blur-md border-2 border-amber-400/60 hover:border-amber-400 rounded-2xl p-4 pt-5 flex flex-col justify-between gap-3 text-white shadow-2xl transition-all">
                         <div>
-                          {/* Top Bar with Time & Status */}
-                          <div className="flex items-center justify-between gap-2 pb-2 mb-2 border-b border-white/10">
+                          {/* Top Bar with Form Generated Date & Time */}
+                          <div className="flex items-center justify-between gap-2 pb-2 mb-2 border-b border-white/10 flex-wrap">
                             <span className="text-[10px] font-bold text-amber-300 uppercase tracking-wider pl-1">
                               Walk-in Parent Queue
                             </span>
-                            <span className="px-2 py-0.5 rounded-md bg-slate-800 text-slate-300 text-[10px] font-mono font-bold shrink-0 border border-slate-700 flex items-center gap-1">
-                              <Clock size={11} className="text-amber-400" />
-                              <span>{entry.formattedDate ? (entry.formattedDate.split(" ")[1] || entry.formattedDate) : "Now"}</span>
-                            </span>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="px-2 py-0.5 rounded-md bg-amber-500/15 border border-amber-400/40 text-amber-300 text-[10px] font-mono font-bold flex items-center gap-1 shadow-xs" title="Form Generated Date">
+                                <Calendar size={11} className="text-amber-400 shrink-0" />
+                                <span className="text-[9px] uppercase tracking-wider text-amber-200/90 font-extrabold">Generated:</span>
+                                <span>{entry.entryDate || (entry.formattedDate ? entry.formattedDate.split(" ")[0] : "") || (entry.submittedAt ? new Date(entry.submittedAt).toLocaleDateString("en-GB").replace(/\//g, "-") : "")}</span>
+                              </span>
+                              <span className="px-1.5 py-0.5 rounded-md bg-slate-800 text-slate-300 text-[10px] font-mono font-bold border border-slate-700 flex items-center gap-1">
+                                <Clock size={11} className="text-slate-400 shrink-0" />
+                                <span>{entry.formattedDate && entry.formattedDate.includes(" ") ? entry.formattedDate.split(" ")[1] : (entry.submittedAt ? new Date(entry.submittedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "Now")}</span>
+                              </span>
+                            </div>
                           </div>
 
                           <div className="flex items-start justify-between gap-2">
-                            <div>
+                            <div className="w-full">
                               <div className="flex items-center gap-2 flex-wrap">
                                 <p className="text-base font-black text-amber-300">{entry.studentName}</p>
                                 <span className="px-2 py-0.5 rounded-md bg-amber-400/20 text-amber-200 text-[10px] font-bold border border-amber-400/30">
@@ -2442,7 +2450,22 @@ export default function CounsellingPortal({
                                   </span>
                                 )}
                               </p>
-                              <div className="flex items-center gap-2 mt-1">
+
+                              {/* Dedicated Form Raised / Generated Date Bar */}
+                              <div className="mt-2 py-1 px-2.5 rounded-lg bg-slate-950/70 border border-slate-800 flex items-center justify-between text-[11px] font-mono">
+                                <span className="text-slate-400 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
+                                  <Calendar size={12} className="text-amber-400 shrink-0" />
+                                  <span>Form Raised Date:</span>
+                                </span>
+                                <span className="text-amber-300 font-extrabold flex items-center gap-1">
+                                  <span>{entry.entryDate || (entry.formattedDate ? entry.formattedDate.split(" ")[0] : "") || (entry.submittedAt ? new Date(entry.submittedAt).toLocaleDateString("en-GB").replace(/\//g, "-") : "")}</span>
+                                  {entry.formattedDate && entry.formattedDate.includes(" ") && (
+                                    <span className="text-slate-400 font-medium text-[10px]">({entry.formattedDate.split(" ")[1]})</span>
+                                  )}
+                                </span>
+                              </div>
+
+                              <div className="flex items-center gap-2 mt-2">
                                 <a 
                                   href={`tel:${entry.contactNo}`} 
                                   className="text-xs text-emerald-300 font-mono font-bold hover:underline flex items-center gap-1"
@@ -5645,6 +5668,60 @@ export default function CounsellingPortal({
           enquiry={whatsAppModalEnquiry}
           activeCounsellor={activeCounsellor}
         />
+      )}
+
+      {/* Confirmation Alert Dialog for Clearing Waiting Queue */}
+      {showClearConfirmModal && (
+        <div className="fixed inset-0 z-[99999] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-white dark:bg-slate-900 border-2 border-rose-500/40 rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            {/* Top Icon & Title */}
+            <div className="flex items-start gap-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-rose-100 dark:bg-rose-950/80 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0 border border-rose-200 dark:border-rose-900 shadow-sm">
+                <AlertTriangle size={24} className="animate-pulse" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-base font-black text-slate-900 dark:text-white">
+                  Confirm Clear Waiting Queue?
+                </h3>
+                <p className="text-xs font-bold text-rose-600 dark:text-rose-400">
+                  ⚠️ Action cannot be undone
+                </p>
+              </div>
+            </div>
+
+            {/* Warning Body */}
+            <div className="bg-rose-50/70 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 rounded-2xl p-4 text-xs text-slate-700 dark:text-slate-300 space-y-2 leading-relaxed">
+              <p className="font-semibold text-slate-900 dark:text-slate-100">
+                Are you sure you want to clear all <strong className="text-rose-600 dark:text-rose-400 font-black text-sm">{pendingParentEntries.length} waiting parent token card(s)</strong> from your lounge?
+              </p>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 pt-1 border-t border-rose-200/50 dark:border-rose-900/40">
+                If you clicked <strong>Clear</strong> by accident or mistake, please click <strong>Cancel</strong> below to keep all tokens safe. Only proceed if you genuinely want to clear the waiting lounge.
+              </p>
+            </div>
+
+            {/* Actions: Cancel vs Confirm OK */}
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowClearConfirmModal(false)}
+                className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold transition-all cursor-pointer active:scale-95"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowClearConfirmModal(false);
+                  handleClearAllPending();
+                }}
+                className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black shadow-lg shadow-rose-600/30 transition-all cursor-pointer active:scale-95 flex items-center gap-1.5"
+              >
+                <Trash2 size={14} />
+                <span>Yes, Clear All ({pendingParentEntries.length})</span>
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Real-Time In-App Live Auto-Update Notifier */}

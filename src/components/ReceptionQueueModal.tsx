@@ -302,8 +302,8 @@ export default function ReceptionQueueModal({
                         </div>
 
                         <div className="text-right shrink-0">
-                          <span className="text-[11px] font-mono text-amber-300 bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800 block font-bold">
-                            {entry.formattedDate || "Just Now"}
+                          <span className="text-[11px] font-mono text-amber-300 bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800 block font-bold" title="Form Generated Date">
+                            Generated: {entry.formattedDate || "Just Now"}
                           </span>
                           <span className="text-[9px] text-slate-500 block mt-1 font-semibold">
                             Day Queue S.No: #{entry.dailyTokenNo || 1}

@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { 
   School, 
   CheckCircle2, 
+  Check,
   Sparkles, 
   ArrowRight, 
   HeartHandshake, 
@@ -196,22 +197,31 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
   return (
     <div className="min-h-screen w-full bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-orange-600 selection:text-white">
       
-      {/* Clean Distraction-Free Header */}
-      <header className="bg-gradient-to-r from-orange-600 via-amber-600 to-yellow-600 text-white p-5 shadow-xl sticky top-0 z-40 border-b border-orange-400/30">
+      {/* Clean Professional School Header with Official Logo */}
+      <header className="bg-gradient-to-r from-orange-600 via-amber-600 to-amber-700 text-white px-4 py-3.5 sm:px-6 sm:py-4 shadow-xl sticky top-0 z-40 border-b border-orange-400/40">
         <div className="max-w-xl mx-auto flex items-center gap-3.5">
-          <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center text-white shrink-0 font-bold border border-white/30 shadow-md">
-            <School size={26} />
+          <div className="w-13 h-13 sm:w-14 sm:h-14 rounded-2xl bg-white p-1.5 shadow-md flex items-center justify-center shrink-0 border border-white/80">
+            <img
+              src="/birla_open_minds_logo.png"
+              alt="Birla Open Minds International School"
+              className="w-full h-full object-contain"
+            />
           </div>
-          <div>
-            <span className="px-2.5 py-0.5 rounded-full bg-white/25 text-amber-100 text-[10px] font-black uppercase tracking-wider">
-              Admission Enquiry Form
-            </span>
-            <h1 className="text-lg font-black tracking-tight leading-tight mt-0.5">
-              BIRLA OPEN MINDS
-            </h1>
-            <p className="text-[11px] text-amber-100 font-bold tracking-widest uppercase">
-              International School
+          <div className="flex-1 min-w-0">
+            <div>
+              <h1 className="text-base sm:text-lg font-black tracking-wide leading-tight truncate">
+                BIRLA OPEN MINDS
+              </h1>
+            </div>
+            <p className="text-[11px] sm:text-xs text-amber-100 font-extrabold tracking-wider uppercase truncate">
+              International School • LB Nagar
             </p>
+            <div className="mt-1">
+              <span className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-white text-[#800020] font-black text-[10px] sm:text-[11px] shadow-sm uppercase tracking-wider border border-amber-200">
+                <span className="w-1.5 h-1.5 rounded-full bg-orange-600 animate-pulse"></span>
+                Admission Enquiry Form
+              </span>
+            </div>
           </div>
         </div>
       </header>
@@ -219,88 +229,160 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
       {/* Main Body */}
       <main className="flex-1 max-w-xl w-full mx-auto p-4 sm:p-6 space-y-6">
         {isSubmittedSuccess ? (
-          <div className="p-6 sm:p-8 text-center space-y-6 bg-slate-900 border-2 border-amber-500/80 rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 my-4">
-            <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-amber-500 to-orange-600 text-white flex items-center justify-center mx-auto shadow-xl shadow-orange-500/30 animate-bounce border-2 border-amber-300">
-              <CheckCircle2 size={44} />
+          <div className="relative bg-white text-slate-800 rounded-3xl shadow-2xl overflow-hidden border border-amber-200/90 p-5 sm:p-8 space-y-5 animate-in zoom-in-95 duration-200 my-2">
+            {/* Top-Left Decorative Ribbon Swag */}
+            <div className="absolute top-0 left-0 w-32 sm:w-48 h-24 sm:h-36 pointer-events-none z-0 overflow-hidden rounded-tl-3xl">
+              <svg viewBox="0 0 220 180" className="w-full h-full" preserveAspectRatio="none">
+                <path d="M 0 0 L 215 0 C 178 26 122 58 74 112 C 40 148 18 172 0 188 Z" fill="#F59E0B" />
+                <path d="M 0 0 L 195 0 C 160 22 110 50 62 102 C 30 136 12 158 0 172 Z" fill="#EA580C" />
+                <path d="M 0 0 L 160 0 C 130 18 90 42 45 88 C 20 114 8 132 0 145 Z" fill="#800020" />
+              </svg>
             </div>
 
-            {/* High Impact Token Slip Pass Card */}
-            <div className="bg-gradient-to-b from-slate-950 to-slate-900 border-2 border-amber-400 p-5 rounded-2xl shadow-xl text-center space-y-3 relative overflow-hidden">
-              <div className="absolute top-0 right-0 px-3 py-1 bg-amber-500 text-slate-950 font-black text-[9px] uppercase tracking-wider rounded-bl-xl shadow-xs">
-                Official Token Pass
-              </div>
+            {/* Bottom-Right Decorative Ribbon Swag (Matching top-left curve style via rotate-180, elegantly sized) */}
+            <div className="absolute bottom-0 right-0 w-28 sm:w-36 h-20 sm:h-26 pointer-events-none z-0 overflow-hidden rounded-br-3xl">
+              <svg viewBox="0 0 220 180" className="w-full h-full rotate-180" preserveAspectRatio="none">
+                <path d="M 0 0 L 215 0 C 178 26 122 58 74 112 C 40 148 18 172 0 188 Z" fill="#F59E0B" />
+                <path d="M 0 0 L 195 0 C 160 22 110 50 62 102 C 30 136 12 158 0 172 Z" fill="#EA580C" />
+                <path d="M 0 0 L 160 0 C 130 18 90 42 45 88 C 20 114 8 132 0 145 Z" fill="#800020" />
+              </svg>
+            </div>
 
-              <div className="space-y-1 pt-1">
-                <span className="text-[10px] uppercase tracking-widest text-amber-400 font-extrabold block">
-                  Birla Open Minds International School
-                </span>
-                <p className="text-xs text-slate-400 font-semibold">
-                  Reception Self-Service Registration
+            <div className="relative z-10 text-center space-y-4 pt-1 sm:pt-2">
+              {/* Brand Logo & Header */}
+              <div className="flex flex-col items-center">
+                <img
+                  src="/birla_open_minds_logo.png"
+                  alt="Birla Open Minds International School"
+                  className="h-14 sm:h-16 w-auto object-contain mx-auto drop-shadow-xs mb-1"
+                />
+                <h2 className="text-xl sm:text-2xl font-black text-[#800020] tracking-wide uppercase">
+                  BIRLA OPEN MINDS
+                </h2>
+                <p className="text-xs sm:text-sm font-black text-slate-800 tracking-widest uppercase">
+                  INTERNATIONAL SCHOOL
                 </p>
+                <div className="flex items-center justify-center gap-2 mt-1 w-full max-w-xs">
+                  <span className="h-[1.5px] flex-1 bg-amber-500 rounded-full"></span>
+                  <span className="text-[#800020] font-bold text-xs tracking-wider">LB Nagar Branch</span>
+                  <span className="h-[1.5px] flex-1 bg-amber-500 rounded-full"></span>
+                </div>
               </div>
 
-              {/* Big Token Number Display */}
-              <div className="py-3 px-4 bg-slate-900 border-2 border-dashed border-amber-400/80 rounded-xl inline-block w-full max-w-xs shadow-inner">
-                <span className="text-[11px] font-black uppercase text-amber-300 tracking-wider block">
-                  YOUR RECEPTION QUEUE TOKEN
-                </span>
-                <div className="text-4xl sm:text-5xl font-black text-amber-400 my-1 tracking-tight">
-                  TOKEN #{assignedToken}
-                </div>
-                <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-extrabold border border-amber-400/40 inline-block">
-                  {assignedToken === 1 ? "🥇 1st Arrived Today" : assignedToken === 2 ? "🥈 2nd Arrived Today" : assignedToken === 3 ? "🥉 3rd Arrived Today" : `${assignedToken}th Arrived Today`}
-                </span>
-              </div>
-
-              {/* Date & Details Verification Bar */}
-              <div className="grid grid-cols-2 gap-2 text-xs bg-slate-950/80 p-3 rounded-xl border border-slate-800 text-left">
-                <div>
-                  <span className="text-[10px] text-slate-500 uppercase font-bold block">Entry Date</span>
-                  <span className="text-amber-300 font-mono font-bold">
-                    📅 {new Date().toLocaleDateString("en-GB").replace(/\//g, "-")}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-[10px] text-slate-500 uppercase font-bold block">Entry Time</span>
-                  <span className="text-slate-200 font-mono font-bold">
-                    ⏰ {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </span>
-                </div>
-                <div className="col-span-2 pt-1.5 border-t border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-1">
-                  <div className="text-slate-300 font-bold">
-                    Student: <strong className="text-white">{studentName}</strong>
-                    {dateOfBirth && (
-                      <span className="text-amber-300 text-[11px] font-mono ml-1.5">
-                        (DOB: {dateOfBirth})
-                      </span>
-                    )}
+              {/* Checkmark with Sunburst Accent Lines */}
+              <div className="pt-2 flex flex-col items-center justify-center">
+                <div className="flex items-center justify-center gap-3">
+                  {/* Left sunburst rays */}
+                  <div className="flex gap-1.5 opacity-90 -rotate-12">
+                    <span className="w-1.5 h-6 bg-amber-400 rounded-full block transform -rotate-12"></span>
+                    <span className="w-1.5 h-7 bg-amber-500 rounded-full block transform -rotate-6"></span>
                   </div>
-                  <span className="px-2 py-0.5 rounded bg-orange-500/20 text-orange-300 text-[10px] font-bold w-fit">Class {applyingForClass}</span>
+
+                  {/* Center circular maroon badge */}
+                  <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-[#800020] text-white flex items-center justify-center shadow-lg shadow-rose-950/20 border-2 border-amber-300">
+                    <Check size={34} strokeWidth={3.5} className="text-white" />
+                  </div>
+
+                  {/* Right sunburst rays */}
+                  <div className="flex gap-1.5 opacity-90 rotate-12">
+                    <span className="w-1.5 h-7 bg-amber-500 rounded-full block transform rotate-6"></span>
+                    <span className="w-1.5 h-6 bg-amber-400 rounded-full block transform rotate-12"></span>
+                  </div>
                 </div>
-                <div className="col-span-2 text-[11px] text-slate-400 font-mono">
-                  📞 Phone: <span className="text-emerald-400 font-bold">+91 {contactNo}</span>
+
+                {/* Pill Banner */}
+                <div className="mt-3">
+                  <span className="inline-block bg-[#800020] text-white font-black text-lg sm:text-2xl px-8 sm:px-10 py-1.5 sm:py-2 rounded-full shadow-md tracking-tight">
+                    Submission Successful!
+                  </span>
+                </div>
+                <p className="mt-2 text-slate-700 font-bold text-xs sm:text-sm">
+                  Your admission form has been submitted successfully!
+                </p>
+              </div>
+
+              {/* Box 1: Waiting Area & Live Token */}
+              <div className="bg-[#FFFDF5] border-2 border-amber-400 rounded-2xl p-3.5 sm:p-4 shadow-xs flex items-center gap-3 sm:gap-4 text-left">
+                <div className="shrink-0 flex items-center justify-center text-[#800020]">
+                  <div className="relative p-2 bg-amber-100/70 rounded-xl border border-amber-300">
+                    <svg className="w-7 h-7 sm:w-8 sm:h-8 text-[#800020]" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M12 4a2 2 0 100-4 2 2 0 000 4zm1 5h-2c-1.1 0-2 .9-2 2v6h2v5h2v-5h3v-2h-3v-4h2a1 1 0 001-1V9a1 1 0 00-1-1zm6.5 4a3.5 3.5 0 100 7 3.5 3.5 0 000-7zm0 1a2.5 2.5 0 110 5 2.5 2.5 0 010-5zm-.5 1h1v1.5l1 .5-.5.8-1.5-.8V15z"/>
+                    </svg>
+                  </div>
+                </div>
+                <div className="w-[1.5px] h-12 bg-amber-400/80 shrink-0"></div>
+                <div className="flex-1 text-slate-800 text-xs sm:text-sm leading-relaxed">
+                  <p className="font-medium text-slate-900">
+                    Your{" "}
+                    <span className="inline-block bg-[#800020] text-white font-extrabold px-2.5 py-0.5 rounded-md shadow-xs text-xs sm:text-sm mx-0.5">
+                      Token #{assignedToken}
+                    </span>{" "}
+                    is live at our Admissions Counsellor's desk.
+                  </p>
+                  <p className="text-slate-600 text-[11px] sm:text-xs mt-0.5">
+                    If you are at school, please relax in our waiting area; you will be called shortly.
+                  </p>
                 </div>
               </div>
 
-              <div className="p-3 bg-emerald-950/40 border border-emerald-500/30 rounded-xl text-xs text-emerald-300 text-left space-y-1">
-                <p className="font-extrabold flex items-center gap-1.5 text-emerald-400">
-                  <span>📍 Reception Lounge Notice:</span>
-                </p>
-                <p className="text-slate-300 text-[11px] leading-relaxed font-medium">
-                  Please relax in our waiting area. Your Token #{assignedToken} is live on our Admissions Counsellor's desk. You will be called shortly!
-                </p>
+              {/* Box 2: Online / Remote Submission Notice */}
+              <div className="bg-[#FFFDF5] border-2 border-amber-400 rounded-2xl p-3.5 sm:p-4 shadow-xs flex items-center gap-3 sm:gap-4 text-left">
+                <div className="shrink-0 flex items-center justify-center text-[#800020]">
+                  <div className="relative p-2 bg-amber-100/70 rounded-xl border border-amber-300">
+                    <svg className="w-7 h-7 sm:w-8 sm:h-8 text-[#800020]" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2">
+                      <rect x="3" y="4" width="18" height="12" rx="2" />
+                      <path d="M2 20h20" />
+                      <circle cx="12" cy="10" r="3" />
+                      <path d="M12 7c-1.5 1-2 2-2 3s.5 2 2 3c1.5-1 2-2 2-3s-.5-2-2-3z" />
+                    </svg>
+                  </div>
+                </div>
+                <div className="w-[1.5px] h-10 bg-amber-400/80 shrink-0"></div>
+                <div className="flex-1 text-slate-700 text-xs sm:text-sm leading-relaxed">
+                  If you have submitted this form online from another location, our Admissions Team will contact you if required.
+                </div>
               </div>
-            </div>
 
-            <div className="pt-1">
-              <button
-                type="button"
-                onClick={handleResetForm}
-                className="w-full py-3.5 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white rounded-2xl text-xs font-black shadow-lg transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-95"
-              >
-                <Sparkles size={16} />
-                <span>Register Another Student</span>
-              </button>
+              {/* Candidate Verification Summary Details */}
+              <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3 text-left text-xs grid grid-cols-2 gap-2">
+                <div>
+                  <span className="text-[10px] text-slate-500 uppercase font-bold block">Student Name</span>
+                  <span className="font-extrabold text-[#800020] text-sm">{studentName}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-500 uppercase font-bold block">Applying For Class</span>
+                  <span className="font-bold text-slate-800">{applyingForClass}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-500 uppercase font-bold block">Date of Birth</span>
+                  <span className="font-semibold text-slate-700">{dateOfBirth || "—"}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-500 uppercase font-bold block">Contact Phone</span>
+                  <span className="font-mono font-bold text-slate-800">+91 {contactNo}</span>
+                </div>
+              </div>
+
+              {/* Register Another Student Button */}
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={handleResetForm}
+                  className="w-full py-3 bg-gradient-to-r from-[#800020] via-[#991b1b] to-[#c2410c] hover:from-[#6b001a] hover:to-[#9a3412] text-white rounded-xl text-xs sm:text-sm font-black shadow-lg shadow-rose-950/20 transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-95"
+                >
+                  <Sparkles size={16} />
+                  <span>Register Another Student</span>
+                </button>
+              </div>
+
+              {/* Bottom Tagline with Orange Separators */}
+              <div className="flex items-center justify-center gap-2 pt-1 pb-1 w-full">
+                <span className="h-[1.5px] flex-1 max-w-[60px] sm:max-w-[100px] bg-amber-500 rounded-full"></span>
+                <span className="text-[#800020] italic font-black text-xs sm:text-sm tracking-wide">
+                  Thank you for choosing Birla Open Minds!
+                </span>
+                <span className="h-[1.5px] flex-1 max-w-[60px] sm:max-w-[100px] bg-amber-500 rounded-full"></span>
+              </div>
             </div>
           </div>
         ) : (
@@ -324,7 +406,7 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
               {/* Student Name */}
               <div className="space-y-1.5">
                 <label className="block text-xs font-black text-slate-200 tracking-wide">
-                  Student Full Name <span className="text-orange-500">*</span>
+                  Student's Full Name <span className="text-orange-500">*</span>
                 </label>
                 <input
                   type="text"
@@ -372,11 +454,11 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
                 </select>
               </div>
 
-              {/* 2. Mobile Contact Number - Strictly 10 Digits */}
+              {/* 2. Contact Number - Strictly 10 Digits */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <label className="block text-xs font-black text-slate-200 tracking-wide">
-                    Mobile Contact Number <span className="text-orange-500">*</span>
+                    Contact Number <span className="text-orange-500">*</span>
                   </label>
                   <span className={`text-[10px] font-extrabold ${contactNo.length === 10 ? 'text-emerald-400' : 'text-amber-400'}`}>
                     {contactNo.length === 10 ? '✓ Valid 10 Digits' : `${contactNo.length}/10 digits`}
