@@ -10,7 +10,8 @@ import {
   Phone,
   User,
   GraduationCap,
-  Building2
+  Building2,
+  Printer
 } from "lucide-react";
 import { ParentSelfEntry } from "../types";
 import { isFirebaseConfigured, saveDocument } from "../utils/firebase";
@@ -64,6 +65,7 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
   const [phoneError, setPhoneError] = useState("");
   const [whatsappNo, setWhatsappNo] = useState("");
   const [previousSchool, setPreviousSchool] = useState("");
+  const [residentialAddress, setResidentialAddress] = useState("");
   const [heardAboutSchool, setHeardAboutSchool] = useState<string[]>(["Google / Online Search"]);
   const [reasonForChoosing, setReasonForChoosing] = useState("");
 
@@ -111,6 +113,7 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
       contactNo: cleanPhone,
       whatsappNo: (whatsappNo.trim() || cleanPhone).replace(/\D/g, "").slice(0, 10),
       previousSchool: previousSchool.trim(),
+      residentialAddress: residentialAddress.trim(),
       heardAboutSchool,
       reasonForChoosing: reasonForChoosing.trim(),
       submittedAt: now.toISOString(),
@@ -190,6 +193,7 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
     setPhoneError("");
     setWhatsappNo("");
     setPreviousSchool("");
+    setResidentialAddress("");
     setReasonForChoosing("");
     setIsSubmittedSuccess(false);
   };
@@ -363,12 +367,20 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
                 </div>
               </div>
 
-              {/* Register Another Student Button */}
-              <div className="pt-1">
+              {/* Register Another Student & Print Slip Buttons */}
+              <div className="pt-1 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="flex-1 py-3 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs sm:text-sm font-black shadow-md transition-all cursor-pointer flex items-center justify-center gap-1.5 active:scale-95 border border-amber-500"
+                >
+                  <Printer size={16} />
+                  <span>Print Slip</span>
+                </button>
                 <button
                   type="button"
                   onClick={handleResetForm}
-                  className="w-full py-3 bg-gradient-to-r from-[#800020] via-[#991b1b] to-[#c2410c] hover:from-[#6b001a] hover:to-[#9a3412] text-white rounded-xl text-xs sm:text-sm font-black shadow-lg shadow-rose-950/20 transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-95"
+                  className="flex-[2] py-3 bg-gradient-to-r from-[#800020] via-[#991b1b] to-[#c2410c] hover:from-[#6b001a] hover:to-[#9a3412] text-white rounded-xl text-xs sm:text-sm font-black shadow-lg shadow-rose-950/20 transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-95"
                 >
                   <Sparkles size={16} />
                   <span>Register Another Student</span>
@@ -526,6 +538,20 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
                   value={previousSchool}
                   onChange={(e) => setPreviousSchool(e.target.value)}
                   placeholder="e.g. DPS School / St. Joseph CBSE"
+                  className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all"
+                />
+              </div>
+
+              {/* Residential Address */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-black text-slate-200 tracking-wide">
+                  Residential Address (Area / Locality)
+                </label>
+                <input
+                  type="text"
+                  value={residentialAddress}
+                  onChange={(e) => setResidentialAddress(e.target.value)}
+                  placeholder="e.g. Plot 45, Green Hills Colony, LB Nagar"
                   className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all"
                 />
               </div>

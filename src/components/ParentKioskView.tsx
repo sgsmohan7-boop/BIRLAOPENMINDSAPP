@@ -112,6 +112,7 @@ export default function ParentKioskView({
   const [phoneError, setPhoneError] = useState("");
   const [whatsappNo, setWhatsappNo] = useState("");
   const [previousSchool, setPreviousSchool] = useState("");
+  const [residentialAddress, setResidentialAddress] = useState("");
   const [heardAboutSchool, setHeardAboutSchool] = useState<string[]>(["Google/Online"]);
   const [reasonForChoosing, setReasonForChoosing] = useState("");
 
@@ -207,6 +208,7 @@ export default function ParentKioskView({
       contactNo: cleanPhone,
       whatsappNo: (whatsappNo.trim() || cleanPhone).replace(/\D/g, "").slice(0, 10),
       previousSchool: previousSchool.trim(),
+      residentialAddress: residentialAddress.trim(),
       heardAboutSchool,
       reasonForChoosing: reasonForChoosing.trim(),
       submittedAt: now.toISOString(),
@@ -270,6 +272,7 @@ export default function ParentKioskView({
     setPhoneError("");
     setWhatsappNo("");
     setPreviousSchool("");
+    setResidentialAddress("");
     setReasonForChoosing("");
     setIsSubmittedSuccess(false);
   };
@@ -678,12 +681,20 @@ export default function ParentKioskView({
                   </div>
                 </div>
 
-                {/* Register Another Student Button */}
-                <div className="pt-1 flex justify-center">
+                {/* Register Another Student & Print Slip Buttons */}
+                <div className="pt-1 flex items-center justify-center gap-3 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    className="px-6 py-3 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs sm:text-sm font-black shadow-md transition-all cursor-pointer flex items-center justify-center gap-1.5 active:scale-95 border border-amber-500"
+                  >
+                    <Printer size={16} />
+                    <span>Print Slip</span>
+                  </button>
                   <button
                     type="button"
                     onClick={handleResetForm}
-                    className="w-full sm:w-auto px-8 py-3 bg-gradient-to-r from-[#800020] via-[#991b1b] to-[#c2410c] hover:from-[#6b001a] hover:to-[#9a3412] text-white rounded-xl text-xs sm:text-sm font-black shadow-lg shadow-rose-950/20 transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-95"
+                    className="px-8 py-3 bg-gradient-to-r from-[#800020] via-[#991b1b] to-[#c2410c] hover:from-[#6b001a] hover:to-[#9a3412] text-white rounded-xl text-xs sm:text-sm font-black shadow-lg shadow-rose-950/20 transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-95"
                   >
                     <Sparkles size={16} />
                     <span>Register Another Student</span>
@@ -839,6 +850,20 @@ export default function ParentKioskView({
                       value={previousSchool}
                       onChange={(e) => setPreviousSchool(e.target.value)}
                       placeholder="e.g. DPS School, Hyderabad / St. Joseph CBSE"
+                      className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all"
+                    />
+                  </div>
+
+                  {/* Residential Address */}
+                  <div className="sm:col-span-2 space-y-1">
+                    <label className="block text-xs font-black text-slate-200 tracking-wide">
+                      Residential Address (Area / Locality)
+                    </label>
+                    <input
+                      type="text"
+                      value={residentialAddress}
+                      onChange={(e) => setResidentialAddress(e.target.value)}
+                      placeholder="e.g. Plot 45, Green Hills Colony, LB Nagar"
                       className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all"
                     />
                   </div>

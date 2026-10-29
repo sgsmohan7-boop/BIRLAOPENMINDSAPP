@@ -270,6 +270,7 @@ export interface CounsellingEnquiry {
   whatsappNo: string;
   previousSchool: string;
   previousClass: string;
+  residentialAddress?: string;
 
   // 2. Parent Enquiry
   heardAboutSchool: string[]; // ["Google/Online", "Website", "Reference", "Existing Parent", "Advertisement", "Other"]
@@ -346,6 +347,7 @@ export interface ParentSelfEntry {
   whatsappNo?: string;
   previousSchool?: string;
   previousClass?: string;
+  residentialAddress?: string;
   heardAboutSchool?: string[];
   reasonForChoosing?: string;
   preferredContact?: "Call" | "WhatsApp";

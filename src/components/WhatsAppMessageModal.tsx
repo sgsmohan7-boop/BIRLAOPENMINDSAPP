@@ -11,7 +11,8 @@ import {
   Calendar, 
   CheckCircle2, 
   Share2,
-  ExternalLink
+  ExternalLink,
+  Printer
 } from "lucide-react";
 import { CounsellingEnquiry, CounsellorAccount } from "../types";
 
@@ -20,13 +21,15 @@ interface WhatsAppMessageModalProps {
   onClose: () => void;
   enquiry: CounsellingEnquiry | null;
   activeCounsellor?: CounsellorAccount | null;
+  onPrint?: (enquiry: CounsellingEnquiry) => void;
 }
 
 export default function WhatsAppMessageModal({
   isOpen,
   onClose,
   enquiry,
-  activeCounsellor
+  activeCounsellor,
+  onPrint
 }: WhatsAppMessageModalProps) {
   const [templateType, setTemplateType] = useState<"thankyou" | "confirmed" | "test" | "followup">("thankyou");
   const [copiedText, setCopiedText] = useState(false);
@@ -303,24 +306,42 @@ Warm regards,
         </div>
 
         {/* Footer Buttons */}
-        <div className="p-4 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-3 shrink-0">
-          <button
-            type="button"
-            onClick={handleCopy}
-            className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer border border-slate-700"
-          >
-            {copiedText ? <Check size={15} className="text-emerald-400" /> : <Copy size={15} />}
-            <span>{copiedText ? "Copied Message!" : "Copy Text"}</span>
-          </button>
+        <div className="p-4 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-2.5 flex-wrap shrink-0">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer border border-slate-700"
+            >
+              {copiedText ? <Check size={15} className="text-emerald-400" /> : <Copy size={15} />}
+              <span>{copiedText ? "Copied!" : "Copy Text"}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                if (onPrint && enquiry) {
+                  onPrint(enquiry);
+                } else {
+                  window.print();
+                }
+              }}
+              className="px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black shadow-md transition-all flex items-center gap-1.5 cursor-pointer border border-amber-500 active:scale-95"
+              title="Print official physical admission sheet"
+            >
+              <Printer size={15} />
+              <span>🖨️ Print Form / Slip</span>
+            </button>
+          </div>
 
           <button
             type="button"
             onClick={handleOpenWhatsApp}
-            className="px-6 py-3 bg-gradient-to-r from-emerald-500 via-teal-600 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white rounded-xl text-xs font-black shadow-xl transition-all flex items-center gap-2 cursor-pointer active:scale-95 border border-emerald-400"
+            className="px-5 py-2.5 bg-gradient-to-r from-emerald-500 via-teal-600 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white rounded-xl text-xs font-black shadow-xl transition-all flex items-center gap-2 cursor-pointer active:scale-95 border border-emerald-400"
             title={`Send official WhatsApp message to ${phoneNo}`}
           >
             <Send size={16} />
-            <span>📱 Send via WhatsApp App / Web</span>
+            <span>📱 Send WhatsApp</span>
             <ExternalLink size={14} />
           </button>
         </div>

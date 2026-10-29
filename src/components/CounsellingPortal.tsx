@@ -599,28 +599,29 @@ export default function CounsellingPortal({
       whatsappNo: entry.whatsappNo || entry.contactNo || "",
       previousSchool: entry.previousSchool || "",
       previousClass: entry.previousClass || "",
-      heardAboutSchool: entry.heardAboutSchool && entry.heardAboutSchool.length > 0 ? entry.heardAboutSchool : ["Google/Online"],
+      residentialAddress: entry.residentialAddress || "",
+      heardAboutSchool: entry.heardAboutSchool && entry.heardAboutSchool.length > 0 ? entry.heardAboutSchool : [],
       reasonForChoosing: entry.reasonForChoosing || "",
       preferredContact: entry.preferredContact || "Call",
-      bestTimeToContact: "Morning 10 AM",
-      academicPerformance: "Good",
-      studentInterests: "Sports & Academics",
-      strengths: "Quick Learner",
-      areasNeedingSupport: "Standard",
+      bestTimeToContact: "",
+      academicPerformance: "",
+      studentInterests: "",
+      strengths: "",
+      areasNeedingSupport: "",
       transportRequired: entry.transportRequired || false,
       hostelRequired: false,
       specialLearningSupport: entry.specialLearningSupport || false,
       specialLearningDetails: "",
-      pointsDiscussed: `Parent ${entry.fatherName || entry.motherName || ''} submitted reception mobile QR registration for ${entry.studentName} (Class ${entry.applyingForClass}).`,
-      counsellorObservations: `Mobile QR entry registered by parent at reception on ${entry.formattedDate || new Date().toLocaleDateString()}.`,
-      explainedSchoolFacilities: true,
-      explainedAcademicProgramme: true,
-      explainedFeeStructure: true,
-      explainedTransportDetails: true,
-      explainedSchoolRules: true,
-      explainedActivitiesSports: true,
+      pointsDiscussed: "",
+      counsellorObservations: "",
+      explainedSchoolFacilities: false,
+      explainedAcademicProgramme: false,
+      explainedFeeStructure: false,
+      explainedTransportDetails: false,
+      explainedSchoolRules: false,
+      explainedActivitiesSports: false,
       admissionStatus: "Interested",
-      followUpDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toLocaleDateString("en-GB").replace(/\//g, "-"),
+      followUpDate: "",
       counsellorId: currentCounsellorId,
       counsellorName: currentCounsellorName,
       parentSignatureRecorded: true,
@@ -1030,10 +1031,11 @@ export default function CounsellingPortal({
       whatsappNo: "",
       previousSchool: "",
       previousClass: "",
-      heardAboutSchool: ["Website"],
+      residentialAddress: "",
+      heardAboutSchool: [],
       reasonForChoosing: "",
-      preferredContact: "WhatsApp",
-      bestTimeToContact: "Morning (10 AM - 12 PM)",
+      preferredContact: "Call",
+      bestTimeToContact: "",
       academicPerformance: "",
       studentInterests: "",
       strengths: "",
@@ -1044,12 +1046,12 @@ export default function CounsellingPortal({
       specialLearningDetails: "",
       pointsDiscussed: "",
       counsellorObservations: "",
-      explainedSchoolFacilities: true,
-      explainedAcademicProgramme: true,
-      explainedFeeStructure: true,
+      explainedSchoolFacilities: false,
+      explainedAcademicProgramme: false,
+      explainedFeeStructure: false,
       explainedTransportDetails: false,
-      explainedSchoolRules: true,
-      explainedActivitiesSports: true,
+      explainedSchoolRules: false,
+      explainedActivitiesSports: false,
       admissionStatus: "Interested",
       followUpDate: "",
       counsellorId: defaultCounsellor.id,
@@ -1130,6 +1132,11 @@ export default function CounsellingPortal({
     e.preventDefault();
     if (!formData.studentName.trim()) {
       setDeleteToast("⚠️ Please enter Student Name before saving.");
+      setTimeout(() => setDeleteToast(null), 3500);
+      return;
+    }
+    if (!formData.residentialAddress || !formData.residentialAddress.trim()) {
+      setDeleteToast("⚠️ Please enter Residential Address (mandatory field *).");
       setTimeout(() => setDeleteToast(null), 3500);
       return;
     }
@@ -1600,6 +1607,7 @@ export default function CounsellingPortal({
       "Mother Name",
       "Contact No",
       "WhatsApp No",
+      "Residential Address",
       "Admission Status",
       "Follow-up Date",
       "Counsellor ID",
@@ -1617,6 +1625,7 @@ export default function CounsellingPortal({
       `"${(e.motherName || "").replace(/"/g, '""')}"`,
       e.contactNo,
       e.whatsappNo,
+      `"${(e.residentialAddress || "").replace(/"/g, '""')}"`,
       e.admissionStatus,
       e.followUpDate || "",
       e.counsellorId || "",
@@ -2451,19 +2460,6 @@ export default function CounsellingPortal({
                                 )}
                               </p>
 
-                              {/* Dedicated Form Raised / Generated Date Bar */}
-                              <div className="mt-2 py-1 px-2.5 rounded-lg bg-slate-950/70 border border-slate-800 flex items-center justify-between text-[11px] font-mono">
-                                <span className="text-slate-400 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
-                                  <Calendar size={12} className="text-amber-400 shrink-0" />
-                                  <span>Form Raised Date:</span>
-                                </span>
-                                <span className="text-amber-300 font-extrabold flex items-center gap-1">
-                                  <span>{entry.entryDate || (entry.formattedDate ? entry.formattedDate.split(" ")[0] : "") || (entry.submittedAt ? new Date(entry.submittedAt).toLocaleDateString("en-GB").replace(/\//g, "-") : "")}</span>
-                                  {entry.formattedDate && entry.formattedDate.includes(" ") && (
-                                    <span className="text-slate-400 font-medium text-[10px]">({entry.formattedDate.split(" ")[1]})</span>
-                                  )}
-                                </span>
-                              </div>
 
                               <div className="flex items-center gap-2 mt-2">
                                 <a 
@@ -4251,6 +4247,20 @@ export default function CounsellingPortal({
                     className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
                   />
                 </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Residential Address <span className="text-red-500 font-black">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={formData.residentialAddress || ""}
+                    onChange={(e) => setFormData({ ...formData, residentialAddress: e.target.value })}
+                    placeholder="House / Flat No., Area / Locality, Landmark"
+                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500 font-medium transition-all"
+                  />
+                </div>
               </div>
             </div>
 
@@ -4813,13 +4823,14 @@ export default function CounsellingPortal({
                 <div><span className="font-bold">Student Name:</span> {selectedEnquiry.studentName}</div>
                 <div><span className="font-bold">Applying for Class:</span> {selectedEnquiry.applyingForClass}</div>
                 <div><span className="font-bold">Date of Birth:</span> {selectedEnquiry.dateOfBirth || "—"}</div>
-                <div><span className="font-bold">Gender:</span> [ {selectedEnquiry.gender === "Male" ? "X" : " "} ] Male  [ {selectedEnquiry.gender === "Female" ? "X" : " "} ] Female</div>
+                <div><span className="font-bold">Gender:</span> [ {selectedEnquiry.gender === "Male" ? "✓" : " "} ] Male  [ {selectedEnquiry.gender === "Female" ? "✓" : " "} ] Female</div>
                 <div><span className="font-bold">Father's Name:</span> {selectedEnquiry.fatherName || "—"}</div>
                 <div><span className="font-bold">Mother's Name:</span> {selectedEnquiry.motherName || "—"}</div>
                 <div><span className="font-bold">Contact No.:</span> {selectedEnquiry.contactNo}</div>
                 <div><span className="font-bold">WhatsApp No.:</span> {selectedEnquiry.whatsappNo || "—"}</div>
                 <div><span className="font-bold">Previous School:</span> {selectedEnquiry.previousSchool || "—"}</div>
                 <div><span className="font-bold">Previous Class:</span> {selectedEnquiry.previousClass || "—"}</div>
+                <div className="col-span-2"><span className="font-bold">Residential Address:</span> {selectedEnquiry.residentialAddress || "—"}</div>
               </div>
             </div>
 
@@ -4834,14 +4845,14 @@ export default function CounsellingPortal({
                   <div className="flex gap-4 flex-wrap mt-1">
                     {SOURCES.map(s => (
                       <span key={s}>
-                        [ {(selectedEnquiry.heardAboutSchool || []).includes(s) ? "X" : " "} ] {s}
+                        [ {(selectedEnquiry.heardAboutSchool || []).includes(s) ? "✓" : " "} ] {s}
                       </span>
                     ))}
                   </div>
                 </div>
                 <div><span className="font-bold">Reason for choosing our school:</span> {selectedEnquiry.reasonForChoosing || "—"}</div>
                 <div className="grid grid-cols-2">
-                  <div><span className="font-bold">Preferred Contact:</span> [ {selectedEnquiry.preferredContact === "Call" ? "X" : " "} ] Call  [ {selectedEnquiry.preferredContact === "WhatsApp" ? "X" : " "} ] WhatsApp</div>
+                  <div><span className="font-bold">Preferred Contact:</span> [ {selectedEnquiry.preferredContact === "Call" ? "✓" : " "} ] Call  [ {selectedEnquiry.preferredContact === "WhatsApp" ? "✓" : " "} ] WhatsApp</div>
                   <div><span className="font-bold">Best time to contact:</span> {selectedEnquiry.bestTimeToContact || "—"}</div>
                 </div>
               </div>
@@ -4857,10 +4868,10 @@ export default function CounsellingPortal({
                 <div><span className="font-bold">Student Interests/Talents:</span> {selectedEnquiry.studentInterests || "—"}</div>
                 <div><span className="font-bold">Strengths:</span> {selectedEnquiry.strengths || "—"}</div>
                 <div><span className="font-bold">Areas needing support:</span> {selectedEnquiry.areasNeedingSupport || "—"}</div>
-                <div><span className="font-bold">Transport Required:</span> [ {selectedEnquiry.transportRequired ? "X" : " "} ] Yes  [ {!selectedEnquiry.transportRequired ? "X" : " "} ] No</div>
+                <div><span className="font-bold">Transport Required:</span> [ {selectedEnquiry.transportRequired === true ? "✓" : " "} ] Yes  [ {selectedEnquiry.transportRequired === false ? "✓" : " "} ] No</div>
                 <div>
-                  <span className="font-bold">Special Learning/Support Requirement:</span> [ {selectedEnquiry.specialLearningSupport ? "X" : " "} ] Yes  [ {!selectedEnquiry.specialLearningSupport ? "X" : " "} ] No
-                  {selectedEnquiry.specialLearningSupport && ` (Details: ${selectedEnquiry.specialLearningDetails})`}
+                  <span className="font-bold">Special Learning/Support Requirement:</span> [ {selectedEnquiry.specialLearningSupport === true ? "✓" : " "} ] Yes  [ {selectedEnquiry.specialLearningSupport === false ? "✓" : " "} ] No
+                  {selectedEnquiry.specialLearningSupport && ` (Details: ${selectedEnquiry.specialLearningDetails || "—"})`}
                 </div>
               </div>
             </div>
@@ -4868,31 +4879,11 @@ export default function CounsellingPortal({
             {/* Section 4 */}
             <div className="border border-black mb-3">
               <div className="bg-slate-200 font-black px-2 py-1 uppercase border-b border-black text-[11px]">
-                4. COUNSELLING / INTERACTION NOTES &amp; AUDIO TRANSLATION
+                4. COUNSELLING / INTERACTION NOTES
               </div>
-              <div className="p-2 space-y-1.5 min-h-[70px]">
+              <div className="p-2 space-y-1.5 min-h-[60px]">
                 <div><span className="font-bold">Points discussed with parents:</span> {selectedEnquiry.pointsDiscussed || "—"}</div>
                 <div><span className="font-bold">Counsellor observations / additional remarks:</span> {selectedEnquiry.counsellorObservations || "—"}</div>
-                {selectedEnquiry.audioRecording?.translationSummary && (
-                  <div className="pt-1.5 mt-1.5 border-t border-dashed border-slate-400 space-y-1">
-                    <div>
-                      <span className="font-bold">Trilingual Audio Translation Summary (English):</span>{" "}
-                      {typeof selectedEnquiry.audioRecording.translationSummary === "string" 
-                        ? selectedEnquiry.audioRecording.translationSummary 
-                        : (selectedEnquiry.audioRecording.translationSummary as any).executiveSummary || JSON.stringify(selectedEnquiry.audioRecording.translationSummary)}
-                    </div>
-                    {selectedEnquiry.audioRecording.translatedDialogueTurns && selectedEnquiry.audioRecording.translatedDialogueTurns.length > 0 && (
-                      <div className="space-y-0.5 text-[11px]">
-                        <div className="font-bold">Speaker-Identified Translated Transcript:</div>
-                        {selectedEnquiry.audioRecording.translatedDialogueTurns.slice(0, 8).map((tr: any, i: number) => (
-                          <div key={tr.id || `tr-${tr.timestamp}-${i}`}>
-                            [{tr.timestamp}] <span className="font-bold">{tr.speaker}:</span> &ldquo;{tr.englishTranslation || tr.englishText}&rdquo;
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
               </div>
             </div>
 
@@ -4902,12 +4893,12 @@ export default function CounsellingPortal({
                 5. INFORMATION EXPLAINED
               </div>
               <div className="p-2 grid grid-cols-2 gap-2">
-                <div>School Facilities: [ {selectedEnquiry.explainedSchoolFacilities ? "X" : " "} ] Explained</div>
-                <div>Academic Programme: [ {selectedEnquiry.explainedAcademicProgramme ? "X" : " "} ] Explained</div>
-                <div>Fee Structure: [ {selectedEnquiry.explainedFeeStructure ? "X" : " "} ] Explained</div>
-                <div>Transport Details: [ {selectedEnquiry.explainedTransportDetails ? "X" : " "} ] Explained</div>
-                <div>School Rules/Policies: [ {selectedEnquiry.explainedSchoolRules ? "X" : " "} ] Explained</div>
-                <div>Activities / Sports: [ {selectedEnquiry.explainedActivitiesSports ? "X" : " "} ] Explained</div>
+                <div>School Facilities: [ {selectedEnquiry.explainedSchoolFacilities ? "✓" : " "} ] Explained</div>
+                <div>Academic Programme: [ {selectedEnquiry.explainedAcademicProgramme ? "✓" : " "} ] Explained</div>
+                <div>Fee Structure: [ {selectedEnquiry.explainedFeeStructure ? "✓" : " "} ] Explained</div>
+                <div>Transport Details: [ {selectedEnquiry.explainedTransportDetails ? "✓" : " "} ] Explained</div>
+                <div>School Rules/Policies: [ {selectedEnquiry.explainedSchoolRules ? "✓" : " "} ] Explained</div>
+                <div>Activities / Sports: [ {selectedEnquiry.explainedActivitiesSports ? "✓" : " "} ] Explained</div>
               </div>
             </div>
 
@@ -4927,7 +4918,7 @@ export default function CounsellingPortal({
                     "Not Interested"
                   ].map(status => (
                     <span key={status}>
-                      [ {selectedEnquiry.admissionStatus === status ? "X" : " "} ] {status}
+                      [ {selectedEnquiry.admissionStatus === status ? "✓" : " "} ] {status}
                     </span>
                   ))}
                 </div>
@@ -4953,14 +4944,6 @@ export default function CounsellingPortal({
                 </div>
               </div>
             </div>
-
-            {/* Office Use Only */}
-            <div className="text-center font-bold uppercase tracking-wider text-[11px] pt-1 border-t-2 border-black">
-              FOR SCHOOL OFFICE USE ONLY
-            </div>
-            {selectedEnquiry.officeRemarks && (
-              <p className="text-center italic text-slate-700 mt-0.5">{selectedEnquiry.officeRemarks}</p>
-            )}
           </div>
         </div>
       )}
@@ -5262,6 +5245,7 @@ export default function CounsellingPortal({
                       </a>
                     )}
                   </p>
+                  <p><strong className="text-slate-800 dark:text-slate-100">Residential Address:</strong> {inspectingEnquiry.residentialAddress || "N/A"}</p>
                 </div>
               </div>
             </div>
@@ -5667,6 +5651,10 @@ export default function CounsellingPortal({
           onClose={() => setWhatsAppModalEnquiry(null)}
           enquiry={whatsAppModalEnquiry}
           activeCounsellor={activeCounsellor}
+          onPrint={(enquiry) => {
+            setWhatsAppModalEnquiry(null);
+            viewPrintPreview(enquiry);
+          }}
         />
       )}
 
