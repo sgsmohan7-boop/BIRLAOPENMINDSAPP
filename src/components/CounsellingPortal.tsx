@@ -138,24 +138,27 @@ function deduplicateParentEntries(entries: ParentSelfEntry[]): ParentSelfEntry[]
 
   for (const [, dayItems] of byDate.entries()) {
     const activeItems = dayItems.filter(i => i.status !== "dismissed");
-    const tokens = activeItems.map(i => Number(i.dailyTokenNo)).filter(n => !isNaN(n) && n > 0);
-    const hasDuplicates = new Set(tokens).size < tokens.length;
-    const hasMissing = activeItems.some(i => !i.dailyTokenNo);
+    
+    // Sort chronologically by submittedAt so earlier submitted entries preserve their assigned tokens
+    activeItems.sort((a, b) => new Date(a.submittedAt).getTime() - new Date(b.submittedAt).getTime());
 
-    if (hasDuplicates || hasMissing) {
-      // Sort chronologically by submittedAt (earliest submitted first)
-      activeItems.sort((a, b) => new Date(a.submittedAt).getTime() - new Date(b.submittedAt).getTime());
-      let seq = 1;
-      for (const item of activeItems) {
-        if (item.dailyTokenNo !== seq) {
-          item.dailyTokenNo = seq;
-          try {
-            if (isFirebaseConfigured()) {
-              saveDocument("parent_self_entries", item.id, { dailyTokenNo: seq });
-            }
-          } catch {}
+    const usedTokens = new Set<number>();
+    for (const item of activeItems) {
+      const tokenNum = Number(item.dailyTokenNo);
+      if (!tokenNum || isNaN(tokenNum) || tokenNum <= 0 || usedTokens.has(tokenNum)) {
+        let nextSeq = 1;
+        while (usedTokens.has(nextSeq)) {
+          nextSeq++;
         }
-        seq++;
+        item.dailyTokenNo = nextSeq;
+        usedTokens.add(nextSeq);
+        try {
+          if (isFirebaseConfigured()) {
+            saveDocument("parent_self_entries", item.id, { dailyTokenNo: nextSeq });
+          }
+        } catch {}
+      } else {
+        usedTokens.add(tokenNum);
       }
     }
   }

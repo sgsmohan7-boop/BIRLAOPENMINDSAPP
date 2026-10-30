@@ -16,7 +16,7 @@ import {
   Clock
 } from "lucide-react";
 import { ParentSelfEntry } from "../types";
-import { isFirebaseConfigured, saveDocument } from "../utils/firebase";
+import { isFirebaseConfigured, saveDocument, getNextDailyTokenNo } from "../utils/firebase";
 
 interface ParentFormMobileOnlyProps {
   onSubmitSuccess?: (entry: ParentSelfEntry) => void;
@@ -125,6 +125,14 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
     const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const id = `PSE-${now.getFullYear()}-${Math.floor(100 + Math.random() * 900)}-${Date.now()}`;
 
+    // Calculate authoritative daily token S.No across Firestore, Server API, and Local Storage BEFORE creating entry
+    let dailyTokenNo = 1;
+    try {
+      dailyTokenNo = await getNextDailyTokenNo(dmy, dateKey);
+    } catch {
+      dailyTokenNo = 1;
+    }
+
     let finalEntry: ParentSelfEntry = {
       id,
       studentName: studentName.trim(),
@@ -141,6 +149,7 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
       submittedAt: now.toISOString(),
       formattedDate: `${dmy} ${timeStr}`,
       status: "pending",
+      dailyTokenNo,
       entryDate: dmy,
       dateKey
     };
@@ -156,32 +165,20 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
         const json = await res.json();
         if (json.success && json.entry && json.entry.dailyTokenNo) {
           finalEntry.dailyTokenNo = json.entry.dailyTokenNo;
+          dailyTokenNo = json.entry.dailyTokenNo;
         }
       }
     } catch (err) {
       console.warn("Server parent entry post error:", err);
     }
 
-    if (!finalEntry.dailyTokenNo) {
-      let todayCount = 0;
-      try {
-        const existingRaw = localStorage.getItem("parent_self_entries");
-        const existingList: ParentSelfEntry[] = existingRaw ? JSON.parse(existingRaw) : [];
-        todayCount = existingList.filter(e => {
-          const itemDate = e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
-          return itemDate === dmy || e.dateKey === dateKey;
-        }).length;
-      } catch {}
-      finalEntry.dailyTokenNo = todayCount + 1;
-    }
-
-    setAssignedToken(finalEntry.dailyTokenNo);
+    setAssignedToken(dailyTokenNo);
     setSubmissionTimestamp({
       date: dmy,
       time: timeStr
     });
 
-    // 2. Direct real-time Firebase Firestore save so counsellor sees it within 100ms on desktop!
+    // 2. Direct real-time Firebase Firestore save with verified token number so counsellor sees it within 100ms
     try {
       if (isFirebaseConfigured()) {
         await saveDocument("parent_self_entries", id, finalEntry);
@@ -194,7 +191,7 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
     try {
       const existingRaw = localStorage.getItem("parent_self_entries");
       const existing: ParentSelfEntry[] = existingRaw ? JSON.parse(existingRaw) : [];
-      const updated = [finalEntry, ...existing];
+      const updated = [finalEntry, ...existing.filter(e => e.id !== id)];
       localStorage.setItem("parent_self_entries", JSON.stringify(updated));
       window.dispatchEvent(new CustomEvent("parent_self_entry_added", { detail: finalEntry }));
     } catch (err) {
