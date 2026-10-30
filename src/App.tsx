@@ -1543,7 +1543,7 @@ export default function App() {
       case "counselling-dept":
       case "counselling-portal":
         return (
-          <div className="flex-1 overflow-y-auto p-4 md:p-6 custom-scrollbar">
+          <div className="h-full w-full overflow-y-auto custom-scrollbar">
             <CounsellingPortal
               enquiries={counsellingEnquiries}
               onSaveEnquiry={handleSaveCounselling}
@@ -1609,7 +1609,7 @@ export default function App() {
       default:
         if (userRole === "Counsellor") {
           return (
-            <div className="flex-1 overflow-y-auto p-4 md:p-6 custom-scrollbar">
+            <div className="h-full w-full overflow-y-auto custom-scrollbar">
               <CounsellingPortal
                 enquiries={counsellingEnquiries}
                 onSaveEnquiry={handleSaveCounselling}
@@ -1714,7 +1714,7 @@ export default function App() {
   if (userRole === "Counsellor") {
     return (
       <React.Suspense fallback={<div className="flex h-screen w-screen items-center justify-center bg-slate-900"><AnimatedLoading size="w-16 h-16" /></div>}>
-        <div className="min-h-screen w-full overflow-y-auto bg-slate-100 dark:bg-slate-950 custom-scrollbar">
+        <div className="h-screen w-full overflow-y-auto bg-slate-100 dark:bg-slate-950 custom-scrollbar">
           <PortalErrorBoundary sectionName="Parent Counselling & Admissions Department" onReset={handleSyncRefresh}>
             <CounsellingPortal
               enquiries={counsellingEnquiries}
@@ -1741,7 +1741,7 @@ export default function App() {
   if (userRole === "Management") {
     return (
       <React.Suspense fallback={<div className="flex h-screen w-screen items-center justify-center bg-slate-900"><AnimatedLoading size="w-16 h-16" /></div>}>
-        <div className="min-h-screen w-full overflow-y-auto bg-slate-100 dark:bg-slate-950 custom-scrollbar">
+        <div className="h-screen w-full overflow-y-auto bg-slate-100 dark:bg-slate-950 custom-scrollbar">
           <PortalErrorBoundary sectionName="Executive Management Portal" onReset={handleSyncRefresh}>
             <ManagementPortal
               enquiries={counsellingEnquiries}
@@ -1918,7 +1918,7 @@ export default function App() {
           </div>
         )}
 
-        <div className="flex-1 overflow-auto relative">
+        <div className="flex-1 overflow-hidden relative">
           <React.Suspense fallback={<div className="flex h-full w-full items-center justify-center p-8"><AnimatedLoading size="w-16 h-16" /></div>}>
             <AnimatePresence mode="wait">
               <motion.div
@@ -1927,7 +1927,7 @@ export default function App() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}
-                className="h-full w-full"
+                className="h-full w-full overflow-hidden"
               >
                 <PortalErrorBoundary sectionName={`Department View (${currentTab})`}>
                   {renderTabContent()}

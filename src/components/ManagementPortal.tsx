@@ -901,7 +901,7 @@ CONFIDENTIAL - FOR BOARD OF DIRECTORS & PRINCIPAL REVIEW ONLY
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans p-4 md:p-6 space-y-6">
       {/* EXECUTIVE HEADER */}
-      <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-2xl p-6 shadow-xl border border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+      <div className="sticky top-0 z-50 -mt-4 -mx-4 md:-mt-6 md:-mx-6 mb-6 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-b-2xl p-6 shadow-2xl border-b border-slate-800 backdrop-blur-xl flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div className="flex items-center gap-4">
           <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-amber-500 via-orange-500 to-indigo-600 p-0.5 shadow-lg shrink-0">
             <div className="w-full h-full bg-slate-900 rounded-2xl flex items-center justify-center text-white">

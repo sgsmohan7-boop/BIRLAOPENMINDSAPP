@@ -2060,37 +2060,37 @@ export default function CounsellingPortal({
   };
 
   return (
-    <div className={`space-y-6 pb-24 ${standalone ? "min-h-screen w-full bg-slate-100 dark:bg-slate-950 p-4 md:p-8 custom-scrollbar" : ""}`}>
-      {/* Standalone Top Bar if accessed directly from Login Portal */}
-      {standalone && (
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-2xl shadow-md flex items-center justify-between gap-4">
+    <div className={`space-y-6 pb-24 ${standalone ? "w-full bg-slate-100 dark:bg-slate-950 p-4 md:p-8 custom-scrollbar" : ""}`}>
+      {/* Top Sticky Navigation Header Bar (Remains visible & highlighted on scroll) */}
+      <div className="sticky top-0 z-50 pt-1 pb-2 -mt-1 bg-slate-100/90 dark:bg-slate-950/90 backdrop-blur-md transition-all">
+        <div className="bg-white/98 dark:bg-slate-900/98 backdrop-blur-xl border border-slate-200/90 dark:border-slate-800/90 p-3.5 sm:p-4 rounded-2xl shadow-xl flex items-center justify-between gap-3 sm:gap-4 transition-all ring-1 ring-slate-900/5 dark:ring-white/10">
           <div className="flex items-center gap-3">
             <img 
               src="/birla_open_minds_logo.png" 
               alt="Logo" 
-              className="w-10 h-10 rounded-xl border border-slate-200 object-contain bg-white p-1"
+              className="w-10 h-10 rounded-xl border border-slate-200 object-contain bg-white p-1 shadow-sm"
             />
             <div>
-              <h2 className="text-xs font-black uppercase text-orange-600 tracking-wider">
+              <h2 className="text-[11px] sm:text-xs font-black uppercase text-orange-600 dark:text-orange-400 tracking-wider">
                 Birla Open Minds International School
               </h2>
-              <p className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2">
+              <p className="text-xs sm:text-sm font-black text-slate-900 dark:text-white flex items-center gap-2">
                 <span>Counselling Department Portal</span>
-                <span className="px-2 py-0.5 rounded-full bg-orange-100 dark:bg-orange-950 text-orange-700 dark:text-orange-300 text-[10px] font-bold">
-                  Standalone Portal
+                <span className="px-2 py-0.5 rounded-full bg-orange-100 dark:bg-orange-950 text-orange-700 dark:text-orange-300 text-[10px] font-extrabold border border-orange-200 dark:border-orange-800">
+                  Official Desk
                 </span>
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5 sm:gap-3">
             {userRole !== "Counsellor" && (
               <button
                 type="button"
                 onClick={() => {
                   window.location.href = "/?portal=management";
                 }}
-                className="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-purple-50 hover:bg-purple-100 dark:bg-purple-950/60 dark:hover:bg-purple-900/60 border border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                className="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-purple-50 hover:bg-purple-100 dark:bg-purple-950/60 dark:hover:bg-purple-900/60 border border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs"
                 title="Open Executive Management Portal"
               >
                 <Award size={14} className="text-purple-500" />
@@ -2098,25 +2098,25 @@ export default function CounsellingPortal({
               </button>
             )}
 
-            {/* Active Counsellor Workspace Selector (Locked for Counsellor role) */}
+            {/* Highlighted Active Counsellor Profile Badge (sravan COUNSELLOR - 02 removed) */}
             {userRole === "Counsellor" ? (
-              <div className="flex items-center gap-2 px-3 py-1.5 bg-orange-50 dark:bg-slate-800 border border-orange-200 dark:border-slate-700 rounded-xl" title="Private Locked Counsellor Workspace">
-                <div className="w-7 h-7 rounded-full bg-orange-600 text-white flex items-center justify-center font-bold text-xs shrink-0">
-                  {activeCounsellor?.name ? activeCounsellor.name.slice(0, 2).toUpperCase() : "CN"}
+              <div className="flex items-center gap-2.5 px-3.5 py-1.5 bg-amber-100/90 dark:bg-orange-950/80 border-2 border-amber-400 dark:border-amber-500/80 rounded-2xl shadow-md ring-2 ring-amber-400/30 transition-all" title="Private Active Counsellor Workspace">
+                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-orange-600 via-amber-600 to-yellow-600 text-white flex items-center justify-center font-black text-xs shrink-0 shadow-sm border border-amber-300">
+                  {activeCounsellor?.name ? activeCounsellor.name.slice(0, 2).toUpperCase() : "SR"}
                 </div>
                 <div className="text-left leading-tight pr-1">
-                  <span className="block text-xs font-black text-slate-800 dark:text-slate-100">
-                    {activeCounsellor?.name || "Counsellor"}
+                  <span className="block text-xs font-black text-slate-900 dark:text-amber-100 tracking-wide">
+                    {activeCounsellor?.name || "sravan"}
                   </span>
-                  <span className="block text-[10px] font-mono font-bold text-orange-600 dark:text-orange-400">
-                    🔒 {activeCounsellor?.id || "COUNSELLOR"}
+                  <span className="block text-[10px] font-black text-[#800020] dark:text-amber-400 uppercase tracking-wider">
+                    🔒 {activeCounsellor?.name?.toLowerCase().includes("sravan") ? "sravan COUNSELLOR" : `${activeCounsellor?.name || "sravan"} COUNSELLOR`}
                   </span>
                 </div>
               </div>
             ) : (
-              <div className="flex items-center gap-2 px-3 py-1.5 bg-orange-50 dark:bg-slate-800 border border-orange-200 dark:border-slate-700 rounded-xl">
-                <div className="w-7 h-7 rounded-full bg-orange-600 text-white flex items-center justify-center font-bold text-xs shrink-0">
-                  {activeCounsellor?.name ? activeCounsellor.name.slice(0, 2).toUpperCase() : "CN"}
+              <div className="flex items-center gap-2.5 px-3.5 py-1.5 bg-amber-100/90 dark:bg-orange-950/80 border-2 border-amber-400 dark:border-amber-500/80 rounded-2xl shadow-md ring-2 ring-amber-400/30 transition-all">
+                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-orange-600 via-amber-600 to-yellow-600 text-white flex items-center justify-center font-black text-xs shrink-0 shadow-sm border border-amber-300">
+                  {activeCounsellor?.name ? activeCounsellor.name.slice(0, 2).toUpperCase() : "SR"}
                 </div>
                 <select
                   value={activeCounsellor?.id || ""}
@@ -2132,12 +2132,12 @@ export default function CounsellingPortal({
                       window.history.replaceState({}, "", url.toString());
                     }
                   }}
-                  className="bg-transparent text-xs font-bold text-slate-800 dark:text-slate-200 focus:outline-none cursor-pointer pr-1"
+                  className="bg-transparent text-xs font-black text-slate-900 dark:text-amber-100 focus:outline-none cursor-pointer pr-1"
                   title="Switch Active Counsellor Workspace"
                 >
                   {localAccounts.map(c => (
-                    <option key={`hdr-c-opt-${c.id}`} value={c.id} className="text-slate-900 bg-white dark:bg-slate-800 dark:text-white font-medium">
-                      {c.name} ({c.id})
+                    <option key={`hdr-c-opt-${c.id}`} value={c.id} className="text-slate-900 bg-white dark:bg-slate-800 dark:text-white font-bold">
+                      {c.name} COUNSELLOR
                     </option>
                   ))}
                 </select>
@@ -2191,7 +2191,7 @@ export default function CounsellingPortal({
             )}
           </div>
         </div>
-      )}
+      </div>
 
       {/* Main Banner */}
       <div className="bg-gradient-to-r from-orange-600 via-amber-600 to-indigo-700 text-white p-6 rounded-2xl shadow-xl flex flex-col md:flex-row md:items-center md:justify-between gap-4">

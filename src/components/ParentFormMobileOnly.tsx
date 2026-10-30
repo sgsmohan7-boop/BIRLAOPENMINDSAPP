@@ -607,7 +607,7 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
                   </span>
                 </div>
                 <p className="mt-2 text-slate-700 font-bold text-xs sm:text-sm">
-                  Your admission form has been submitted successfully!
+                  Your enquiry form has been submitted successfully!
                 </p>
 
                 {/* Submission Date & Time Badge */}
