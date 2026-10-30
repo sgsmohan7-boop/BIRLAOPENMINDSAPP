@@ -98,7 +98,7 @@ export default function ReceptionQueueModal({
     return new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime();
   });
 
-  const allClaimedList = [...entries.filter(e => e.status === "claimed" && isClaimedByMe(e))].sort((a, b) => {
+  const allClaimedList = [...entries.filter(e => e.status === "claimed")].sort((a, b) => {
     return new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime();
   });
 
@@ -378,11 +378,22 @@ export default function ReceptionQueueModal({
                       )}
 
                       {!isPending && (
-                        <div className="p-2 bg-emerald-950/40 border border-emerald-500/30 rounded-xl text-xs text-emerald-300 flex items-center gap-2">
-                          <ShieldCheck size={16} className="text-emerald-400 shrink-0" />
-                          <span>
-                            Claimed by <strong>{entry.claimedByName || entry.claimedBy || "Counsellor"}</strong>
-                          </span>
+                        <div className={`p-2 rounded-xl text-xs flex items-center justify-between gap-2 ${
+                          isClaimedByMe(entry) 
+                            ? "bg-emerald-950/40 border border-emerald-500/30 text-emerald-300"
+                            : "bg-amber-950/40 border border-amber-500/30 text-amber-300"
+                        }`}>
+                          <div className="flex items-center gap-2">
+                            <ShieldCheck size={16} className={isClaimedByMe(entry) ? "text-emerald-400 shrink-0" : "text-amber-400 shrink-0"} />
+                            <span>
+                              Claimed by <strong>{entry.claimedByName || entry.claimedBy || "Counsellor"}</strong>
+                            </span>
+                          </div>
+                          {!isClaimedByMe(entry) && (
+                            <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 text-[10px] font-mono font-bold">
+                              In Session
+                            </span>
+                          )}
                         </div>
                       )}
                     </div>
@@ -412,7 +423,7 @@ export default function ReceptionQueueModal({
                           </button>
                         )}
                       </div>
-                    ) : (
+                    ) : isClaimedByMe(entry) ? (
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
@@ -436,6 +447,15 @@ export default function ReceptionQueueModal({
                             <Trash2 size={15} />
                           </button>
                         )}
+                      </div>
+                    ) : (
+                      <div className="py-2 px-3 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-400 flex items-center justify-between font-medium">
+                        <span className="flex items-center gap-1.5 text-amber-300/90 font-bold">
+                          🔒 In Session with {entry.claimedByName || entry.claimedBy || "Other Counsellor"}
+                        </span>
+                        <span className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded font-mono font-bold">
+                          Read Only
+                        </span>
                       </div>
                     )}
                   </div>
