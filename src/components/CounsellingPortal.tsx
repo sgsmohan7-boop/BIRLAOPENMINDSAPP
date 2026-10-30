@@ -379,6 +379,47 @@ export default function CounsellingPortal({
     return null;
   });
 
+  const [isRefreshingDept, setIsRefreshingDept] = useState(false);
+
+  const handleRefreshDept = async () => {
+    setIsRefreshingDept(true);
+
+    try {
+      const res = await fetch("/api/parent-self-entry");
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && Array.isArray(json.entries)) {
+          setParentSelfEntries(prev => {
+            const combined = deduplicateParentEntries([...json.entries, ...(prev || [])]);
+            saveParentSelfEntries(combined);
+            return combined;
+          });
+        }
+      }
+    } catch {}
+
+    if (onSyncRefresh) {
+      try {
+        await Promise.resolve(onSyncRefresh());
+      } catch {}
+    }
+
+    const currentViewName = 
+      activeView === "audio-desk" ? "Meeting Audios" :
+      activeView === "form" ? "Admission Form" :
+      activeView === "accounts" ? "Counsellor Accounts" :
+      activeView === "print" ? "Print Preview" : "Enquiries Dashboard";
+
+    setDeleteToast(`🔄 Department data refreshed! (Stayed on ${currentViewName})`);
+
+    setTimeout(() => {
+      setIsRefreshingDept(false);
+    }, 800);
+    setTimeout(() => {
+      setDeleteToast(null);
+    }, 3500);
+  };
+
 
   const toggleLoungeCollapsed = () => {
     setIsLoungeCollapsed(prev => {
@@ -2051,17 +2092,31 @@ export default function CounsellingPortal({
               </div>
             )}
 
-            {onSyncRefresh && (
-              <button
-                type="button"
-                onClick={onSyncRefresh}
-                className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow cursor-pointer active:scale-95"
-                title="Refresh Counselling Department Data & Stay on Page"
-              >
-                <RefreshCw size={14} />
-                <span>Refresh Dept</span>
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => {
+                setActiveView("list");
+                setSelectedEnquiry(null);
+                setInspectingEnquiry(null);
+                setSelectedMetricCard(null);
+              }}
+              className="flex items-center gap-1.5 px-3 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-xl text-xs font-black transition-all shadow cursor-pointer active:scale-95"
+              title="Go to Counsellor Home Page"
+            >
+              <span className="text-sm">🏠</span>
+              <span>Home</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleRefreshDept}
+              disabled={isRefreshingDept}
+              className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-extrabold transition-all shadow cursor-pointer active:scale-95 disabled:opacity-60"
+              title="Refresh Counselling Department Data & Stay on Page"
+            >
+              <RefreshCw size={14} className={isRefreshingDept ? "animate-spin text-emerald-200" : ""} />
+              <span>{isRefreshingDept ? "Refreshing..." : "Refresh Dept"}</span>
+            </button>
 
             {toggleTheme && (
               <button
@@ -2109,6 +2164,26 @@ export default function CounsellingPortal({
         </div>
 
         <div className="flex items-center gap-2.5 flex-wrap">
+          {/* Prominent Counsellor Home Button */}
+          <button
+            type="button"
+            onClick={() => {
+              setActiveView("list");
+              setSelectedEnquiry(null);
+              setInspectingEnquiry(null);
+              setSelectedMetricCard(null);
+            }}
+            className={`px-4 py-2.5 rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer border shadow-md active:scale-95 ${
+              activeView === "list"
+                ? "bg-white text-orange-950 border-white font-black"
+                : "bg-white/15 hover:bg-white/25 text-white border-white/30"
+            }`}
+            title="Go directly to Counsellor Home Page (Enquiries List)"
+          >
+            <span className="text-base">🏠</span>
+            <span>Counsellor Home</span>
+          </button>
+
           <button
             type="button"
             onClick={() => {
@@ -5034,6 +5109,12 @@ export default function CounsellingPortal({
           userEmail={userEmail}
           initialCounsellorFilter={userRole === "Counsellor" && activeCounsellor ? activeCounsellor.name : "ALL"}
           counsellorAccounts={localAccounts}
+          onBackToHome={() => {
+            setActiveView("list");
+            setSelectedEnquiry(null);
+            setInspectingEnquiry(null);
+            setSelectedMetricCard(null);
+          }}
         />
       )}
 

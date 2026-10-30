@@ -71,6 +71,7 @@ interface ManagementAudioDeskProps {
   userEmail?: string;
   initialCounsellorFilter?: string;
   counsellorAccounts?: CounsellorAccount[];
+  onBackToHome?: () => void;
 }
 
 export default function ManagementAudioDesk({
@@ -79,7 +80,8 @@ export default function ManagementAudioDesk({
   userRole,
   userEmail,
   initialCounsellorFilter = "ALL",
-  counsellorAccounts = []
+  counsellorAccounts = [],
+  onBackToHome
 }: ManagementAudioDeskProps) {
   // Filter only enquiries that have an audio recording attached
   const recordedEnquiries = useMemo(() => {
@@ -897,7 +899,18 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT COACHING ONLY
       {/* Top Header Banner */}
       <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-6 rounded-2xl border border-slate-800 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="space-y-1">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            {onBackToHome && (
+              <button
+                type="button"
+                onClick={onBackToHome}
+                className="px-3.5 py-1.5 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white font-black rounded-xl text-xs transition-all flex items-center gap-1.5 shadow-md border border-amber-400/40 cursor-pointer mr-1 active:scale-95"
+                title="Return directly to Counsellor Home Page"
+              >
+                <span className="text-sm">🏠</span>
+                <span>Back to Counsellor Home</span>
+              </button>
+            )}
             <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 text-xs font-black tracking-wider uppercase border border-indigo-500/30">
               🎧 Executive Command Desk
             </span>
