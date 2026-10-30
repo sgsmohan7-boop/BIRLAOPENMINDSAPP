@@ -165,7 +165,16 @@ export default function CounsellingReportModal({
     let targetEnd: Date;
 
     const parseInputDate = (str: string) => {
-      const [y, m, d] = str.split("-").map(Number);
+      if (!str || typeof str !== "string") {
+        const fallback = new Date();
+        return new Date(fallback.getFullYear(), fallback.getMonth(), fallback.getDate(), 0, 0, 0, 0);
+      }
+      const parts = str.split("-").map(Number);
+      if (parts.length < 3 || isNaN(parts[0]) || isNaN(parts[1]) || isNaN(parts[2])) {
+        const fallback = new Date();
+        return new Date(fallback.getFullYear(), fallback.getMonth(), fallback.getDate(), 0, 0, 0, 0);
+      }
+      const [y, m, d] = parts;
       return new Date(y, m - 1, d, 0, 0, 0, 0);
     };
 

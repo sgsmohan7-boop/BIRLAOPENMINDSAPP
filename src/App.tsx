@@ -33,6 +33,7 @@ const CctvNvrStorageModal = React.lazy(() => import("./components/CctvNvrStorage
 const PortalLinksModal = React.lazy(() => import("./components/PortalLinksModal"));
 const AppInstallModal = React.lazy(() => import("./components/AppInstallModal"));
 const ParentFormMobileOnly = React.lazy(() => import("./components/ParentFormMobileOnly"));
+import PortalErrorBoundary from "./components/PortalErrorBoundary";
 
 
 import { loadData, saveData, calculateExpiryDate, resetToDefaults, clearAllData, loadCounselling, saveCounselling, deduplicateEnquiries, loadCounsellorAccounts, saveCounsellorAccounts, mergeWithDemoEnquiries, mergeWithDefaultCounsellorAccounts, recordDeletedCounsellorAccountId, unrecordDeletedCounsellorAccountId, recordDeletedCounsellorAccountIds, recordDeletedEnquiryId, recordDeletedEnquiryIds, getDeletedEnquiryIds, unmarkDeletedEnquiryId, mergeWithDefaultITStaffAccounts, saveITStaffAccounts, loadITStaffAccounts, recordDeletedITStaffAccountId } from "./utils/storage";
@@ -1641,11 +1642,13 @@ export default function App() {
   if (isParentKioskMode) {
     return (
       <React.Suspense fallback={<div className="flex h-screen w-screen items-center justify-center bg-slate-900"><AnimatedLoading size="w-16 h-16" /></div>}>
-        <ParentFormMobileOnly
-          onSubmitSuccess={(entry) => {
-            setCounsellingEnquiries(prev => deduplicateEnquiries([entry as any, ...prev]));
-          }}
-        />
+        <PortalErrorBoundary sectionName="Parent Registration Kiosk" onReset={() => setIsParentKioskMode(true)}>
+          <ParentFormMobileOnly
+            onSubmitSuccess={(entry) => {
+              setCounsellingEnquiries(prev => deduplicateEnquiries([entry as any, ...prev]));
+            }}
+          />
+        </PortalErrorBoundary>
       </React.Suspense>
     );
   }
@@ -1666,18 +1669,20 @@ export default function App() {
   if (userRole === "Teacher") {
     return (
       <React.Suspense fallback={<div className="flex h-screen w-screen items-center justify-center bg-slate-900"><AnimatedLoading size="w-16 h-16" /></div>}>
-        <TeacherPortal
-          rooms={rooms}
-          tickets={tickets}
-          history={history}
-          userBranch={userBranch}
-          userEmail={userEmail}
-          onLogout={handleLogout}
-          updateTickets={handleUpdateTickets}
-          theme={theme}
-          toggleTheme={toggleTheme}
-          onSyncRefresh={handleSyncRefresh}
-        />
+        <PortalErrorBoundary sectionName="Teacher Department Desk">
+          <TeacherPortal
+            rooms={rooms}
+            tickets={tickets}
+            history={history}
+            userBranch={userBranch}
+            userEmail={userEmail}
+            onLogout={handleLogout}
+            updateTickets={handleUpdateTickets}
+            theme={theme}
+            toggleTheme={toggleTheme}
+            onSyncRefresh={handleSyncRefresh}
+          />
+        </PortalErrorBoundary>
       </React.Suspense>
     );
   }
@@ -1686,7 +1691,9 @@ export default function App() {
     return (
       <React.Suspense fallback={<div className="flex h-screen w-screen items-center justify-center bg-slate-900"><AnimatedLoading size="w-16 h-16" /></div>}>
         <div className="min-h-screen w-full overflow-y-auto bg-slate-900 custom-scrollbar">
-          <DriverPortal onLogout={handleLogout} />
+          <PortalErrorBoundary sectionName="Driver & Transport Portal">
+            <DriverPortal onLogout={handleLogout} />
+          </PortalErrorBoundary>
         </div>
       </React.Suspense>
     );
@@ -1696,7 +1703,9 @@ export default function App() {
     return (
       <React.Suspense fallback={<div className="flex h-screen w-screen items-center justify-center bg-slate-900"><AnimatedLoading size="w-16 h-16" /></div>}>
         <div className="min-h-screen w-full overflow-y-auto bg-slate-100 dark:bg-slate-950 custom-scrollbar">
-          <StudentPortal onLogout={handleLogout} />
+          <PortalErrorBoundary sectionName="Student & Parent Portal">
+            <StudentPortal onLogout={handleLogout} />
+          </PortalErrorBoundary>
         </div>
       </React.Suspense>
     );
@@ -1706,22 +1715,24 @@ export default function App() {
     return (
       <React.Suspense fallback={<div className="flex h-screen w-screen items-center justify-center bg-slate-900"><AnimatedLoading size="w-16 h-16" /></div>}>
         <div className="min-h-screen w-full overflow-y-auto bg-slate-100 dark:bg-slate-950 custom-scrollbar">
-          <CounsellingPortal
-            enquiries={counsellingEnquiries}
-            onSaveEnquiry={handleSaveCounselling}
-            onDeleteEnquiry={handleDeleteCounselling}
-            onDeleteMultipleEnquiries={handleDeleteMultipleCounselling}
-            counsellorAccounts={counsellorAccounts}
-            onSaveCounsellorAccount={handleSaveCounsellorAccount}
-            onDeleteCounsellorAccount={handleDeleteCounsellorAccount}
-            userRole={userRole}
-            userEmail={userEmail}
-            onLogout={handleLogout}
-            standalone={true}
-            theme={theme}
-            toggleTheme={toggleTheme}
-            onSyncRefresh={handleSyncRefresh}
-          />
+          <PortalErrorBoundary sectionName="Parent Counselling & Admissions Department" onReset={handleSyncRefresh}>
+            <CounsellingPortal
+              enquiries={counsellingEnquiries}
+              onSaveEnquiry={handleSaveCounselling}
+              onDeleteEnquiry={handleDeleteCounselling}
+              onDeleteMultipleEnquiries={handleDeleteMultipleCounselling}
+              counsellorAccounts={counsellorAccounts}
+              onSaveCounsellorAccount={handleSaveCounsellorAccount}
+              onDeleteCounsellorAccount={handleDeleteCounsellorAccount}
+              userRole={userRole}
+              userEmail={userEmail}
+              onLogout={handleLogout}
+              standalone={true}
+              theme={theme}
+              toggleTheme={toggleTheme}
+              onSyncRefresh={handleSyncRefresh}
+            />
+          </PortalErrorBoundary>
         </div>
       </React.Suspense>
     );
@@ -1731,27 +1742,29 @@ export default function App() {
     return (
       <React.Suspense fallback={<div className="flex h-screen w-screen items-center justify-center bg-slate-900"><AnimatedLoading size="w-16 h-16" /></div>}>
         <div className="min-h-screen w-full overflow-y-auto bg-slate-100 dark:bg-slate-950 custom-scrollbar">
-          <ManagementPortal
-            enquiries={counsellingEnquiries}
-            onSaveEnquiry={handleSaveCounselling}
-            onDeleteEnquiry={handleDeleteCounselling}
-            counsellorAccounts={counsellorAccounts}
-            managementAccounts={managementAccounts}
-            onSaveManagementAccount={handleSaveManagementAccount}
-            onDeleteManagementAccount={handleDeleteManagementAccount}
-            onSaveCounsellorAccount={handleSaveCounsellorAccount}
-            onDeleteCounsellorAccount={handleDeleteCounsellorAccount}
-            tickets={tickets}
-            rooms={rooms}
-            inventory={inventory}
-            userRole={userRole}
-            userEmail={userEmail}
-            onLogout={handleLogout}
-            standalone={true}
-            theme={theme}
-            toggleTheme={toggleTheme}
-            onSyncRefresh={handleSyncRefresh}
-          />
+          <PortalErrorBoundary sectionName="Executive Management Portal" onReset={handleSyncRefresh}>
+            <ManagementPortal
+              enquiries={counsellingEnquiries}
+              onSaveEnquiry={handleSaveCounselling}
+              onDeleteEnquiry={handleDeleteCounselling}
+              counsellorAccounts={counsellorAccounts}
+              managementAccounts={managementAccounts}
+              onSaveManagementAccount={handleSaveManagementAccount}
+              onDeleteManagementAccount={handleDeleteManagementAccount}
+              onSaveCounsellorAccount={handleSaveCounsellorAccount}
+              onDeleteCounsellorAccount={handleDeleteCounsellorAccount}
+              tickets={tickets}
+              rooms={rooms}
+              inventory={inventory}
+              userRole={userRole}
+              userEmail={userEmail}
+              onLogout={handleLogout}
+              standalone={true}
+              theme={theme}
+              toggleTheme={toggleTheme}
+              onSyncRefresh={handleSyncRefresh}
+            />
+          </PortalErrorBoundary>
         </div>
       </React.Suspense>
     );
@@ -1916,7 +1929,9 @@ export default function App() {
                 transition={{ duration: 0.2 }}
                 className="h-full w-full"
               >
-                {renderTabContent()}
+                <PortalErrorBoundary sectionName={`Department View (${currentTab})`}>
+                  {renderTabContent()}
+                </PortalErrorBoundary>
               </motion.div>
             </AnimatePresence>
           </React.Suspense>
