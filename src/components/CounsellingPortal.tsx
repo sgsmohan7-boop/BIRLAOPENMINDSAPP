@@ -110,20 +110,61 @@ function deduplicateParentEntries(entries: ParentSelfEntry[]): ParentSelfEntry[]
       item.status = "dismissed";
     }
     if (!map.has(item.id)) {
-      map.set(item.id, item);
+      map.set(item.id, { ...item });
     } else {
       const existing = map.get(item.id)!;
       // If either has been dismissed or claimed, preserve that state so old snapshots don't revive it
       if (item.status === "dismissed" || existing.status === "dismissed") {
         map.set(item.id, { ...existing, ...item, status: "dismissed" });
       } else if (item.status === "claimed" || (item.claimedAt && !existing.claimedAt)) {
-        map.set(item.id, item);
+        map.set(item.id, { ...existing, ...item });
       }
     }
   }
-  return Array.from(map.values()).sort((a, b) => {
+
+  const result = Array.from(map.values());
+
+  // Auto-normalize daily token numbers per day so duplicate token #1 issues are fixed cleanly
+  const byDate = new Map<string, ParentSelfEntry[]>();
+  for (const item of result) {
+    const key = item.dateKey || item.entryDate || (item.formattedDate ? eDate(item) : "legacy");
+    if (!byDate.has(key)) byDate.set(key, []);
+    byDate.get(key)!.push(item);
+  }
+
+  function eDate(i: ParentSelfEntry): string {
+    return i.formattedDate ? i.formattedDate.split(" ")[0] : "";
+  }
+
+  for (const [, dayItems] of byDate.entries()) {
+    const activeItems = dayItems.filter(i => i.status !== "dismissed");
+    const tokens = activeItems.map(i => Number(i.dailyTokenNo)).filter(n => !isNaN(n) && n > 0);
+    const hasDuplicates = new Set(tokens).size < tokens.length;
+    const hasMissing = activeItems.some(i => !i.dailyTokenNo);
+
+    if (hasDuplicates || hasMissing) {
+      // Sort chronologically by submittedAt (earliest submitted first)
+      activeItems.sort((a, b) => new Date(a.submittedAt).getTime() - new Date(b.submittedAt).getTime());
+      let seq = 1;
+      for (const item of activeItems) {
+        if (item.dailyTokenNo !== seq) {
+          item.dailyTokenNo = seq;
+          try {
+            if (isFirebaseConfigured()) {
+              saveDocument("parent_self_entries", item.id, { dailyTokenNo: seq });
+            }
+          } catch {}
+        }
+        seq++;
+      }
+    }
+  }
+
+  return result.sort((a, b) => {
     // Today's entries ordered by daily token number ascending
-    if (a.dateKey && a.dateKey === b.dateKey && a.dailyTokenNo && b.dailyTokenNo) {
+    const aDate = a.dateKey || a.entryDate || (a.formattedDate ? a.formattedDate.split(" ")[0] : "");
+    const bDate = b.dateKey || b.entryDate || (b.formattedDate ? b.formattedDate.split(" ")[0] : "");
+    if (aDate === bDate && a.dailyTokenNo && b.dailyTokenNo) {
       return a.dailyTokenNo - b.dailyTokenNo;
     }
     return new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime();

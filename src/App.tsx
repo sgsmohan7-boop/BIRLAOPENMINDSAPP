@@ -150,14 +150,21 @@ export default function App() {
 
   const checkInitialParentKiosk = () => {
     if (typeof window === "undefined") return false;
-    const params = new URLSearchParams(window.location.search);
-    const mode = (params.get("mode") || params.get("portal") || params.get("tab") || "").toLowerCase();
-    const hash = (window.location.hash || "").replace("#", "").toLowerCase();
-    const path = (window.location.pathname || "").toLowerCase();
+    const href = window.location.href.toLowerCase();
+    const search = window.location.search.toLowerCase();
+    const hash = window.location.hash.toLowerCase();
+    const path = window.location.pathname.toLowerCase();
+
+    // Robust check for any mobile QR scanner or link containing parent or kiosk
     return (
-      mode === "parent_kiosk" || mode === "parent-kiosk" || mode === "parent" ||
-      hash === "parent_kiosk" || hash === "parent-kiosk" || hash === "parent" ||
-      path.includes("parent-kiosk") || path.includes("parent_kiosk") || path === "/parent"
+      href.includes("parent") ||
+      href.includes("kiosk") ||
+      search.includes("parent") ||
+      search.includes("kiosk") ||
+      hash.includes("parent") ||
+      hash.includes("kiosk") ||
+      path.includes("parent") ||
+      path.includes("kiosk")
     );
   };
 

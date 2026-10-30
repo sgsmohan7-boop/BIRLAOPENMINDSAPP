@@ -913,7 +913,8 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
         if (t > maxToken) maxToken = t;
       }
 
-      if (!entry.dailyTokenNo || (entry.dailyTokenNo === 1 && todayEntries.length > 0)) {
+      const existingTokenNums = new Set(todayEntries.map(e => Number(e.dailyTokenNo)).filter(n => !isNaN(n) && n > 0));
+      if (!entry.dailyTokenNo || existingTokenNums.has(Number(entry.dailyTokenNo)) || (Number(entry.dailyTokenNo) === 1 && todayEntries.length > 0)) {
         entry.dailyTokenNo = maxToken + 1;
       }
 

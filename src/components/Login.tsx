@@ -92,8 +92,8 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
   const [branch, setBranch] = useState<SchoolBranch>("Birla Open Minds International School");
   const [portalRole, setPortalRole] = useState<"teacher" | "admin" | "driver" | "student" | "counsellor" | "management" | "it">(() => {
     if (lockedPortal) return lockedPortal;
-    // On the main URL without any parameter, default to Super Admin Central Command
-    return "admin";
+    // Default to Parent Counselling Desk for general public visitors instead of exposing Admin
+    return "counsellor";
   });
   const [isSuperAdminLinksOpen, setIsSuperAdminLinksOpen] = useState(false);
   const [email, setEmail] = useState("");
@@ -1886,32 +1886,13 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
                 </button>
               </div>
 
-              {/* 1-Click Quick Access Options for Instant Testing */}
-              <div className="mt-3 pt-3 border-t border-slate-200 space-y-2">
-                <div className="flex items-center justify-between text-[11px] text-slate-600 font-semibold px-0.5">
-                  <span>⚡ Instant 1-Click Admin Access:</span>
-                  <span className="text-[10px] text-emerald-600 font-bold">Tested & Secure</span>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    disabled={isLoading}
-                    onClick={() => handleQuickAdminLogin("sgsmohan7@gmail.com", "Admin@123456", "Super Admin")}
-                    className="py-2.5 px-3 bg-blue-50/80 hover:bg-blue-100 border border-blue-200 text-blue-900 rounded-xl text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs text-left active:scale-95"
-                  >
-                    <span>👑 Super Admin</span>
-                    <span className="text-[9px] opacity-75 font-mono">(superuser)</span>
-                  </button>
-                  <button
-                    type="button"
-                    disabled={isLoading}
-                    onClick={() => handleQuickAdminLogin("admin@birlainstitute.edu.in", "Admin@123456", "IT Admin")}
-                    className="py-2.5 px-3 bg-blue-50/80 hover:bg-blue-100 border border-blue-200 text-blue-900 rounded-xl text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs text-left active:scale-95"
-                  >
-                    <span>🛡️ IT Admin</span>
-                    <span className="text-[9px] opacity-75 font-mono">(birlainstitute)</span>
-                  </button>
-                </div>
+              {/* Security Shield Notice */}
+              <div className="mt-3 pt-3 border-t border-slate-200 flex items-center justify-between text-[11px] text-slate-500 font-semibold px-1">
+                <span className="flex items-center gap-1 text-emerald-600 font-bold">
+                  <ShieldCheck size={13} />
+                  <span>256-Bit Encrypted Admin Authentication</span>
+                </span>
+                <span className="text-[10px] text-slate-400 font-mono">AUTHORIZED PERSONNEL ONLY</span>
               </div>
             </form>
           )}

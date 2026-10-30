@@ -21,7 +21,7 @@ import {
   Clock
 } from "lucide-react";
 import { ParentSelfEntry } from "../types";
-import { isFirebaseConfigured, saveDocument } from "../utils/firebase";
+import { isFirebaseConfigured, saveDocument, getNextDailyTokenNo } from "../utils/firebase";
 
 interface ParentKioskViewProps {
   isStandalone?: boolean;
@@ -208,19 +208,15 @@ export default function ParentKioskView({
     const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const id = `PSE-${now.getFullYear()}-${Math.floor(100 + Math.random() * 900)}-${Date.now()}`;
 
-    // Calculate daily token S.No (1, 2, 3...) resetting daily each morning
-    let todayCount = 0;
+    // Calculate daily token S.No (1, 2, 3...) resetting daily each morning across all devices/networks
+    let dailyTokenNo = 1;
     try {
-      const existingRaw = localStorage.getItem("parent_self_entries");
-      const existingList: ParentSelfEntry[] = existingRaw ? JSON.parse(existingRaw) : [];
-      todayCount = existingList.filter(e => {
-        const itemDate = e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
-        return itemDate === dmy || e.dateKey === dateKey;
-      }).length;
-    } catch {}
-    const dailyTokenNo = todayCount + 1;
+      dailyTokenNo = await getNextDailyTokenNo(dmy, dateKey);
+    } catch {
+      dailyTokenNo = 1;
+    }
 
-    const newEntry: ParentSelfEntry = {
+    let finalEntry: ParentSelfEntry = {
       id,
       studentName: studentName.trim(),
       dateOfBirth: dateOfBirth.trim(),
@@ -241,35 +237,42 @@ export default function ParentKioskView({
       dateKey
     };
 
-    // 1. Direct real-time Firebase Firestore save so counsellor sees it within 100ms on desktop!
+    // 1. Post to 24/7 server endpoint to get server-verified unique daily token number
+    try {
+      const serverRes = await fetch("/api/parent-self-entry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(finalEntry)
+      });
+      if (serverRes.ok) {
+        const resData = await serverRes.json();
+        if (resData && resData.entry && resData.entry.dailyTokenNo) {
+          finalEntry.dailyTokenNo = resData.entry.dailyTokenNo;
+          dailyTokenNo = resData.entry.dailyTokenNo;
+        }
+      }
+    } catch (err) {
+      console.warn("Server parent-self-entry post warning:", err);
+    }
+
+    // 2. Direct real-time Firebase Firestore save with verified token number so counsellor sees it within 100ms
     try {
       if (isFirebaseConfigured()) {
-        await saveDocument("parent_self_entries", id, newEntry);
+        await saveDocument("parent_self_entries", id, finalEntry);
       }
     } catch (fErr) {
       console.warn("Firestore parent entry save warning:", fErr);
     }
 
+    // 3. Save locally for instantaneous offline reactivity
     try {
-      // 2. Post to 24/7 server endpoint
-      await fetch("/api/parent-self-entry", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(newEntry)
-      });
-    } catch (err) {
-      console.warn("Server parent-self-entry post warning:", err);
-    }
-
-    try {
-      // 2. Save locally for instantaneous offline reactivity
       const existingRaw = localStorage.getItem("parent_self_entries");
       const existing: ParentSelfEntry[] = existingRaw ? JSON.parse(existingRaw) : [];
-      const updated = [newEntry, ...existing];
+      const updated = [finalEntry, ...existing.filter(e => e.id !== id)];
       localStorage.setItem("parent_self_entries", JSON.stringify(updated));
 
       // Dispatch event to notify open Counsellor tabs
-      window.dispatchEvent(new CustomEvent("parent_self_entry_added", { detail: newEntry }));
+      window.dispatchEvent(new CustomEvent("parent_self_entry_added", { detail: finalEntry }));
     } catch (err) {
       console.warn("Local storage parent entry save warning:", err);
     }
@@ -281,7 +284,7 @@ export default function ParentKioskView({
     });
 
     if (onSubmitSuccess) {
-      onSubmitSuccess(newEntry);
+      onSubmitSuccess(finalEntry);
     }
 
     setIsSubmittedSuccess(true);

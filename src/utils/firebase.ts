@@ -470,6 +470,73 @@ export async function purgeCollectionFromFirebase(collectionName: string) {
   }
 }
 
+// Calculate authoritative next daily token number across Firestore, Server API, and Local Storage
+export async function getNextDailyTokenNo(dmy: string, dateKey: string): Promise<number> {
+  const tokenSet = new Set<number>();
+
+  // 1. Local Storage check
+  try {
+    const raw = localStorage.getItem("parent_self_entries");
+    if (raw) {
+      const list = JSON.parse(raw);
+      if (Array.isArray(list)) {
+        list.forEach((e: any) => {
+          const itemDate = e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
+          if (itemDate === dmy || e.dateKey === dateKey) {
+            const num = Number(e.dailyTokenNo);
+            if (!isNaN(num) && num > 0) tokenSet.add(num);
+          }
+        });
+      }
+    }
+  } catch {}
+
+  // 2. Firestore query
+  try {
+    if (isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
+      const colRef = collection(db, "parent_self_entries");
+      const snapshot = await Promise.race([
+        getDocs(colRef),
+        new Promise<null>((r) => setTimeout(() => r(null), 2000))
+      ]);
+      if (snapshot && 'forEach' in snapshot) {
+        snapshot.forEach((d) => {
+          const e = d.data();
+          const itemDate = e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
+          if (itemDate === dmy || e.dateKey === dateKey) {
+            const num = Number(e.dailyTokenNo);
+            if (!isNaN(num) && num > 0) tokenSet.add(num);
+          }
+        });
+      }
+    }
+  } catch {}
+
+  // 3. Server API endpoint query
+  try {
+    const res = await Promise.race([
+      fetch("/api/parent-self-entry?scope=today"),
+      new Promise<null>((r) => setTimeout(() => r(null), 1500))
+    ]);
+    if (res && 'json' in res) {
+      const data: any = await res.json();
+      if (data && data.success && Array.isArray(data.entries)) {
+        data.entries.forEach((e: any) => {
+          const itemDate = e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
+          if (itemDate === dmy || e.dateKey === dateKey) {
+            const num = Number(e.dailyTokenNo);
+            if (!isNaN(num) && num > 0) tokenSet.add(num);
+          }
+        });
+      }
+    }
+  } catch {}
+
+  const tokens = Array.from(tokenSet);
+  if (tokens.length === 0) return 1;
+  return Math.max(...tokens) + 1;
+}
+
 // Bulk delete all documents from Core Collections
 export async function purgeAllCollectionsFromFirebase() {
   if (!isFirebaseConfigured()) return;
@@ -488,3 +555,4 @@ export async function purgeAllCollectionsFromFirebase() {
     await purgeCollectionFromFirebase(collectionName);
   }
 }
+
