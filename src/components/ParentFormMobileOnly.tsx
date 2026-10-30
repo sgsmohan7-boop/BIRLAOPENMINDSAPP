@@ -65,6 +65,7 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
   const [studentName, setStudentName] = useState("");
   const [dateOfBirth, setDateOfBirth] = useState("");
   const [applyingForClass, setApplyingForClass] = useState("Grade 1");
+  const [parentNames, setParentNames] = useState("");
   const [fatherName, setFatherName] = useState("");
   const [motherName, setMotherName] = useState("");
   const [contactNo, setContactNo] = useState("");
@@ -101,14 +102,26 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
       alert("Please enter a valid 10-digit mobile contact number.");
       return;
     }
-    if (!fatherName.trim()) {
-      alert("Please enter the father's full name.");
+
+    const combinedParentInput = (parentNames || `${fatherName} / ${motherName}`).trim();
+    if (!combinedParentInput) {
+      alert("Please enter the Father's / Mother's full name.");
       return;
     }
-    if (!motherName.trim()) {
-      alert("Please enter the mother's full name.");
-      return;
+
+    let finalFather = fatherName.trim();
+    let finalMother = motherName.trim();
+    if (parentNames.trim()) {
+      if (parentNames.includes("/")) {
+        const parts = parentNames.split("/");
+        finalFather = parts[0].trim();
+        finalMother = parts.slice(1).join("/").trim();
+      } else {
+        finalFather = parentNames.trim();
+        finalMother = "";
+      }
     }
+
     if (!previousSchool.trim()) {
       alert("Please enter the student's previous school & board.");
       return;
@@ -138,8 +151,8 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
       studentName: studentName.trim(),
       dateOfBirth: dateOfBirth.trim(),
       applyingForClass,
-      fatherName: fatherName.trim(),
-      motherName: motherName.trim(),
+      fatherName: finalFather || "—",
+      motherName: finalMother || "—",
       contactNo: cleanPhone,
       whatsappNo: (whatsappNo.trim() || cleanPhone).replace(/\D/g, "").slice(0, 10),
       previousSchool: previousSchool.trim(),
@@ -210,6 +223,7 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
     setStudentName("");
     setDateOfBirth("");
     setApplyingForClass("Grade 1");
+    setParentNames("");
     setFatherName("");
     setMotherName("");
     setContactNo("");
@@ -731,7 +745,7 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
                 />
               </div>
 
-              {/* 1. Student Date of Birth (DOB) - Right below Student Name */}
+              {/* 1. Student Date of Birth (DOB) - Click box opens date picker */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <label className="block text-xs font-black text-slate-200 tracking-wide">
@@ -746,8 +760,13 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
                   required
                   value={dateOfBirth}
                   max={new Date().toISOString().split("T")[0]}
+                  onClick={(e) => {
+                    try {
+                      e.currentTarget.showPicker?.();
+                    } catch {}
+                  }}
                   onChange={(e) => setDateOfBirth(e.target.value)}
-                  className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white font-bold placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all [color-scheme:dark]"
+                  className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white font-bold placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all [color-scheme:dark] cursor-pointer"
                 />
               </div>
 
@@ -801,32 +820,28 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
                 )}
               </div>
 
-              {/* Father Name */}
+              {/* Combined Father / Mother Name */}
               <div className="space-y-1.5">
                 <label className="block text-xs font-black text-slate-200 tracking-wide">
-                  Father's Name <span className="text-orange-500">*</span>
+                  Father's / Mother's Name <span className="text-orange-500">*</span>
                 </label>
                 <input
                   type="text"
                   required
-                  value={fatherName}
-                  onChange={(e) => setFatherName(e.target.value)}
-                  placeholder="Father's full name"
-                  className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all"
-                />
-              </div>
-
-              {/* Mother Name */}
-              <div className="space-y-1.5">
-                <label className="block text-xs font-black text-slate-200 tracking-wide">
-                  Mother's Name <span className="text-orange-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={motherName}
-                  onChange={(e) => setMotherName(e.target.value)}
-                  placeholder="Mother's full name"
+                  value={parentNames || (fatherName && motherName ? `${fatherName} / ${motherName}` : fatherName || motherName)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setParentNames(val);
+                    if (val.includes("/")) {
+                      const parts = val.split("/");
+                      setFatherName(parts[0].trim());
+                      setMotherName(parts.slice(1).join("/").trim());
+                    } else {
+                      setFatherName(val.trim());
+                      setMotherName("");
+                    }
+                  }}
+                  placeholder="e.g. Ramesh Kumar / Sunita Devi"
                   className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all"
                 />
               </div>
@@ -861,36 +876,21 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
                 />
               </div>
 
-              {/* How Heard */}
-              <div className="space-y-2 pt-1">
+              {/* How Heard About Birla Open Minds - Select Dropdown Picker */}
+              <div className="space-y-1.5 pt-1">
                 <label className="block text-xs font-black text-slate-200 tracking-wide">
                   How did you hear about Birla Open Minds?
                 </label>
-                <div className="flex flex-wrap gap-2">
-                  {SOURCES.map((src) => {
-                    const isChecked = heardAboutSchool.includes(src);
-                    return (
-                      <button
-                        type="button"
-                        key={src}
-                        onClick={() => {
-                          if (isChecked) {
-                            setHeardAboutSchool(heardAboutSchool.filter((s) => s !== src));
-                          } else {
-                            setHeardAboutSchool([...heardAboutSchool, src]);
-                          }
-                        }}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
-                          isChecked
-                            ? "bg-orange-600 border-orange-500 text-white shadow-md"
-                            : "bg-slate-950 border-slate-800 text-slate-400 hover:text-white"
-                        }`}
-                      >
-                        {isChecked ? "✓ " : "+ "}{src}
-                      </button>
-                    );
-                  })}
-                </div>
+                <select
+                  value={heardAboutSchool[0] || ""}
+                  onChange={(e) => setHeardAboutSchool([e.target.value])}
+                  className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white font-bold focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all cursor-pointer"
+                >
+                  <option value="" disabled>-- Choose Option --</option>
+                  {SOURCES.map((src) => (
+                    <option key={src} value={src}>{src}</option>
+                  ))}
+                </select>
               </div>
 
               {/* Submit Button */}
