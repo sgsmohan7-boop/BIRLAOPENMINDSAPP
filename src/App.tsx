@@ -1161,6 +1161,9 @@ export default function App() {
         nextList = [...prev, account];
       }
       saveManagementAccounts(nextList);
+      if (isFirebaseConfigured()) {
+        saveDocument("management_accounts", account.id || account.username, account);
+      }
       return nextList;
     });
 
@@ -1170,6 +1173,11 @@ export default function App() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(account)
     }).catch(err => console.warn("Failed to sync management account to server:", err));
+
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("storage"));
+      window.dispatchEvent(new Event("management_accounts_updated"));
+    }
   };
 
   const handleDeleteManagementAccount = (id: string) => {

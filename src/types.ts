@@ -989,17 +989,27 @@ export function mergeWithDefaultManagementAccounts(
   const existingUsernames = new Set<string>();
   const result: ManagementAccount[] = [];
 
+  const addOrUpdateAccount = (acc: ManagementAccount) => {
+    if (!acc || !acc.username) return;
+    const u = acc.username.trim().toLowerCase();
+    const idLower = (acc.id || "").trim().toLowerCase();
+    if (deletedSet.has(u) || deletedSet.has(idLower)) return;
+
+    if (existingUsernames.has(u)) {
+      const existingIdx = result.findIndex(r => r.username.toLowerCase() === u);
+      if (existingIdx >= 0) {
+        result[existingIdx] = { ...result[existingIdx], ...acc, username: u };
+      }
+      return;
+    }
+
+    existingIds.add(idLower);
+    existingUsernames.add(u);
+    result.push({ ...acc, username: u });
+  };
+
   if (Array.isArray(items)) {
-    items.forEach(acc => {
-      if (!acc || !acc.username) return;
-      const u = acc.username.trim().toLowerCase();
-      const idLower = (acc.id || "").trim().toLowerCase();
-      if (deletedSet.has(u) || deletedSet.has(idLower)) return;
-      if (existingUsernames.has(u)) return;
-      existingIds.add(idLower);
-      existingUsernames.add(u);
-      result.push({ ...acc, username: u });
-    });
+    items.forEach(addOrUpdateAccount);
   }
 
   // Also merge items from LocalStorage if present so locally created users are never wiped on refresh
@@ -1009,16 +1019,7 @@ export function mergeWithDefaultManagementAccounts(
       if (rawLocal) {
         const parsedLocal = JSON.parse(rawLocal);
         if (Array.isArray(parsedLocal)) {
-          parsedLocal.forEach(acc => {
-            if (!acc || !acc.username) return;
-            const u = acc.username.trim().toLowerCase();
-            const idLower = (acc.id || "").trim().toLowerCase();
-            if (deletedSet.has(u) || deletedSet.has(idLower)) return;
-            if (existingUsernames.has(u)) return;
-            existingIds.add(idLower);
-            existingUsernames.add(u);
-            result.push({ ...acc, username: u });
-          });
+          parsedLocal.forEach(addOrUpdateAccount);
         }
       }
     } catch {}

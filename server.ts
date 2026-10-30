@@ -3661,6 +3661,12 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
     return res.json({ success: true, counsellors: data.counsellors, deletedCounsellors: data.deletedCounsellors });
   });
 
+  // GET Management accounts
+  app.get("/api/accounts/management", (_req, res) => {
+    const data = readAccountsFile();
+    return res.json({ success: true, management: data.management || [], deletedManagement: data.deletedManagement || [] });
+  });
+
   // POST create or update Management account
   app.post("/api/accounts/management", (req, res) => {
     const account = req.body;

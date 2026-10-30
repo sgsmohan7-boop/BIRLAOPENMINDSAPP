@@ -33,7 +33,7 @@ import {
   Globe
 } from "lucide-react";
 import { collection, getDocs } from "firebase/firestore";
-import { SchoolBranch, COUNSELLORS_LIST, CounsellorProfile, CounsellorAccount, ManagementAccount, loadManagementAccounts, saveManagementAccounts, ITStaffAccount } from "../types";
+import { SchoolBranch, COUNSELLORS_LIST, CounsellorProfile, CounsellorAccount, ManagementAccount, loadManagementAccounts, saveManagementAccounts, mergeWithDefaultManagementAccounts, ITStaffAccount } from "../types";
 import { signInAsDesktopUser, loginWithEmail, getUserIAMRole, isFirebaseConfigured, db } from "../utils/firebase";
 import { loadCounsellorAccounts, saveCounsellorAccounts, mergeWithDefaultCounsellorAccounts, getDeletedCounsellorAccountIds, recordDeletedCounsellorAccountIds, loadITStaffAccounts, saveITStaffAccounts, mergeWithDefaultITStaffAccounts } from "../utils/storage";
 import PortalLinksModal from "./PortalLinksModal";
@@ -232,21 +232,7 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
     const local = (managementAccounts && managementAccounts.length > 0)
       ? managementAccounts
       : loadManagementAccounts();
-    if (!local.some(m => m.username.toLowerCase() === "radhika")) {
-      local.push({
-        id: `MGMT-0${local.length + 1}`,
-        name: "K. Radhika",
-        username: "radhika",
-        password: "Password@111",
-        email: "radhika.mgmt@birla.edu.in",
-        roleTitle: "Admissions Management & Audit Lead",
-        phone: "+91 98765 00011",
-        status: "active",
-        color: "#F97316",
-        createdAt: "01-01-2025"
-      });
-    }
-    return local;
+    return mergeWithDefaultManagementAccounts(local);
   });
 
   const [liveITStaffAccounts, setLiveITStaffAccounts] = useState<ITStaffAccount[]>(() => {
@@ -262,9 +248,28 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
 
   useEffect(() => {
     if (managementAccounts && managementAccounts.length > 0) {
-      setLiveManagementAccounts(managementAccounts);
+      setLiveManagementAccounts(mergeWithDefaultManagementAccounts(managementAccounts));
     }
   }, [managementAccounts]);
+
+  // Real-time listener for localStorage / window events so newly created management/counsellor accounts update instantly
+  useEffect(() => {
+    const handleSyncEvent = () => {
+      setLiveManagementAccounts(loadManagementAccounts());
+      setLiveCounsellorAccounts(loadCounsellorAccounts());
+      setLiveITStaffAccounts(loadITStaffAccounts());
+    };
+    if (typeof window !== "undefined") {
+      window.addEventListener("storage", handleSyncEvent);
+      window.addEventListener("management_accounts_updated", handleSyncEvent);
+    }
+    return () => {
+      if (typeof window !== "undefined") {
+        window.removeEventListener("storage", handleSyncEvent);
+        window.removeEventListener("management_accounts_updated", handleSyncEvent);
+      }
+    };
+  }, []);
 
   // Real-time server pull so ANY browser tab or device immediately receives Admin-created accounts
   useEffect(() => {
@@ -285,8 +290,10 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
               saveCounsellorAccounts(merged);
             }
             if (Array.isArray(json.accounts.management) && json.accounts.management.length > 0) {
-              setLiveManagementAccounts(json.accounts.management);
-              saveManagementAccounts(json.accounts.management);
+              const extraMgmtDeleted = Array.isArray(json.accounts.deletedManagement) ? json.accounts.deletedManagement : [];
+              const mergedMgmt = mergeWithDefaultManagementAccounts(json.accounts.management, extraMgmtDeleted);
+              setLiveManagementAccounts(mergedMgmt);
+              saveManagementAccounts(mergedMgmt);
             }
             if (Array.isArray(json.accounts.itStaff)) {
               const mergedIT = mergeWithDefaultITStaffAccounts(json.accounts.itStaff, json.accounts.deletedItStaff || []);
@@ -297,6 +304,21 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
         }
       } catch (e) {
         console.warn("Could not fetch accounts from server:", e);
+      }
+
+      // Dedicated Management REST API fetch fallback
+      try {
+        const resMgmt = await fetch("/api/accounts/management");
+        if (resMgmt.ok) {
+          const jsonMgmt = await resMgmt.json();
+          if (jsonMgmt.success && Array.isArray(jsonMgmt.management) && isMounted) {
+            const mergedMgmt = mergeWithDefaultManagementAccounts(jsonMgmt.management, jsonMgmt.deletedManagement || []);
+            setLiveManagementAccounts(mergedMgmt);
+            saveManagementAccounts(mergedMgmt);
+          }
+        }
+      } catch (e) {
+        console.warn("Could not fetch Management accounts from server:", e);
       }
 
       // Dedicated IT Staff API & Firestore fetch fallback
@@ -315,6 +337,19 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
       }
 
       if (isFirebaseConfigured()) {
+        try {
+          const snapMgmt = await getDocs(collection(db, "management_accounts"));
+          const fsMgmt: ManagementAccount[] = [];
+          snapMgmt.forEach(d => fsMgmt.push({ id: d.id, ...d.data() } as ManagementAccount));
+          if (fsMgmt.length > 0 && isMounted) {
+            const mergedMgmt = mergeWithDefaultManagementAccounts(fsMgmt);
+            setLiveManagementAccounts(mergedMgmt);
+            saveManagementAccounts(mergedMgmt);
+          }
+        } catch (e) {
+          console.warn("Firestore live Management accounts fetch warning:", e);
+        }
+
         try {
           const snap = await getDocs(collection(db, "it_staff_accounts"));
           const fsItems: ITStaffAccount[] = [];
@@ -472,13 +507,64 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
       return;
     }
 
-    let mgmtFound = activeManagementAccounts.find(m => 
+    // 1. Search in local state & localStorage
+    let allMgmtList = mergeWithDefaultManagementAccounts([...liveManagementAccounts, ...loadManagementAccounts()]);
+    let mgmtFound = allMgmtList.find(m => 
       m.username.toLowerCase() === u || 
       m.email.toLowerCase() === u || 
       m.id.toLowerCase() === u ||
       m.name.toLowerCase() === u ||
       m.name.toLowerCase().replace(/[^a-z0-9]/g, "") === u.replace(/[^a-z0-9]/g, "")
     );
+
+    // 2. If not found in local memory, fetch live from server REST API repository
+    if (!mgmtFound) {
+      try {
+        const res = await fetch("/api/accounts/management");
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && Array.isArray(json.management)) {
+            const merged = mergeWithDefaultManagementAccounts(json.management, json.deletedManagement || []);
+            setLiveManagementAccounts(merged);
+            saveManagementAccounts(merged);
+            mgmtFound = merged.find(m => 
+              m.username.toLowerCase() === u || 
+              m.email.toLowerCase() === u || 
+              m.id.toLowerCase() === u ||
+              m.name.toLowerCase() === u ||
+              m.name.toLowerCase().replace(/[^a-z0-9]/g, "") === u.replace(/[^a-z0-9]/g, "")
+            );
+          }
+        }
+      } catch (e) {
+        console.warn("Direct management REST fetch failed:", e);
+      }
+    }
+
+    // 3. If still not found, query Firestore collection directly
+    if (!mgmtFound && isFirebaseConfigured()) {
+      try {
+        const snap = await getDocs(collection(db, "management_accounts"));
+        const fsItems: ManagementAccount[] = [];
+        snap.forEach((d) => {
+          fsItems.push({ id: d.id, ...d.data() } as ManagementAccount);
+        });
+        if (fsItems.length > 0) {
+          const merged = mergeWithDefaultManagementAccounts(fsItems);
+          setLiveManagementAccounts(merged);
+          saveManagementAccounts(merged);
+          mgmtFound = merged.find(m => 
+            m.username.toLowerCase() === u || 
+            m.email.toLowerCase() === u || 
+            m.id.toLowerCase() === u ||
+            m.name.toLowerCase() === u ||
+            m.name.toLowerCase().replace(/[^a-z0-9]/g, "") === u.replace(/[^a-z0-9]/g, "")
+          );
+        }
+      } catch (err) {
+        console.warn("Firestore fallback management query failed:", err);
+      }
+    }
 
     // Fallback default logins
     const isDefaultLogin = (u === "management@birla.edu.in" && mPass === "birla@2026") || 
@@ -489,7 +575,7 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
     // If Radhika is entered in management portal:
     if (!mgmtFound && (u === "radhika" || u.includes("radhika"))) {
       mgmtFound = {
-        id: `MGMT-0${activeManagementAccounts.length + 1}`,
+        id: `MGMT-0${liveManagementAccounts.length + 1}`,
         name: "K. Radhika",
         username: "radhika",
         password: mPass || "Password@111",

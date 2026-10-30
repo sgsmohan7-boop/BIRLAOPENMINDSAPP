@@ -54,6 +54,7 @@ import { loadCounsellorAccounts, saveCounsellorAccounts, DEMO_COUNSELLING, merge
 import ManagementAudioDesk from "./ManagementAudioDesk";
 import ManagementAdmissionDesk from "./ManagementAdmissionDesk";
 import { formatAudioDuration } from "../utils/audioStorage";
+import { isFirebaseConfigured, saveDocument } from "../utils/firebase";
 
 
 interface ManagementPortalProps {
@@ -230,6 +231,21 @@ export default function ManagementPortal({
       return updated;
     });
 
+    if (isFirebaseConfigured()) {
+      saveDocument("management_accounts", finalAcc.id || finalAcc.username, finalAcc);
+    }
+
+    fetch("/api/accounts/management", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(finalAcc)
+    }).catch(() => {});
+
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("storage"));
+      window.dispatchEvent(new Event("management_accounts_updated"));
+    }
+
     if (onSaveManagementAccount) {
       onSaveManagementAccount(finalAcc);
     }
@@ -246,6 +262,22 @@ export default function ManagementPortal({
       saveManagementAccounts(next);
       return next;
     });
+
+    if (isFirebaseConfigured()) {
+      saveDocument("management_accounts", updated.id || updated.username, updated);
+    }
+
+    fetch("/api/accounts/management", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updated)
+    }).catch(() => {});
+
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("storage"));
+      window.dispatchEvent(new Event("management_accounts_updated"));
+    }
+
     if (onSaveManagementAccount) onSaveManagementAccount(updated);
   };
 
