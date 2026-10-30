@@ -827,44 +827,37 @@ export function getNextEnquiryNo(
 
     const totalActiveCount = combined.length + localSavedCount;
 
-    // 3. Scan DELETED enquiries only if there have been saved records, so deleted serial numbers are NEVER reused
-    if (totalActiveCount > 0) {
-      try {
-        const rawDel = localStorage.getItem("sgs_deleted_enquiry_ids");
-        if (rawDel) {
-          const parsedDel = JSON.parse(rawDel);
-          if (Array.isArray(parsedDel)) {
-            parsedDel.forEach((delItem: string) => {
-              if (!delItem) return;
-              const cleanDel = String(delItem).trim().toUpperCase();
-              occupiedNumbers.add(cleanDel);
-              const match = cleanDel.match(/ENQ-.*-(\d+)/i) || cleanDel.match(/(\d+)$/);
-              if (match) {
-                const num = parseInt(match[1] || match[0], 10);
-                if (!isNaN(num) && num > maxNum && num < 5000) {
-                  maxNum = num;
-                }
+    // 3. Scan DELETED enquiries so deleted serial numbers are NEVER reused
+    try {
+      const rawDel = localStorage.getItem("sgs_deleted_enquiry_ids");
+      if (rawDel) {
+        const parsedDel = JSON.parse(rawDel);
+        if (Array.isArray(parsedDel)) {
+          parsedDel.forEach((delItem: string) => {
+            if (!delItem) return;
+            const cleanDel = String(delItem).trim().toUpperCase();
+            occupiedNumbers.add(cleanDel);
+            const match = cleanDel.match(/ENQ-.*-(\d+)/i) || cleanDel.match(/(\d+)$/);
+            if (match) {
+              const num = parseInt(match[1] || match[0], 10);
+              if (!isNaN(num) && num > maxNum && num < 5000) {
+                maxNum = num;
               }
-            });
-          }
+            }
+          });
         }
-      } catch {}
+      }
+    } catch {}
 
-      // 4. Scan highest issued watermark counter (strictly ignore any runaway values)
-      try {
-        const highestStored = parseInt(localStorage.getItem(HIGHEST_ENQUIRY_KEY) || "0", 10);
-        if (highestStored >= 5000) {
-          localStorage.removeItem(HIGHEST_ENQUIRY_KEY);
-        } else if (!isNaN(highestStored) && highestStored > maxNum) {
-          maxNum = highestStored;
-        }
-      } catch {}
-    } else {
-      // If 0 active records exist, ensure any stale watermark is wiped
-      try {
+    // 4. Scan highest issued watermark counter (strictly ignore any runaway values)
+    try {
+      const highestStored = parseInt(localStorage.getItem(HIGHEST_ENQUIRY_KEY) || "0", 10);
+      if (highestStored >= 5000) {
         localStorage.removeItem(HIGHEST_ENQUIRY_KEY);
-      } catch {}
-    }
+      } else if (!isNaN(highestStored) && highestStored > maxNum) {
+        maxNum = highestStored;
+      }
+    } catch {}
 
     // 5. Scan active reservations currently being filled by OTHER counsellors or other browser tabs
     try {

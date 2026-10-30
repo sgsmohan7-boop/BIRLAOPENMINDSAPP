@@ -93,7 +93,8 @@ import {
   loadParentSelfEntries, 
   saveParentSelfEntries,
   getDismissedParentEntryIds,
-  recordDismissedParentEntryId
+  recordDismissedParentEntryId,
+  unmarkDeletedEnquiryId
 } from "../utils/storage";
 import { deleteAudioRecordingBlob, formatAudioDuration } from "../utils/audioStorage";
 import { isFirebaseConfigured, syncCollection, saveDocument, deleteDocument } from "../utils/firebase";
@@ -1294,15 +1295,15 @@ export default function CounsellingPortal({
       if (!isNaN(numVal)) recordHighestEnquiryNumber(numVal);
     }
 
+    unmarkDeletedEnquiryId(updated.id, updated.enquiryNo);
     onSaveEnquiry(updated);
     try { localStorage.removeItem("bomis_counsellor_active_draft"); } catch {}
     setActiveDraft(null);
 
-    setDeleteToast(`✅ Enquiry ${updated.enquiryNo} (${updated.studentName}) saved successfully!`);
+    setDeleteToast(`✅ Enquiry ${updated.enquiryNo} (${updated.studentName}) submitted successfully!`);
     setTimeout(() => setDeleteToast(null), 3500);
     setActiveView("list");
     setSelectedEnquiry(null);
-    setWhatsAppModalEnquiry(updated);
   };
 
   const handleSaveCounsellorAction = (targetEnquiry: CounsellingEnquiry, actionText: string) => {
