@@ -536,15 +536,42 @@ export default function CounsellingPortal({
 
   const handleDismissParentEntry = async (entryId: string) => {
     const counsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR";
-    // 1. Record dismissal for THIS counsellor's workspace so it disappears locally
     recordDismissedParentEntryId(entryId, counsellorId);
 
-    // 2. Remove in React state for current session
-    const updated = parentSelfEntries.map(e => e.id === entryId ? { ...e, status: "dismissed" as const } : e);
+    // 1. Remove permanently from React state & LocalStorage
+    const updated = parentSelfEntries.filter(e => e.id !== entryId);
     setParentSelfEntries(updated);
+    saveParentSelfEntries(updated);
 
-    setDeleteToast("✓ Parent entry dismissed from your workspace lounge.");
+    // 2. Permanently delete from Firestore database
+    try {
+      await deleteDocument("parent_self_entries", entryId);
+    } catch {}
+
+    setDeleteToast("✓ Test token / Parent entry deleted permanently.");
     setTimeout(() => setDeleteToast(null), 3000);
+  };
+
+  const handleClearAllClaimed = async () => {
+    if (claimedParentEntries.length === 0) return;
+    const count = claimedParentEntries.length;
+    const ids = claimedParentEntries.map(e => e.id);
+    const counsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR";
+
+    // 1. Delete all claimed entries from Firestore and record dismissal
+    ids.forEach(id => {
+      recordDismissedParentEntryId(id, counsellorId);
+      deleteDocument("parent_self_entries", id).catch(() => {});
+    });
+
+    // 2. Clear from React state & LocalStorage
+    const claimedIdSet = new Set(ids);
+    const updated = parentSelfEntries.filter(e => !claimedIdSet.has(e.id));
+    setParentSelfEntries(updated);
+    saveParentSelfEntries(updated);
+
+    setDeleteToast(`🧹 Successfully deleted ${count} claimed test token(s).`);
+    setTimeout(() => setDeleteToast(null), 4000);
   };
 
   const handleClearAllPending = async () => {
@@ -553,12 +580,17 @@ export default function CounsellingPortal({
     const pendingIds = pendingParentEntries.map(e => e.id);
     const counsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR";
 
-    // 1. Record all dismissed IDs into THIS COUNSELLOR'S workspace dismissal list
-    pendingIds.forEach(id => recordDismissedParentEntryId(id, counsellorId));
+    // 1. Record all dismissed IDs and delete from Firestore
+    pendingIds.forEach(id => {
+      recordDismissedParentEntryId(id, counsellorId);
+      deleteDocument("parent_self_entries", id).catch(() => {});
+    });
 
     // 2. Clear from React state for this counsellor's workspace
-    const updated = parentSelfEntries.map(e => pendingIds.includes(e.id) ? { ...e, status: "dismissed" as const } : e);
+    const pendingIdSet = new Set(pendingIds);
+    const updated = parentSelfEntries.filter(e => !pendingIdSet.has(e.id));
     setParentSelfEntries(updated);
+    saveParentSelfEntries(updated);
 
     setDeleteToast(`🧹 Cleared ${count} waiting parent card(s) from your workspace desk.`);
     setTimeout(() => setDeleteToast(null), 4000);
@@ -5670,6 +5702,7 @@ export default function CounsellingPortal({
         entries={parentSelfEntries}
         onClaimEntry={handleClaimAndAutoFill}
         onDismissEntry={handleDismissParentEntry}
+        onClearAllClaimedEntries={handleClearAllClaimed}
         onOpenQrPoster={() => {
           setIsReceptionQueueModalOpen(false);
           setParentKioskDefaultMode("print_qr");

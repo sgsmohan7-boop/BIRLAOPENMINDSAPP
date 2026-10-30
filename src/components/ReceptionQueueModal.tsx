@@ -12,7 +12,8 @@ import {
   ArrowRight,
   ShieldCheck,
   Search,
-  School
+  School,
+  Trash2
 } from "lucide-react";
 import { ParentSelfEntry } from "../types";
 import { getDismissedParentEntryIds } from "../utils/storage";
@@ -23,6 +24,7 @@ interface ReceptionQueueModalProps {
   entries: ParentSelfEntry[];
   onClaimEntry: (entry: ParentSelfEntry) => void;
   onDismissEntry?: (entryId: string) => void;
+  onClearAllClaimedEntries?: () => void;
   onOpenQrPoster: () => void;
   currentCounsellorName?: string;
   currentCounsellorId?: string;
@@ -35,6 +37,7 @@ export default function ReceptionQueueModal({
   entries = [],
   onClaimEntry,
   onDismissEntry,
+  onClearAllClaimedEntries,
   onOpenQrPoster,
   currentCounsellorName = "Counsellor",
   currentCounsellorId,
@@ -213,7 +216,7 @@ export default function ReceptionQueueModal({
           </div>
         </div>
 
-        {/* Sub-bar for Claimed Tab: Today vs All-Time Archive filter */}
+        {/* Sub-bar for Claimed Tab: Today vs All-Time Archive filter + Clear Testing Tokens */}
         {activeTab === "claimed" && (
           <div className="px-5 py-2.5 bg-slate-950 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
             <div className="flex items-center gap-2">
@@ -243,9 +246,26 @@ export default function ReceptionQueueModal({
               </button>
             </div>
 
-            <span className="text-[10px] text-slate-500 hidden sm:inline">
-              ⚡ Automatically resets daily at midnight • Forms safely recorded in Admission Enquiries
-            </span>
+            <div className="flex items-center gap-2">
+              {onClearAllClaimedEntries && allClaimedList.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (window.confirm(`Are you sure you want to delete/clear all ${allClaimedList.length} claimed test tokens?`)) {
+                      onClearAllClaimedEntries();
+                    }
+                  }}
+                  className="px-3 py-1 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-sm"
+                  title="Permanently delete all claimed test tokens"
+                >
+                  <Trash2 size={13} />
+                  <span>🧹 Clear Test Tokens ({allClaimedList.length})</span>
+                </button>
+              )}
+              <span className="text-[10px] text-slate-500 hidden sm:inline">
+                ⚡ Automatically resets daily at midnight • Forms safely recorded in Admission Enquiries
+              </span>
+            </div>
           </div>
         )}
 
@@ -406,6 +426,16 @@ export default function ReceptionQueueModal({
                           <span>📝 Re-Open / Continue Admission Form</span>
                           <ArrowRight size={14} />
                         </button>
+                        {onDismissEntry && (
+                          <button
+                            type="button"
+                            onClick={() => onDismissEntry(entry.id)}
+                            className="p-2.5 bg-slate-800 hover:bg-rose-500/30 text-slate-400 hover:text-rose-300 rounded-xl transition-all cursor-pointer border border-slate-700"
+                            title="Delete / Clear this test token"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
