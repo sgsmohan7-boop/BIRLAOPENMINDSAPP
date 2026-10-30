@@ -16,7 +16,9 @@ import {
   Check,
   Globe,
   ExternalLink,
-  ArrowLeft
+  ArrowLeft,
+  Calendar,
+  Clock
 } from "lucide-react";
 import { ParentSelfEntry } from "../types";
 import { isFirebaseConfigured, saveDocument } from "../utils/firebase";
@@ -80,6 +82,10 @@ export default function ParentKioskView({
   const [isSubmittedSuccess, setIsSubmittedSuccess] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [assignedToken, setAssignedToken] = useState<number>(1);
+  const [submissionTimestamp, setSubmissionTimestamp] = useState<{ date: string; time: string }>({
+    date: "",
+    time: ""
+  });
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [liveServerUrl, setLiveServerUrl] = useState<string>("");
 
@@ -178,6 +184,22 @@ export default function ParentKioskView({
       alert("Please enter a valid 10-digit mobile contact number.");
       return;
     }
+    if (!fatherName.trim()) {
+      alert("Please enter the father's full name.");
+      return;
+    }
+    if (!motherName.trim()) {
+      alert("Please enter the mother's full name.");
+      return;
+    }
+    if (!previousSchool.trim()) {
+      alert("Please enter the student's previous school & board.");
+      return;
+    }
+    if (!residentialAddress.trim()) {
+      alert("Please enter the residential address (Area / Locality).");
+      return;
+    }
 
     setIsSubmitting(true);
     const now = new Date();
@@ -253,6 +275,10 @@ export default function ParentKioskView({
     }
 
     setAssignedToken(dailyTokenNo);
+    setSubmissionTimestamp({
+      date: dmy,
+      time: timeStr
+    });
 
     if (onSubmitSuccess) {
       onSubmitSuccess(newEntry);
@@ -274,7 +300,276 @@ export default function ParentKioskView({
     setPreviousSchool("");
     setResidentialAddress("");
     setReasonForChoosing("");
+    setSubmissionTimestamp({ date: "", time: "" });
     setIsSubmittedSuccess(false);
+  };
+
+  const handlePrintSlip = () => {
+    const printWindow = window.open("", "_blank", "width=850,height=950");
+    if (!printWindow) {
+      alert("Please allow pop-ups to print the official admission slip.");
+      return;
+    }
+
+    const dateStr = submissionTimestamp.date || new Date().toLocaleDateString("en-GB").replace(/\//g, "-");
+    const timeStr = submissionTimestamp.time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>BIRLA OPEN MINDS - Admission Slip (${studentName})</title>
+        <style>
+          @page { size: A4 portrait; margin: 12mm; }
+          * { box-sizing: border-box; }
+          body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            color: #0f172a;
+            margin: 0;
+            padding: 20px;
+            background: #ffffff;
+            line-height: 1.4;
+          }
+          .slip-card {
+            border: 2px solid #ea580c;
+            border-radius: 16px;
+            padding: 24px;
+            max-width: 680px;
+            margin: 0 auto;
+            background: #ffffff;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+          }
+          .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 2px solid #ea580c;
+            padding-bottom: 16px;
+            margin-bottom: 20px;
+          }
+          .brand-logo {
+            height: 55px;
+            width: auto;
+          }
+          .school-title {
+            font-size: 20px;
+            font-weight: 900;
+            color: #800020;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin: 0;
+          }
+          .school-subtitle {
+            font-size: 11px;
+            font-weight: 800;
+            color: #ea580c;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-top: 2px;
+          }
+          .token-badge {
+            background: #800020;
+            color: #ffffff;
+            padding: 10px 18px;
+            border-radius: 12px;
+            text-align: center;
+            border: 1.5px solid #f59e0b;
+          }
+          .token-num {
+            font-size: 24px;
+            font-weight: 900;
+            line-height: 1;
+          }
+          .token-lbl {
+            font-size: 9px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            opacity: 0.9;
+          }
+          .banner {
+            background: #fff7ed;
+            border: 1px solid #ffedd5;
+            color: #9a3412;
+            padding: 10px 14px;
+            border-radius: 10px;
+            text-align: center;
+            font-weight: 900;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 20px;
+          }
+          .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 20px;
+          }
+          .full-col {
+            grid-column: span 2;
+          }
+          .field-box {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            padding: 9px 12px;
+            border-radius: 8px;
+          }
+          .field-label {
+            font-size: 9px;
+            font-weight: 800;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 3px;
+          }
+          .field-value {
+            font-size: 13px;
+            font-weight: 800;
+            color: #0f172a;
+          }
+          .field-highlight {
+            color: #800020;
+            font-weight: 900;
+          }
+          .instruction-box {
+            background: #f0fdf4;
+            border: 1px solid #bbf7d0;
+            border-radius: 10px;
+            padding: 12px 16px;
+            margin-bottom: 24px;
+            font-size: 11px;
+            color: #166534;
+            line-height: 1.5;
+          }
+          .signatures {
+            margin-top: 32px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            padding-top: 16px;
+            border-top: 1px dashed #cbd5e1;
+          }
+          .sig-box {
+            text-align: center;
+            width: 200px;
+          }
+          .sig-line {
+            border-top: 1px solid #64748b;
+            margin-top: 36px;
+            padding-top: 4px;
+            font-size: 10px;
+            font-weight: 800;
+            color: #334155;
+            text-transform: uppercase;
+          }
+          .footer {
+            margin-top: 20px;
+            text-align: center;
+            font-size: 9px;
+            color: #94a3b8;
+            font-weight: 600;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="slip-card">
+          <div class="header">
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <img src="/birla_open_minds_logo.png" alt="Birla Open Minds" class="brand-logo" />
+              <div>
+                <h1 class="school-title">BIRLA OPEN MINDS</h1>
+                <div class="school-subtitle">INTERNATIONAL SCHOOL • LB NAGAR BRANCH</div>
+              </div>
+            </div>
+            <div class="token-badge">
+              <div class="token-lbl">Walk-in Queue</div>
+              <div class="token-num">#${assignedToken}</div>
+            </div>
+          </div>
+
+          <div class="banner">
+            ✓ Official Admission Enquiry Acknowledgment Slip
+          </div>
+
+          <div class="grid">
+            <div class="field-box">
+              <div class="field-label">Student Full Name</div>
+              <div class="field-value field-highlight">${studentName}</div>
+            </div>
+            <div class="field-box">
+              <div class="field-label">Applying for Class</div>
+              <div class="field-value">${applyingForClass}</div>
+            </div>
+            <div class="field-box">
+              <div class="field-label">Date of Birth</div>
+              <div class="field-value">${dateOfBirth || "—"}</div>
+            </div>
+            <div class="field-box">
+              <div class="field-label">Contact Mobile</div>
+              <div class="field-value" style="font-family: monospace;">+91 ${contactNo}</div>
+            </div>
+            <div class="field-box">
+              <div class="field-label">Father's Name</div>
+              <div class="field-value">${fatherName || "—"}</div>
+            </div>
+            <div class="field-box">
+              <div class="field-label">Mother's Name</div>
+              <div class="field-value">${motherName || "—"}</div>
+            </div>
+            ${residentialAddress ? `
+            <div class="field-box full-col">
+              <div class="field-label">Residential Address</div>
+              <div class="field-value" style="font-size: 11px;">${residentialAddress}</div>
+            </div>
+            ` : ''}
+            ${previousSchool ? `
+            <div class="field-box full-col">
+              <div class="field-label">Previous School</div>
+              <div class="field-value" style="font-size: 11px;">${previousSchool}</div>
+            </div>
+            ` : ''}
+            <div class="field-box">
+              <div class="field-label">Form Submission Date</div>
+              <div class="field-value" style="font-family: monospace;">${dateStr}</div>
+            </div>
+            <div class="field-box">
+              <div class="field-label">Form Submission Time</div>
+              <div class="field-value field-highlight" style="font-family: monospace;">${timeStr}</div>
+            </div>
+          </div>
+
+          <div class="instruction-box">
+            <strong>📍 Reception Guidance:</strong> Your response is live at our Admissions Counsellor's desk (Token #${assignedToken}). If you are currently at school, please present this slip at reception and relax in our parent lounge. You will be called shortly.
+          </div>
+
+          <div class="signatures">
+            <div class="sig-box">
+              <div class="sig-line">Parent / Guardian Signature</div>
+            </div>
+            <div class="sig-box">
+              <div class="sig-line">Admissions Desk Verification</div>
+            </div>
+          </div>
+
+          <div class="footer">
+            Birla Open Minds International School • LB Nagar Branch • Official Parent Enquiry Slip
+          </div>
+        </div>
+
+        <script>
+          window.onload = function() {
+            setTimeout(function() {
+              window.print();
+            }, 300);
+          };
+        </script>
+      </body>
+      </html>
+    `;
+
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
   };
 
   const handleCopyLink = () => {
@@ -617,6 +912,15 @@ export default function ParentKioskView({
                   <p className="mt-2 text-slate-700 font-bold text-xs sm:text-sm">
                     Your admission form has been submitted successfully!
                   </p>
+
+                  {/* Submission Date & Time Badge */}
+                  <div className="mt-2.5 inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-100/90 border border-amber-300 rounded-full text-slate-800 text-[11px] sm:text-xs font-semibold shadow-xs">
+                    <Clock size={13} className="text-[#800020] shrink-0" />
+                    <span className="text-slate-600 font-bold uppercase tracking-wider text-[10px]">Submitted On:</span>
+                    <strong className="font-mono text-[#800020] font-black">
+                      {submissionTimestamp.date || new Date().toLocaleDateString("en-GB").replace(/\//g, "-")} at {submissionTimestamp.time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </strong>
+                  </div>
                 </div>
 
                 {/* Box 1: Waiting Area & Live Token */}
@@ -685,7 +989,7 @@ export default function ParentKioskView({
                 <div className="pt-1 flex items-center justify-center gap-3 flex-wrap">
                   <button
                     type="button"
-                    onClick={() => window.print()}
+                    onClick={handlePrintSlip}
                     className="px-6 py-3 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs sm:text-sm font-black shadow-md transition-all cursor-pointer flex items-center justify-center gap-1.5 active:scale-95 border border-amber-500"
                   >
                     <Printer size={16} />
@@ -815,10 +1119,11 @@ export default function ParentKioskView({
                   {/* Father Name */}
                   <div className="space-y-1">
                     <label className="block text-xs font-black text-slate-200 tracking-wide">
-                      Father's Name
+                      Father's Name <span className="text-orange-500">*</span>
                     </label>
                     <input
                       type="text"
+                      required
                       value={fatherName}
                       onChange={(e) => setFatherName(e.target.value)}
                       placeholder="Father's full name"
@@ -829,10 +1134,11 @@ export default function ParentKioskView({
                   {/* Mother Name */}
                   <div className="space-y-1">
                     <label className="block text-xs font-black text-slate-200 tracking-wide">
-                      Mother's Name
+                      Mother's Name <span className="text-orange-500">*</span>
                     </label>
                     <input
                       type="text"
+                      required
                       value={motherName}
                       onChange={(e) => setMotherName(e.target.value)}
                       placeholder="Mother's full name"
@@ -843,10 +1149,11 @@ export default function ParentKioskView({
                   {/* Previous School */}
                   <div className="sm:col-span-2 space-y-1">
                     <label className="block text-xs font-black text-slate-200 tracking-wide">
-                      Previous School &amp; Board
+                      Previous School &amp; Board <span className="text-orange-500">*</span>
                     </label>
                     <input
                       type="text"
+                      required
                       value={previousSchool}
                       onChange={(e) => setPreviousSchool(e.target.value)}
                       placeholder="e.g. DPS School, Hyderabad / St. Joseph CBSE"
@@ -857,10 +1164,11 @@ export default function ParentKioskView({
                   {/* Residential Address */}
                   <div className="sm:col-span-2 space-y-1">
                     <label className="block text-xs font-black text-slate-200 tracking-wide">
-                      Residential Address (Area / Locality)
+                      Residential Address (Area / Locality) <span className="text-orange-500">*</span>
                     </label>
                     <input
                       type="text"
+                      required
                       value={residentialAddress}
                       onChange={(e) => setResidentialAddress(e.target.value)}
                       placeholder="e.g. Plot 45, Green Hills Colony, LB Nagar"

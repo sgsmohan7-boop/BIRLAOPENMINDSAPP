@@ -25,6 +25,8 @@ interface ReceptionQueueModalProps {
   onDismissEntry?: (entryId: string) => void;
   onOpenQrPoster: () => void;
   currentCounsellorName?: string;
+  currentCounsellorId?: string;
+  userRole?: string;
 }
 
 export default function ReceptionQueueModal({
@@ -34,7 +36,9 @@ export default function ReceptionQueueModal({
   onClaimEntry,
   onDismissEntry,
   onOpenQrPoster,
-  currentCounsellorName = "Counsellor"
+  currentCounsellorName = "Counsellor",
+  currentCounsellorId,
+  userRole
 }: ReceptionQueueModalProps) {
   const [activeTab, setActiveTab] = useState<"pending" | "claimed">("pending");
   const [searchQuery, setSearchQuery] = useState("");
@@ -60,6 +64,26 @@ export default function ReceptionQueueModal({
     return false;
   };
 
+  const isClaimedByMe = (e: ParentSelfEntry) => {
+    if (userRole !== "Counsellor") return true; // Admins / Management see all claimed
+    if (!currentCounsellorId && !currentCounsellorName) return true;
+
+    const normC = (e.claimedBy || "").trim().toLowerCase().replace("-0", "-");
+    const normA = (currentCounsellorId || "").trim().toLowerCase().replace("-0", "-");
+    const idMatch = Boolean(
+      e.claimedBy && currentCounsellorId &&
+      (e.claimedBy.trim().toLowerCase() === currentCounsellorId.trim().toLowerCase() || normC === normA)
+    );
+    const cName = (e.claimedByName || "").trim().toLowerCase();
+    const aName = (currentCounsellorName || "").trim().toLowerCase();
+    const nameMatch = Boolean(
+      cName.length > 0 && aName.length > 0 &&
+      (cName === aName || cName.includes(aName) || aName.includes(cName))
+    );
+
+    return idMatch || nameMatch;
+  };
+
   const dismissedSet = new Set(getDismissedParentEntryIds());
   const pendingList = [...entries.filter(e => e.status === "pending" && !dismissedSet.has(e.id))].sort((a, b) => {
     // Group by day, order by dailyTokenNo ascending (1, 2, 3...)
@@ -71,7 +95,7 @@ export default function ReceptionQueueModal({
     return new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime();
   });
 
-  const allClaimedList = [...entries.filter(e => e.status === "claimed")].sort((a, b) => {
+  const allClaimedList = [...entries.filter(e => e.status === "claimed" && isClaimedByMe(e))].sort((a, b) => {
     return new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime();
   });
 
@@ -337,7 +361,7 @@ export default function ReceptionQueueModal({
                         <div className="p-2 bg-emerald-950/40 border border-emerald-500/30 rounded-xl text-xs text-emerald-300 flex items-center gap-2">
                           <ShieldCheck size={16} className="text-emerald-400 shrink-0" />
                           <span>
-                            Claimed by <strong>{entry.claimedBy || "Counsellor"}</strong>
+                            Claimed by <strong>{entry.claimedByName || entry.claimedBy || "Counsellor"}</strong>
                           </span>
                         </div>
                       )}

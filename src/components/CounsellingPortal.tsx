@@ -431,12 +431,10 @@ export default function CounsellingPortal({
         unsubscribeFirestore = syncCollection(
           "parent_self_entries",
           (firestoreEntries: any[]) => {
-            if (Array.isArray(firestoreEntries) && firestoreEntries.length > 0) {
-              setParentSelfEntries(prev => {
-                const combined = deduplicateParentEntries([...firestoreEntries, ...(prev || [])]);
-                saveParentSelfEntries(combined);
-                return combined;
-              });
+            if (Array.isArray(firestoreEntries)) {
+              const deduped = deduplicateParentEntries(firestoreEntries);
+              setParentSelfEntries(deduped);
+              saveParentSelfEntries(deduped);
             }
           },
           []
@@ -496,12 +494,34 @@ export default function CounsellingPortal({
   };
 
   const claimedParentEntries = useMemo(() => {
-    return (parentSelfEntries || []).filter(e => e.status === "claimed");
-  }, [parentSelfEntries]);
+    return (parentSelfEntries || []).filter(e => {
+      if (e.status !== "claimed") return false;
+      if (userRole === "Counsellor" && activeCounsellor) {
+        const normC = (e.claimedBy || "").trim().toLowerCase().replace("-0", "-");
+        const normA = (activeCounsellor.id || "").trim().toLowerCase().replace("-0", "-");
+        const matchId = Boolean(
+          e.claimedBy && activeCounsellor.id && 
+          (e.claimedBy.trim().toLowerCase() === activeCounsellor.id.trim().toLowerCase() || normC === normA)
+        );
+        const cName = (e.claimedByName || "").trim().toLowerCase();
+        const aName = (activeCounsellor.name || "").trim().toLowerCase();
+        const uName = (activeCounsellor.username || "").trim().toLowerCase();
+        const matchName = Boolean(
+          cName.length > 0 && aName.length > 0 && 
+          (cName === aName || cName.includes(aName) || aName.includes(cName))
+        );
+        const matchUser = Boolean(
+          uName.length > 0 && (cName === uName || cName.includes(uName))
+        );
+        return matchId || matchName || matchUser;
+      }
+      return true;
+    });
+  }, [parentSelfEntries, userRole, activeCounsellor]);
 
   const todayClaimedParentEntries = useMemo(() => {
-    return (parentSelfEntries || []).filter(e => e.status === "claimed" && isEntryToday(e));
-  }, [parentSelfEntries]);
+    return claimedParentEntries.filter(isEntryToday);
+  }, [claimedParentEntries]);
 
   const handleAddParentSelfEntry = (entry: ParentSelfEntry) => {
     const updated = [entry, ...parentSelfEntries.filter(e => e.id !== entry.id)];
@@ -1135,8 +1155,23 @@ export default function CounsellingPortal({
       setTimeout(() => setDeleteToast(null), 3500);
       return;
     }
+    if (!formData.fatherName || !formData.fatherName.trim()) {
+      setDeleteToast("⚠️ Please enter Father's Name (mandatory field *).");
+      setTimeout(() => setDeleteToast(null), 3500);
+      return;
+    }
+    if (!formData.motherName || !formData.motherName.trim()) {
+      setDeleteToast("⚠️ Please enter Mother's Name (mandatory field *).");
+      setTimeout(() => setDeleteToast(null), 3500);
+      return;
+    }
     if (!formData.residentialAddress || !formData.residentialAddress.trim()) {
       setDeleteToast("⚠️ Please enter Residential Address (mandatory field *).");
+      setTimeout(() => setDeleteToast(null), 3500);
+      return;
+    }
+    if (!formData.previousSchool || !formData.previousSchool.trim()) {
+      setDeleteToast("⚠️ Please enter Previous School & Board (mandatory field *).");
       setTimeout(() => setDeleteToast(null), 3500);
       return;
     }
@@ -4171,9 +4206,12 @@ export default function CounsellingPortal({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Father's Name</label>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Father's Name <span className="text-red-500 font-black">*</span>
+                  </label>
                   <input
                     type="text"
+                    required
                     value={formData.fatherName}
                     onChange={(e) => setFormData({ ...formData, fatherName: e.target.value })}
                     placeholder="Father Name"
@@ -4182,9 +4220,12 @@ export default function CounsellingPortal({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Mother's Name</label>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Mother's Name <span className="text-red-500 font-black">*</span>
+                  </label>
                   <input
                     type="text"
+                    required
                     value={formData.motherName}
                     onChange={(e) => setFormData({ ...formData, motherName: e.target.value })}
                     placeholder="Mother Name"
@@ -4227,12 +4268,15 @@ export default function CounsellingPortal({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Previous School</label>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Previous School <span className="text-red-500 font-black">*</span>
+                  </label>
                   <input
                     type="text"
+                    required
                     value={formData.previousSchool}
                     onChange={(e) => setFormData({ ...formData, previousSchool: e.target.value })}
-                    placeholder="Name of previous school"
+                    placeholder="Name of previous school & board"
                     className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
                   />
                 </div>
@@ -5632,6 +5676,8 @@ export default function CounsellingPortal({
           setIsParentKioskModalOpen(true);
         }}
         currentCounsellorName={activeCounsellor?.name}
+        currentCounsellorId={activeCounsellor?.id}
+        userRole={userRole}
       />
 
       {/* Day-Wise, Weekly & Monthly Token List Report Modal */}

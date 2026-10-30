@@ -528,7 +528,7 @@ export default function App() {
             setTickets([]);
             return;
           }
-          if (items && items.length > 0) {
+          if (Array.isArray(items)) {
             setTickets(items);
             saveData({ tickets: items });
             localStorage.setItem("sgs_last_sync_tickets", new Date().toISOString());
@@ -540,7 +540,7 @@ export default function App() {
             setHistory([]);
             return;
           }
-          if (items && items.length > 0) {
+          if (Array.isArray(items)) {
             setHistory(items);
             saveData({ history: items });
             localStorage.setItem("sgs_last_sync_history", new Date().toISOString());
@@ -552,7 +552,7 @@ export default function App() {
             setInventory([]);
             return;
           }
-          if (items && items.length > 0) {
+          if (Array.isArray(items)) {
             setInventory(items);
             saveData({ inventory: items });
             localStorage.setItem("sgs_last_sync_inventory", new Date().toISOString());
@@ -564,7 +564,7 @@ export default function App() {
             setRooms([]);
             return;
           }
-          if (items && items.length > 0) {
+          if (Array.isArray(items)) {
             setRooms(items);
             saveData({ rooms: items });
             localStorage.setItem("sgs_last_sync_rooms", new Date().toISOString());
@@ -576,7 +576,7 @@ export default function App() {
             setAllocations([]);
             return;
           }
-          if (items && items.length > 0) {
+          if (Array.isArray(items)) {
             setAllocations(items);
             saveData({ allocations: items });
             localStorage.setItem("sgs_last_sync_allocations", new Date().toISOString());
@@ -588,7 +588,7 @@ export default function App() {
             setWarranty([]);
             return;
           }
-          if (items && items.length > 0) {
+          if (Array.isArray(items)) {
             setWarranty(items);
             saveData({ warranty: items });
             localStorage.setItem("sgs_last_sync_warranty", new Date().toISOString());
@@ -620,19 +620,18 @@ export default function App() {
             return;
           }
           const deletedSet = new Set(getDeletedEnquiryIds().map(x => x.toLowerCase()));
-          if (!items || items.length === 0) {
-            // Only clear if user explicitly confirmed database wipe
-            if (localStorage.getItem("sgs_wiping_database") === "true") {
-              setCounsellingEnquiries([]);
-              saveCounselling([]);
-              try {
-                fetch("/api/counselling", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify([])
-                }).catch(() => {});
-              } catch (_) {}
-            }
+          if (!items) return;
+
+          if (items.length === 0) {
+            setCounsellingEnquiries([]);
+            saveCounselling([]);
+            try {
+              fetch("/api/counselling", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify([])
+              }).catch(() => {});
+            } catch (_) {}
             return;
           }
 

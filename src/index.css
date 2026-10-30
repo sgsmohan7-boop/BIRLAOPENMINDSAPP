@@ -70,8 +70,13 @@ body.dark {
     text-shadow: none !important;
   }
 
-  /* Ensure the body wraps cleanly without extra scrolls */
-  body {
+  /* Only hide body when an isolated portaled print sheet is present */
+  body:has(#print-vendor-ledger-root),
+  body:has(#print-work-order-root),
+  body:has(#print-warranty-root),
+  body:has(#print-employee-root),
+  body:has(#print-executive-report-root),
+  body:has(#print-inventory-root) {
     position: relative !important;
     visibility: hidden !important;
   }
