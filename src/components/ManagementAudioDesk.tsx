@@ -83,9 +83,24 @@ export default function ManagementAudioDesk({
   counsellorAccounts = [],
   onBackToHome
 }: ManagementAudioDeskProps) {
-  // Filter only enquiries that have an audio recording attached
+  // Filter enquiries that have an audio recording or meeting audit attached
   const recordedEnquiries = useMemo(() => {
-    return enquiries.filter(e => e.audioRecording && (e.audioRecording.audioData || e.audioRecording.storageKey || e.audioRecording.driveFileUrl || e.audioRecording.driveFileId));
+    return enquiries.filter(e => 
+      Boolean(
+        (e.audioRecording && (
+          e.audioRecording.audioData || 
+          e.audioRecording.storageKey || 
+          e.audioRecording.driveFileUrl || 
+          e.audioRecording.driveFileId ||
+          e.audioRecording.audioUrl ||
+          e.audioRecording.fileName ||
+          (e.audioRecording.durationSeconds && e.audioRecording.durationSeconds > 0) ||
+          e.audioRecording.meetingTextSummary
+        )) ||
+        (e.momReport && e.momReport.content && e.momReport.content.trim().length > 0) ||
+        (e as any).hasAudio
+      )
+    );
   }, [enquiries]);
 
   // Selected enquiry for active playback & review

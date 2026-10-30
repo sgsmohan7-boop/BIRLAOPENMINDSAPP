@@ -717,8 +717,23 @@ export default function ManagementPortal({
   const inProgressEnquiries = safeEnquiries.filter(e => e.admissionStatus === "Follow-up Required" || e.admissionStatus === "Application Taken" || e.admissionStatus === "Interested").length;
   const conversionRate = totalEnquiries > 0 ? Math.round((confirmedAdmissions / totalEnquiries) * 100) : 0;
 
-  // Audio Recordings Metrics
-  const recordingsWithAudio = safeEnquiries.filter(e => e.audioRecording && e.audioRecording.audioData);
+  // Audio Recordings Metrics (Comprehensive check covering local base64, R2, Drive, audio storage keys, and meeting minutes)
+  const isAudioEnquiry = (e: CounsellingEnquiry) => Boolean(
+    (e.audioRecording && (
+      e.audioRecording.audioData ||
+      e.audioRecording.storageKey ||
+      e.audioRecording.driveFileUrl ||
+      e.audioRecording.driveFileId ||
+      e.audioRecording.audioUrl ||
+      e.audioRecording.fileName ||
+      (e.audioRecording.durationSeconds && e.audioRecording.durationSeconds > 0) ||
+      e.audioRecording.meetingTextSummary
+    )) ||
+    (e.momReport && e.momReport.content && e.momReport.content.trim().length > 0) ||
+    (e as any).hasAudio
+  );
+
+  const recordingsWithAudio = safeEnquiries.filter(isAudioEnquiry);
   const reviewedAudios = recordingsWithAudio.filter(e => e.audioRecording?.reviewStatus === "Reviewed - Approved");
   const pendingAudios = recordingsWithAudio.filter(e => !e.audioRecording?.reviewStatus || e.audioRecording.reviewStatus === "Pending");
   
@@ -782,12 +797,12 @@ export default function ManagementPortal({
       if (enq.admissionStatus === "Admission Confirmed") {
         counsellorMap[cid].confirmed += 1;
       }
-      if (enq.audioRecording && enq.audioRecording.audioData) {
+      if (isAudioEnquiry(enq)) {
         counsellorMap[cid].audioSessions += 1;
-        if (enq.audioRecording.reviewStatus === "Reviewed - Approved") {
+        if (enq.audioRecording?.reviewStatus === "Reviewed - Approved") {
           counsellorMap[cid].auditedSessions += 1;
         }
-        if (enq.audioRecording.qualityRating && enq.audioRecording.qualityRating > 0) {
+        if (enq.audioRecording?.qualityRating && enq.audioRecording.qualityRating > 0) {
           counsellorMap[cid].totalStars += enq.audioRecording.qualityRating;
           counsellorMap[cid].ratedCount += 1;
         }
@@ -1129,7 +1144,7 @@ CONFIDENTIAL - FOR BOARD OF DIRECTORS & PRINCIPAL REVIEW ONLY
           }`}
         >
           <Headphones size={16} />
-          <span>Parent Audio &amp; Minutes Audit Desk ({recordingsWithAudio.length})</span>
+          <span>Parent Audio &amp; Minutes Audit Desk{recordingsWithAudio.length > 0 ? ` (${recordingsWithAudio.length})` : ""}</span>
         </button>
 
         <button
@@ -2461,7 +2476,7 @@ CONFIDENTIAL - FOR BOARD OF DIRECTORS & PRINCIPAL REVIEW ONLY
                         </tr>
                       ) : (
                         filteredMetricEnquiries.map((enq, idx) => {
-                          const hasAudio = Boolean(enq.audioRecording && enq.audioRecording.audioData);
+                          const hasAudio = isAudioEnquiry(enq);
                           return (
                             <tr key={enq.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
                               <td className="py-3 px-3.5 text-center font-mono font-bold text-slate-500 text-xs">
