@@ -976,6 +976,17 @@ export function recordDeletedManagementAccountId(id: string, username?: string):
   } catch {}
 }
 
+export function unrecordDeletedManagementAccountId(id: string, username?: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    const deleted = getDeletedManagementAccountIds();
+    const cleanId = (id || "").toLowerCase();
+    const cleanUname = (username || "").toLowerCase();
+    const filtered = deleted.filter(d => d !== cleanId && d !== cleanUname);
+    localStorage.setItem(DELETED_MGMT_ACCOUNTS_KEY, JSON.stringify(filtered));
+  } catch {}
+}
+
 export function mergeWithDefaultManagementAccounts(
   items: ManagementAccount[],
   extraDeletedIds?: string[]
@@ -993,17 +1004,30 @@ export function mergeWithDefaultManagementAccounts(
     if (!acc || !acc.username) return;
     const u = acc.username.trim().toLowerCase();
     const idLower = (acc.id || "").trim().toLowerCase();
-    if (deletedSet.has(u) || deletedSet.has(idLower)) return;
 
-    if (existingUsernames.has(u)) {
-      const existingIdx = result.findIndex(r => r.username.toLowerCase() === u);
-      if (existingIdx >= 0) {
-        result[existingIdx] = { ...result[existingIdx], ...acc, username: u };
-      }
+    // If an account is explicitly present in storage or loaded, it is NOT deleted:
+    deletedSet.delete(u);
+    if (idLower) deletedSet.delete(idLower);
+
+    // If account with same username already in result, update it
+    const existingUserIdx = result.findIndex(r => r.username.toLowerCase() === u);
+    if (existingUserIdx >= 0) {
+      result[existingUserIdx] = { ...result[existingUserIdx], ...acc, username: u };
       return;
     }
 
-    existingIds.add(idLower);
+    // If account with same ID already in result (e.g. renamed/edited), update it
+    if (idLower) {
+      const existingIdIdx = result.findIndex(r => (r.id || "").toLowerCase() === idLower);
+      if (existingIdIdx >= 0) {
+        existingUsernames.delete(result[existingIdIdx].username.toLowerCase());
+        result[existingIdIdx] = { ...result[existingIdIdx], ...acc, username: u };
+        existingUsernames.add(u);
+        return;
+      }
+    }
+
+    if (idLower) existingIds.add(idLower);
     existingUsernames.add(u);
     result.push({ ...acc, username: u });
   };
@@ -1025,6 +1049,7 @@ export function mergeWithDefaultManagementAccounts(
     } catch {}
   }
 
+  // Default demo accounts (director, principal) are added ONLY if not in deletedSet and not already existing
   DEFAULT_MANAGEMENT_ACCOUNTS.forEach((demo) => {
     const idLower = demo.id.toLowerCase();
     const userLower = demo.username.toLowerCase();

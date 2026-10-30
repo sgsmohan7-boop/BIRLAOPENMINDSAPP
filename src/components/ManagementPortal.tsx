@@ -45,6 +45,8 @@ import {
   ManagementAccount, 
   loadManagementAccounts, 
   saveManagementAccounts, 
+  recordDeletedManagementAccountId,
+  unrecordDeletedManagementAccountId,
   Ticket, 
   Room, 
   InventoryItem,
@@ -54,7 +56,7 @@ import { loadCounsellorAccounts, saveCounsellorAccounts, DEMO_COUNSELLING, merge
 import ManagementAudioDesk from "./ManagementAudioDesk";
 import ManagementAdmissionDesk from "./ManagementAdmissionDesk";
 import { formatAudioDuration } from "../utils/audioStorage";
-import { isFirebaseConfigured, saveDocument } from "../utils/firebase";
+import { isFirebaseConfigured, saveDocument, deleteDocument } from "../utils/firebase";
 
 
 interface ManagementPortalProps {
@@ -179,8 +181,9 @@ export default function ManagementPortal({
   // Action Handlers for Management Accounts
   const handleOpenCreateMgmt = () => {
     const nextIdx = localManagementAccounts.length + 1;
+    const uniqueId = `MGMT-${String(nextIdx).padStart(2, "0")}-${Date.now().toString(36).toUpperCase().slice(-4)}`;
     setMgmtFormData({
-      id: `MGMT-0${nextIdx}`,
+      id: uniqueId,
       name: "",
       username: `executive${nextIdx}`,
       password: `Executive@${2026 + nextIdx}`,
@@ -218,6 +221,9 @@ export default function ManagementPortal({
       createdAt: mgmtFormData.createdAt || new Date().toLocaleDateString("en-GB")
     };
 
+    // Un-delete this username and ID from deleted tracking so fresh creation is never blocked
+    unrecordDeletedManagementAccountId(finalAcc.id, cleanUser);
+
     setLocalManagementAccounts(prev => {
       const idx = prev.findIndex(a => a.id === finalAcc.id || a.username.toLowerCase() === cleanUser);
       let updated: ManagementAccount[];
@@ -232,6 +238,8 @@ export default function ManagementPortal({
     });
 
     if (isFirebaseConfigured()) {
+      deleteDocument("deleted_management_accounts", (finalAcc.id || "").toLowerCase());
+      deleteDocument("deleted_management_accounts", cleanUser);
       saveDocument("management_accounts", finalAcc.id || finalAcc.username, finalAcc);
     }
 
@@ -290,11 +298,34 @@ export default function ManagementPortal({
     if (!mgmtAccountToDelete) return;
     const target = mgmtAccountToDelete;
     setMgmtAccountToDelete(null);
+
+    recordDeletedManagementAccountId(target.id, target.username);
+
     setLocalManagementAccounts(prev => {
-      const next = prev.filter(a => a.id !== target.id);
+      const next = prev.filter(a => a.id !== target.id && a.username.toLowerCase() !== target.username.toLowerCase());
       saveManagementAccounts(next);
       return next;
     });
+
+    if (isFirebaseConfigured()) {
+      deleteDocument("management_accounts", target.id);
+      deleteDocument("management_accounts", target.username.toLowerCase());
+      saveDocument("deleted_management_accounts", target.id.toLowerCase(), {
+        id: target.id.toLowerCase(),
+        username: target.username.toLowerCase(),
+        deletedAt: Date.now()
+      });
+    }
+
+    fetch(`/api/accounts/management/${encodeURIComponent(target.id)}`, {
+      method: "DELETE"
+    }).catch(() => {});
+
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("storage"));
+      window.dispatchEvent(new Event("management_accounts_updated"));
+    }
+
     if (onDeleteManagementAccount) onDeleteManagementAccount(target.id);
     setDeleteToast(`Management account "${target.name}" deleted successfully!`);
     setTimeout(() => setDeleteToast(null), 3500);

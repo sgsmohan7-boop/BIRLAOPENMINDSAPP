@@ -37,7 +37,7 @@ const ParentFormMobileOnly = React.lazy(() => import("./components/ParentFormMob
 
 import { loadData, saveData, calculateExpiryDate, resetToDefaults, clearAllData, loadCounselling, saveCounselling, deduplicateEnquiries, loadCounsellorAccounts, saveCounsellorAccounts, mergeWithDemoEnquiries, mergeWithDefaultCounsellorAccounts, recordDeletedCounsellorAccountId, unrecordDeletedCounsellorAccountId, recordDeletedCounsellorAccountIds, recordDeletedEnquiryId, recordDeletedEnquiryIds, getDeletedEnquiryIds, unmarkDeletedEnquiryId, mergeWithDefaultITStaffAccounts, saveITStaffAccounts, loadITStaffAccounts, recordDeletedITStaffAccountId } from "./utils/storage";
 import { AlertTriangle, X, Bell, ArrowRight, RefreshCw, Share2, Smartphone } from "lucide-react";
-import { Ticket, InventoryItem, Room, EmployeeAllocation, WarrantyContract, SchoolBranch, getNextTicketId, getNowFormatted, CounsellingEnquiry, CounsellorAccount, ManagementAccount, loadManagementAccounts, saveManagementAccounts, recordDeletedManagementAccountId, mergeWithDefaultManagementAccounts, ITStaffAccount } from "./types";
+import { Ticket, InventoryItem, Room, EmployeeAllocation, WarrantyContract, SchoolBranch, getNextTicketId, getNowFormatted, CounsellingEnquiry, CounsellorAccount, ManagementAccount, loadManagementAccounts, saveManagementAccounts, recordDeletedManagementAccountId, unrecordDeletedManagementAccountId, mergeWithDefaultManagementAccounts, ITStaffAccount } from "./types";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   syncCollection, 
@@ -714,6 +714,24 @@ export default function App() {
           saveITStaffAccounts(merged);
         }, loadITStaffAccounts()),
 
+        syncCollection<{ id: string; username?: string }>("deleted_management_accounts", (deletedDocs) => {
+          if (deletedDocs && deletedDocs.length > 0) {
+            deletedDocs.forEach(d => {
+              if (d.id || d.username) recordDeletedManagementAccountId(d.id, d.username);
+            });
+            setManagementAccounts(prev => mergeWithDefaultManagementAccounts(prev));
+          }
+        }, []),
+
+        syncCollection<ManagementAccount>("management_accounts", (items) => {
+          if (localStorage.getItem("sgs_wiping_database") === "true") {
+            return;
+          }
+          const merged = mergeWithDefaultManagementAccounts(items || []);
+          setManagementAccounts(merged);
+          saveManagementAccounts(merged);
+        }, loadManagementAccounts()),
+
         syncCollection<{ id: string; lastWipedAt?: number }>("system_metadata", (items) => {
           const statusDoc = items.find(i => i.id === "status");
           if (statusDoc?.lastWipedAt) {
@@ -1151,6 +1169,7 @@ export default function App() {
   };
 
   const handleSaveManagementAccount = (account: ManagementAccount) => {
+    unrecordDeletedManagementAccountId(account.id, account.username);
     setManagementAccounts((prev) => {
       const idx = prev.findIndex((a) => a.id === account.id || a.username.toLowerCase() === account.username.toLowerCase());
       let nextList: ManagementAccount[];
@@ -1162,6 +1181,8 @@ export default function App() {
       }
       saveManagementAccounts(nextList);
       if (isFirebaseConfigured()) {
+        deleteDocument("deleted_management_accounts", (account.id || "").toLowerCase());
+        deleteDocument("deleted_management_accounts", (account.username || "").toLowerCase());
         saveDocument("management_accounts", account.id || account.username, account);
       }
       return nextList;

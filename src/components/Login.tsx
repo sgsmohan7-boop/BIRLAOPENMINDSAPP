@@ -509,6 +509,24 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
 
     // 1. Search in local state & localStorage
     let allMgmtList = mergeWithDefaultManagementAccounts([...liveManagementAccounts, ...loadManagementAccounts()]);
+    
+    // Also include raw localStorage items directly (guaranteeing locally created accounts are never skipped)
+    if (typeof window !== "undefined") {
+      try {
+        const rawLocal = localStorage.getItem("sgs_management_accounts");
+        if (rawLocal) {
+          const parsed = JSON.parse(rawLocal);
+          if (Array.isArray(parsed)) {
+            parsed.forEach((p: ManagementAccount) => {
+              if (p && p.username && !allMgmtList.some(m => m.username.toLowerCase() === p.username.toLowerCase())) {
+                allMgmtList.push(p);
+              }
+            });
+          }
+        }
+      } catch {}
+    }
+
     let mgmtFound = allMgmtList.find(m => 
       m.username.toLowerCase() === u || 
       m.email.toLowerCase() === u || 
@@ -527,7 +545,8 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
             const merged = mergeWithDefaultManagementAccounts(json.management, json.deletedManagement || []);
             setLiveManagementAccounts(merged);
             saveManagementAccounts(merged);
-            mgmtFound = merged.find(m => 
+            allMgmtList = [...allMgmtList, ...json.management];
+            mgmtFound = allMgmtList.find(m => 
               m.username.toLowerCase() === u || 
               m.email.toLowerCase() === u || 
               m.id.toLowerCase() === u ||
@@ -547,18 +566,21 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
         const snap = await getDocs(collection(db, "management_accounts"));
         const fsItems: ManagementAccount[] = [];
         snap.forEach((d) => {
-          fsItems.push({ id: d.id, ...d.data() } as ManagementAccount);
+          const data = d.data() as ManagementAccount;
+          const acc = { id: d.id, ...data };
+          if (acc.username) fsItems.push(acc);
         });
         if (fsItems.length > 0) {
           const merged = mergeWithDefaultManagementAccounts(fsItems);
           setLiveManagementAccounts(merged);
           saveManagementAccounts(merged);
-          mgmtFound = merged.find(m => 
-            m.username.toLowerCase() === u || 
-            m.email.toLowerCase() === u || 
-            m.id.toLowerCase() === u ||
-            m.name.toLowerCase() === u ||
-            m.name.toLowerCase().replace(/[^a-z0-9]/g, "") === u.replace(/[^a-z0-9]/g, "")
+          allMgmtList = [...allMgmtList, ...fsItems];
+          mgmtFound = allMgmtList.find(m => 
+            (m.username || "").toLowerCase() === u || 
+            (m.email || "").toLowerCase() === u || 
+            (m.id || "").toLowerCase() === u || 
+            (m.name || "").toLowerCase() === u || 
+            (m.name || "").toLowerCase().replace(/[^a-z0-9]/g, "") === u.replace(/[^a-z0-9]/g, "")
           );
         }
       } catch (err) {
