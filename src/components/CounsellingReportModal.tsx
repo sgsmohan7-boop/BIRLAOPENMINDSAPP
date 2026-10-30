@@ -49,7 +49,18 @@ export default function CounsellingReportModal({
   const [customEndDate, setCustomEndDate] = useState<string>(todayIso);
 
   // Selected Counsellor filter
-  const [selectedCounsellor, setSelectedCounsellor] = useState<string>("ALL");
+  const [selectedCounsellor, setSelectedCounsellor] = useState<string>(() => {
+    if (userRole === "Counsellor" && currentCounsellorName) {
+      return currentCounsellorName;
+    }
+    return "ALL";
+  });
+
+  React.useEffect(() => {
+    if (userRole === "Counsellor" && currentCounsellorName) {
+      setSelectedCounsellor(currentCounsellorName);
+    }
+  }, [userRole, currentCounsellorName]);
 
   // Cumulative Admissions Baseline (0 by default, uses 100% real app original data)
   const [baselineAdmissions, setBaselineAdmissions] = useState<number>(() => {
@@ -184,7 +195,12 @@ export default function CounsellingReportModal({
     return enquiries.filter(e => {
       // Counsellor filter
       if (selectedCounsellor !== "ALL") {
-        if (!e.counsellorName || e.counsellorName.trim().toLowerCase() !== selectedCounsellor.toLowerCase()) {
+        const normSelected = selectedCounsellor.trim().toLowerCase();
+        const eName = (e.counsellorName || "").trim().toLowerCase();
+        const eId = (e.counsellorId || "").trim().toLowerCase();
+        const matchName = eName.length > 0 && (eName === normSelected || eName.includes(normSelected) || normSelected.includes(eName));
+        const matchId = eId.length > 0 && (eId === normSelected || eId.includes(normSelected) || normSelected.includes(eId));
+        if (!matchName && !matchId) {
           return false;
         }
       }

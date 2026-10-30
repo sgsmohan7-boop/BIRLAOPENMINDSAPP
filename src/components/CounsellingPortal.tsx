@@ -94,7 +94,8 @@ import {
   saveParentSelfEntries,
   getDismissedParentEntryIds,
   recordDismissedParentEntryId,
-  unmarkDeletedEnquiryId
+  unmarkDeletedEnquiryId,
+  getDeletedEnquiryIds
 } from "../utils/storage";
 import { deleteAudioRecordingBlob, formatAudioDuration } from "../utils/audioStorage";
 import { isFirebaseConfigured, syncCollection, saveDocument, deleteDocument } from "../utils/firebase";
@@ -238,9 +239,16 @@ export default function CounsellingPortal({
   const [metricAdminCounsellor, setMetricAdminCounsellor] = useState<string>("ALL");
   const [selectedDateChip, setSelectedDateChip] = useState<string | null>(null);
 
-  // Safe enquiries source
+  // Safe enquiries source with deleted IDs filtered out
   const safeEnquiries = useMemo(() => {
-    return Array.isArray(enquiries) ? enquiries : [];
+    const list = Array.isArray(enquiries) ? enquiries : [];
+    const deletedSet = new Set(getDeletedEnquiryIds().map(x => x.toLowerCase()));
+    return list.filter(e => {
+      if (!e) return false;
+      const eId = (e.id || "").toLowerCase();
+      const eNo = (e.enquiryNo || "").toLowerCase();
+      return (!eId || !deletedSet.has(eId)) && (!eNo || !deletedSet.has(eNo));
+    });
   }, [enquiries]);
 
 
@@ -5764,7 +5772,7 @@ export default function CounsellingPortal({
       <CounsellingReportModal
         isOpen={isReportModalOpen}
         onClose={() => setIsReportModalOpen(false)}
-        enquiries={safeEnquiries}
+        enquiries={userRole === "Counsellor" ? counsellorScopeEnquiries : safeEnquiries}
         currentCounsellorName={activeCounsellor?.name}
         userRole={userRole}
       />
