@@ -994,15 +994,7 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT COACHING ONLY
                   <span className="hidden sm:inline">CSV</span>
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => setShowReportModal(true)}
-                  title="Generate 1-Click Day, Week, and Month reports for WhatsApp"
-                  className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 cursor-pointer shadow-xs active:scale-95"
-                >
-                  <Send size={13} />
-                  <span>WhatsApp Report</span>
-                </button>
+
               </div>
 
               {/* Quick Status Category Filter Pills */}

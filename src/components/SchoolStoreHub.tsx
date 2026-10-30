@@ -495,7 +495,7 @@ export default function SchoolStoreHub() {
   const [formRackLocation, setFormRackLocation] = useState("");
   const [formTotalQty, setFormTotalQty] = useState(10);
   const [formMinReorder, setFormMinReorder] = useState(5);
-  const [formUnitPrice, setFormUnitPrice] = useState(100);
+  const [formUnitPrice, setFormUnitPrice] = useState<number>(0);
   const [formVendorName, setFormVendorName] = useState("");
   const [formVendorCode, setFormVendorCode] = useState("");
   const [formVendorContact, setFormVendorContact] = useState("");
@@ -522,7 +522,7 @@ export default function SchoolStoreHub() {
   const [inwBillDate, setInwBillDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [inwSelectedItemId, setInwSelectedItemId] = useState("");
   const [inwQty, setInwQty] = useState(10);
-  const [inwUnitPrice, setInwUnitPrice] = useState(100);
+  const [inwUnitPrice, setInwUnitPrice] = useState<number>(0);
   const [inwPaymentStatus, setInwPaymentStatus] = useState<"Paid" | "Pending" | "Partial">("Paid");
 
   // Form State: Material Return
@@ -1551,7 +1551,7 @@ export default function SchoolStoreHub() {
                       <th className="p-3.5 text-center">Dispatched</th>
                       <th className="p-3.5 text-center">Available Stock</th>
                       <th className="p-3.5">Primary Vendor</th>
-                      <th className="p-3.5 text-right">Unit Price</th>
+                      <th className="p-3.5 text-right">Unit Price (Optional)</th>
                       <th className="p-3.5 text-center">Actions</th>
                     </tr>
                   </thead>
@@ -1614,11 +1614,17 @@ export default function SchoolStoreHub() {
                             <p className="font-bold text-slate-200">{item.vendorName}</p>
                             <p className="text-[10px] text-slate-400 font-mono">{item.vendorCode}</p>
                           </td>
-                          <td className="p-3.5 text-right font-bold text-emerald-400 whitespace-nowrap">
-                            ₹ {item.unitPrice.toLocaleString()}
-                            <span className="block text-[9px] text-slate-500 font-normal">
-                              Total: ₹ {(item.balanceQty * item.unitPrice).toLocaleString()}
-                            </span>
+                          <td className="p-3.5 text-right font-bold whitespace-nowrap">
+                            {item.unitPrice && item.unitPrice > 0 ? (
+                              <>
+                                <span className="text-emerald-400">₹ {item.unitPrice.toLocaleString()}</span>
+                                <span className="block text-[9px] text-slate-500 font-normal">
+                                  Total: ₹ {(item.balanceQty * item.unitPrice).toLocaleString()}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="text-slate-500 text-[11px] font-semibold italic">—</span>
+                            )}
                           </td>
                           <td className="p-3.5 text-center whitespace-nowrap">
                             <div className="flex items-center justify-center gap-1.5">
@@ -1874,7 +1880,7 @@ export default function SchoolStoreHub() {
                         <div key={i} className="flex justify-between text-[11px] pt-0.5">
                           <span className="text-slate-300 font-medium">{item.itemName}</span>
                           <span className="font-bold text-emerald-400 whitespace-nowrap ml-2">
-                            {item.qty} units @ ₹{item.unitPrice}
+                            {item.qty} units {item.unitPrice > 0 ? `@ ₹${item.unitPrice}` : ''}
                           </span>
                         </div>
                       ))}
@@ -1884,7 +1890,7 @@ export default function SchoolStoreHub() {
                   <div className="flex justify-between items-center pt-2 border-t border-slate-800">
                     <span className="text-[11px] text-slate-400">Received By: {inward.receivedBy}</span>
                     <p className="text-sm font-black text-emerald-400">
-                      ₹ {inward.billAmount.toLocaleString()}
+                      {inward.billAmount > 0 ? `₹ ${inward.billAmount.toLocaleString()}` : 'Non-Priced Receipt'}
                     </p>
                   </div>
                 </div>
@@ -2057,7 +2063,9 @@ export default function SchoolStoreHub() {
 
                     <div className="pl-2 flex justify-between items-center text-xs">
                       <span className="text-slate-400 text-[11px]">Recommended Order:</span>
-                      <span className="font-extrabold text-amber-400">+{shortfall} {item.unit} (₹ {estBudget.toLocaleString()})</span>
+                      <span className="font-extrabold text-amber-400">
+                        +{shortfall} {item.unit} {item.unitPrice > 0 ? `(₹ ${estBudget.toLocaleString()})` : ''}
+                      </span>
                     </div>
 
                     <div className="pl-2 pt-2 border-t border-slate-800 flex justify-between items-center text-xs">
@@ -2311,14 +2319,18 @@ export default function SchoolStoreHub() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Unit Purchase Price (₹)</label>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Unit Purchase Price (Optional ₹)</label>
                   <input
                     type="number"
                     min="0"
-                    value={formUnitPrice}
-                    onChange={e => setFormUnitPrice(Math.max(0, parseFloat(e.target.value) || 0))}
-                    className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white focus:outline-none focus:ring-2 focus:ring-amber-500 font-bold text-emerald-400"
+                    value={formUnitPrice === 0 ? "" : formUnitPrice}
+                    onChange={e => setFormUnitPrice(e.target.value === "" ? 0 : Math.max(0, parseFloat(e.target.value) || 0))}
+                    placeholder="0 (Optional — Leave blank if non-priced)"
+                    className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white focus:outline-none focus:ring-2 focus:ring-amber-500 font-bold text-emerald-400 placeholder:text-slate-600 placeholder:font-normal"
                   />
+                  <span className="text-[9px] text-slate-500 block mt-1 font-normal normal-case">
+                    Optional: Enter price only for items that require monetary valuation
+                  </span>
                 </div>
 
                 <div>
@@ -2651,13 +2663,14 @@ export default function SchoolStoreHub() {
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Unit Cost Price (₹)</label>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Unit Cost Price (Optional ₹)</label>
                   <input
                     type="number"
                     min="0"
-                    value={inwUnitPrice}
-                    onChange={e => setInwUnitPrice(Math.max(0, parseFloat(e.target.value) || 0))}
-                    className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white focus:outline-none focus:ring-2 focus:ring-amber-500 font-bold text-emerald-400"
+                    value={inwUnitPrice === 0 ? "" : inwUnitPrice}
+                    onChange={e => setInwUnitPrice(e.target.value === "" ? 0 : Math.max(0, parseFloat(e.target.value) || 0))}
+                    placeholder="0 (Optional)"
+                    className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white focus:outline-none focus:ring-2 focus:ring-amber-500 font-bold text-emerald-400 placeholder:text-slate-600 placeholder:font-normal"
                   />
                 </div>
               </div>
