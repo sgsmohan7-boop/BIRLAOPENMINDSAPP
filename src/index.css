@@ -104,10 +104,15 @@ body.dark {
   select,
   textarea,
   .sidebar-container,
+  .w-80,
+  [class*="w-80"],
   .modal-backdrop,
   #latest-update-modal,
   #warranty-expiry-banner {
     display: none !important;
+    width: 0 !important;
+    max-width: 0 !important;
+    visibility: hidden !important;
   }
 
   /* Active In-Page Printable Forms (Counselling Form, Token Lists, Reports) */

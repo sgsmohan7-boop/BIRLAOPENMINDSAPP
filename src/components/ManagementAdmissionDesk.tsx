@@ -16,9 +16,11 @@ import {
   LayoutGrid,
   List,
   UserCheck,
-  Plus
+  Plus,
+  Printer
 } from "lucide-react";
 import { CounsellingEnquiry, CounsellorAccount } from "../types";
+import { printOfficialAdmissionForm } from "../utils/printAdmissionForm";
 
 interface ManagementAdmissionDeskProps {
   enquiries: CounsellingEnquiry[];
@@ -429,6 +431,14 @@ export default function ManagementAdmissionDesk({
                                       🎙️ Audio
                                     </span>
                                   )}
+                                  <button
+                                    type="button"
+                                    onClick={() => printOfficialAdmissionForm(cand)}
+                                    className="p-1 text-slate-500 hover:text-orange-600 hover:bg-orange-50 dark:hover:bg-slate-700 rounded transition cursor-pointer"
+                                    title="Print Official Admission Form"
+                                  >
+                                    <Printer size={12} />
+                                  </button>
                                   {onDeleteEnquiry && (
                                     <button
                                       type="button"
@@ -487,7 +497,7 @@ export default function ManagementAdmissionDesk({
                 <th className="py-3 px-4">Assigned Counsellor</th>
                 <th className="py-3 px-4 text-center">Admission Status</th>
                 <th className="py-3 px-4 text-center">Voice Audit</th>
-                {onDeleteEnquiry && <th className="py-3 px-4 text-right">Actions</th>}
+                <th className="py-3 px-4 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-medium">
@@ -533,17 +543,28 @@ export default function ManagementAdmissionDesk({
                         <span className="text-[10px] text-slate-400">No audio</span>
                       )}
                     </td>
-                    {onDeleteEnquiry && (
-                      <td className="py-3.5 px-4 text-right">
+                    <td className="py-3.5 px-4 text-right">
+                      <div className="flex items-center justify-end gap-1.5">
                         <button
                           type="button"
-                          onClick={() => onDeleteEnquiry(enq.id)}
-                          className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-600 dark:bg-rose-950/50 dark:text-rose-300 rounded-lg text-[11px] font-bold transition cursor-pointer"
+                          onClick={() => printOfficialAdmissionForm(enq)}
+                          className="p-1.5 text-slate-600 dark:text-slate-400 hover:text-orange-600 hover:bg-orange-50 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                          title="Print Official Admission Form"
                         >
-                          Delete
+                          <Printer size={13} />
                         </button>
-                      </td>
-                    )}
+                        {onDeleteEnquiry && (
+                          <button
+                            type="button"
+                            onClick={() => onDeleteEnquiry(enq.id)}
+                            className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-600 dark:bg-rose-950/50 dark:text-rose-300 rounded-lg text-[11px] font-bold transition cursor-pointer"
+                            title="Delete enquiry"
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
+                    </td>
                   </tr>
                 ))
               )}

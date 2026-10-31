@@ -99,6 +99,7 @@ import {
 } from "../utils/storage";
 import { deleteAudioRecordingBlob, formatAudioDuration } from "../utils/audioStorage";
 import { isFirebaseConfigured, syncCollection, saveDocument, deleteDocument } from "../utils/firebase";
+import { printOfficialAdmissionForm } from "../utils/printAdmissionForm";
 
 function deduplicateParentEntries(entries: ParentSelfEntry[]): ParentSelfEntry[] {
   const dismissedSet = new Set(getDismissedParentEntryIds());
@@ -1263,6 +1264,10 @@ export default function CounsellingPortal({
   const viewPrintPreview = (item: CounsellingEnquiry) => {
     setSelectedEnquiry(item);
     setActiveView("print");
+  };
+
+  const handlePrintAdmissionForm = () => {
+    printOfficialAdmissionForm(selectedEnquiry);
   };
 
   const handleSourceToggle = (source: string) => {
@@ -4999,8 +5004,9 @@ export default function CounsellingPortal({
                 <Edit3 size={14} /> Edit
               </button>
               <button
-                onClick={() => window.print()}
+                onClick={handlePrintAdmissionForm}
                 className="px-5 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-black shadow-md transition-all cursor-pointer flex items-center gap-2"
+                title="Print official physical admission sheet"
               >
                 <Printer size={15} /> Print Physical Sheet
               </button>
@@ -5083,21 +5089,10 @@ export default function CounsellingPortal({
               </div>
             </div>
 
-            {/* Section 4 */}
+            {/* Section 4: INFORMATION EXPLAINED (Counselling Notes Omitted as requested) */}
             <div className="border border-black mb-3">
               <div className="bg-slate-200 font-black px-2 py-1 uppercase border-b border-black text-[11px]">
-                4. COUNSELLING / INTERACTION NOTES
-              </div>
-              <div className="p-2 space-y-1.5 min-h-[60px]">
-                <div><span className="font-bold">Points discussed with parents:</span> {selectedEnquiry.pointsDiscussed || "—"}</div>
-                <div><span className="font-bold">Counsellor observations / additional remarks:</span> {selectedEnquiry.counsellorObservations || "—"}</div>
-              </div>
-            </div>
-
-            {/* Section 5 */}
-            <div className="border border-black mb-3">
-              <div className="bg-slate-200 font-black px-2 py-1 uppercase border-b border-black text-[11px]">
-                5. INFORMATION EXPLAINED
+                4. INFORMATION EXPLAINED
               </div>
               <div className="p-2 grid grid-cols-2 gap-2">
                 <div>School Facilities: [ {selectedEnquiry.explainedSchoolFacilities ? "✓" : " "} ] Explained</div>
@@ -5109,10 +5104,10 @@ export default function CounsellingPortal({
               </div>
             </div>
 
-            {/* Section 6 */}
+            {/* Section 5: ADMISSION STATUS & SIGNATURES */}
             <div className="border border-black mb-3">
               <div className="bg-slate-200 font-black px-2 py-1 uppercase border-b border-black text-[11px]">
-                6. ADMISSION STATUS & FOLLOW-UP
+                5. ADMISSION STATUS & SIGNATURES
               </div>
               <div className="p-2 space-y-2">
                 <div className="flex gap-4 flex-wrap">

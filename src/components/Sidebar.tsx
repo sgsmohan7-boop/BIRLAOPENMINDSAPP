@@ -253,7 +253,7 @@ export default function Sidebar({
   ];
 
   return (
-    <div className="w-80 bg-[#1E293B] flex flex-col h-screen text-slate-100 selection:bg-[#F6AD55] selection:text-slate-900 shadow-xl border-r border-[#2d3a4f]">
+    <aside id="app-sidebar" className="w-80 bg-[#1E293B] flex flex-col h-screen text-slate-100 selection:bg-[#F6AD55] selection:text-slate-900 shadow-xl border-r border-[#2d3a4f] no-print print:hidden">
       {/* Sidebar Header */}
       <div className="p-4 border-b border-slate-700/50 bg-slate-900/40">
         {/* Branding header block */}
@@ -522,6 +522,6 @@ export default function Sidebar({
           </div>
         </div>
       )}
-    </div>
+    </aside>
   );
 }
