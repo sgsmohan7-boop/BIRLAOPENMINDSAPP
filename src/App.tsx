@@ -1811,8 +1811,8 @@ export default function App() {
         allowedTabs={allowedTabs}
       />
       <main className="flex-1 h-full overflow-hidden flex flex-col">
-        {/* Top Header Bar - Cleaned & Uncluttered */}
-        <div className="bg-[#FFFDF9] border-b border-[#E2CBB5] px-4 py-2 flex items-center justify-between shrink-0 relative z-30 shadow-xs">
+        {/* Top Header Bar - Cleaned & Uncluttered (Hidden on print) */}
+        <div className="bg-[#FFFDF9] border-b border-[#E2CBB5] px-4 py-2 flex items-center justify-between shrink-0 relative z-30 shadow-xs no-print">
           <div className="flex items-center gap-2 min-w-0">
             <h2 className="text-xs md:text-sm font-black uppercase tracking-wider text-[#3B1505] truncate">
               {currentTab === "portal-links" ? "Staff Department Portal Links Directory" :

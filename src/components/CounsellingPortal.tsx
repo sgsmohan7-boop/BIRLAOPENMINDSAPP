@@ -2061,8 +2061,8 @@ export default function CounsellingPortal({
 
   return (
     <div className={`space-y-6 pb-24 ${standalone ? "w-full bg-slate-100 dark:bg-slate-950 p-4 md:p-8 custom-scrollbar" : ""}`}>
-      {/* Top Sticky Navigation Header Bar (Remains visible & highlighted on scroll) */}
-      <div className="sticky top-0 z-50 pt-1 pb-2 -mt-1 bg-slate-100/90 dark:bg-slate-950/90 backdrop-blur-md transition-all">
+      {/* Top Sticky Navigation Header Bar (Remains visible & highlighted on scroll, hidden during print) */}
+      <div className="sticky top-0 z-50 pt-1 pb-2 -mt-1 bg-slate-100/90 dark:bg-slate-950/90 backdrop-blur-md transition-all no-print">
         <div className="bg-white/98 dark:bg-slate-900/98 backdrop-blur-xl border border-slate-200/90 dark:border-slate-800/90 p-3.5 sm:p-4 rounded-2xl shadow-xl flex items-center justify-between gap-3 sm:gap-4 transition-all ring-1 ring-slate-900/5 dark:ring-white/10">
           <div className="flex items-center gap-3">
             <img 

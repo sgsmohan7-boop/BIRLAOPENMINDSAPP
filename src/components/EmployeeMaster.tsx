@@ -2652,7 +2652,7 @@ export default function EmployeeMaster({ allocations, inventory, rooms, updateAl
       {printModalType && createPortal(
         <div 
           id="print-employee-root"
-          className="hidden print:block bg-white p-[0.75in] text-slate-900 relative"
+          className="bg-white p-[0.75in] text-slate-900 relative"
           style={{ fontFamily: "'Inter', sans-serif" }}
         >
           {renderEmployeePrintContent()}

@@ -1313,33 +1313,7 @@ export default function InventoryMaster({ inventory, updateInventory }: Inventor
   return (
     <div id="inventory-tab" className="flex flex-col h-full bg-[#f8fafc] text-slate-800 p-8 overflow-y-auto w-full custom-scrollbar">
       
-      {/* Styles for direct clean printing to PDF */}
-      <style>{`
-        @media print {
-          body * {
-            visibility: hidden;
-            background: white !important;
-            color: black !important;
-          }
-          #print-inventory-root, #print-inventory-root *,
-          #print-vendor-ledger-root, #print-vendor-ledger-root * {
-            visibility: visible;
-          }
-          #print-inventory-root, #print-vendor-ledger-root {
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 100%;
-            border: none !important;
-            box-shadow: none !important;
-            padding: 0px !important;
-            margin: 0px !important;
-          }
-          .no-print {
-            display: none !important;
-          }
-        }
-      `}</style>
+
 
       {/* Header bar */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center pb-6 border-b border-slate-200 gap-4 no-print">
@@ -2606,7 +2580,7 @@ export default function InventoryMaster({ inventory, updateInventory }: Inventor
         const { items: filteredItems, totalQuantity: filteredQty, totalBillAmount: filteredAmount } = getFilteredVendorData(record);
         
         return createPortal(
-          <div id="print-vendor-ledger-root" className="hidden print:block bg-white text-slate-800 p-12 leading-relaxed font-sans">
+          <div id="print-vendor-ledger-root" className="bg-white text-slate-800 p-12 leading-relaxed font-sans">
             <div className="max-w-4xl mx-auto space-y-8">
               {/* Header block */}
               <div className="flex justify-between items-start border-b-2 border-slate-900 pb-6">
@@ -2755,7 +2729,7 @@ export default function InventoryMaster({ inventory, updateInventory }: Inventor
       {showPrintModal && createPortal(
         <div 
           id="print-inventory-root"
-          className="hidden print:block bg-white p-[0.75in] text-slate-900 relative"
+          className="bg-white p-[0.75in] text-slate-900 relative"
           style={{ fontFamily: "'Inter', sans-serif" }}
         >
           {renderInventoryPrintContent()}

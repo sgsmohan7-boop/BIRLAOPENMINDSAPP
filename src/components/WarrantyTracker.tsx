@@ -597,7 +597,7 @@ export default function WarrantyTracker({ warranty, inventory, updateWarranty }:
       {printModalType && createPortal(
         <div 
           id="print-warranty-root"
-          className="hidden print:block bg-white p-12 text-slate-900 font-sans text-xs relative select-text"
+          className="bg-white p-12 text-slate-900 font-sans text-xs relative select-text"
         >
           {/* Decorative High-End Corporate Top Margin line */}
           <div className={`w-full h-1.5 ${printModalType === "register" ? "bg-indigo-700" : "bg-[#D53F8C]"} rounded-sm mb-6`}></div>

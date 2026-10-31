@@ -1380,7 +1380,7 @@ export default function Dashboard({
 
       {/* React Portal to inject printable ticket directly under body for seamless native browser print flow */}
       {selectedTicket && createPortal(
-        <div id="print-work-order-root" className="hidden print:block bg-white text-slate-900 p-12 leading-relaxed">
+        <div id="print-work-order-root" className="bg-white text-slate-900 p-8 leading-relaxed">
           <div className="max-w-3xl mx-auto space-y-8">
             
             {/* Document Header */}
@@ -1820,30 +1820,6 @@ export default function Dashboard({
       {/* ========================================== */}
       {showDashboardPrintModal && matchedReportTickets.length > 0 && (
           <div className="fixed inset-0 z-[100] bg-slate-900/90 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
-            {/* Inject dynamic printer styles directly to ensure zero border frame bleeding */}
-          <style>{`
-            @media print {
-              body * {
-                visibility: hidden !important;
-              }
-              #print-executive-report-root, #print-executive-report-root * {
-                visibility: visible !important;
-              }
-              #print-executive-report-root {
-                position: absolute !important;
-                left: 0 !important;
-                top: 0 !important;
-                width: 100% !important;
-                margin: 0 !important;
-                padding: 1.5in !important;
-                background: white !important;
-                color: black !important;
-              }
-              .print-preview-scroll-container {
-                overflow: visible !important;
-              }
-            }
-          `}</style>
 
           <div className="bg-slate-100 dark:bg-slate-950 w-full max-w-5xl rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-850 animate-in fade-in zoom-in-95 duration-200 flex flex-col h-[90vh]">
             
@@ -1893,7 +1869,7 @@ export default function Dashboard({
       {showDashboardPrintModal && matchedReportTickets.length > 0 && createPortal(
         <div 
           id="print-executive-report-root"
-          className="hidden print:block bg-white p-6 leading-relaxed relative"
+          className="bg-white p-6 leading-relaxed relative"
           style={{ fontFamily: "'Inter', sans-serif" }}
         >
           {renderExecutivePrintContent()}
