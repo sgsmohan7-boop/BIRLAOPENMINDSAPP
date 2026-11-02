@@ -56,7 +56,8 @@ import {
   X,
   Smartphone,
   Bell,
-  School
+  School,
+  Zap
 } from "lucide-react";
 import AudioMeetingRecorder from "./AudioMeetingRecorder";
 import ManagementAudioDesk from "./ManagementAudioDesk";
@@ -88,6 +89,7 @@ import {
   DEMO_COUNSELLING, 
   mergeWithDefaultCounsellorAccounts, 
   recordDeletedCounsellorAccountId, 
+  unrecordDeletedCounsellorAccountId,
   getAllowCounsellorMultiDelete, 
   setAllowCounsellorMultiDelete, 
   loadParentSelfEntries, 
@@ -310,6 +312,82 @@ export default function CounsellingPortal({
     }
   }, [counsellorAccounts]);
 
+  React.useEffect(() => {
+    const handleCounsellorSync = (e?: any) => {
+      if (e?.detail && Array.isArray(e.detail)) {
+        setLocalAccounts(mergeWithDefaultCounsellorAccounts(e.detail));
+      } else {
+        setLocalAccounts(loadCounsellorAccounts());
+      }
+    };
+
+    let channel: BroadcastChannel | null = null;
+    if (typeof window !== "undefined") {
+      window.addEventListener("counsellor_accounts_updated", handleCounsellorSync);
+      window.addEventListener("storage", handleCounsellorSync);
+      if ("BroadcastChannel" in window) {
+        channel = new BroadcastChannel("birla_accounts_sync");
+        channel.onmessage = (event) => {
+          if (event.data?.type === "COUNSELLORS_SYNC") {
+            if (Array.isArray(event.data.accounts)) {
+              setLocalAccounts(mergeWithDefaultCounsellorAccounts(event.data.accounts));
+            } else {
+              setLocalAccounts(loadCounsellorAccounts());
+            }
+          }
+        };
+      }
+    }
+
+    // Direct real-time Firestore sync for instant cross-device updates
+    let unsubFirestore: (() => void) | undefined;
+    if (isFirebaseConfigured()) {
+      try {
+        unsubFirestore = syncCollection<CounsellorAccount>(
+          "counsellor_accounts",
+          (items) => {
+            if (Array.isArray(items) && items.length > 0) {
+              const merged = mergeWithDefaultCounsellorAccounts(items);
+              setLocalAccounts(merged);
+              saveCounsellorAccounts(merged);
+            }
+          },
+          []
+        );
+      } catch (err) {
+        console.warn("Counselling portal Firestore accounts sync notice:", err);
+      }
+    }
+
+    // Periodic fallback server pull (10s)
+    const fetchServer = async () => {
+      try {
+        const res = await fetch("/api/accounts");
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && Array.isArray(json.accounts?.counsellors)) {
+            const extraDeleted = Array.isArray(json.accounts.deletedCounsellors) ? json.accounts.deletedCounsellors : [];
+            const merged = mergeWithDefaultCounsellorAccounts(json.accounts.counsellors, extraDeleted);
+            setLocalAccounts(merged);
+            saveCounsellorAccounts(merged);
+          }
+        }
+      } catch {}
+    };
+    fetchServer();
+    const interval = setInterval(fetchServer, 10000);
+
+    return () => {
+      clearInterval(interval);
+      if (unsubFirestore) unsubFirestore();
+      if (channel) channel.close();
+      if (typeof window !== "undefined") {
+        window.removeEventListener("counsellor_accounts_updated", handleCounsellorSync);
+        window.removeEventListener("storage", handleCounsellorSync);
+      }
+    };
+  }, []);
+
   // Active Counsellor resolution with tab-isolated URL param & sessionStorage precedence
   const [selectedCounsellorIdOverride, setSelectedCounsellorIdOverride] = useState<string | null>(() => {
     if (typeof window !== "undefined") {
@@ -335,6 +413,7 @@ export default function CounsellingPortal({
           const parsed = JSON.parse(savedSession);
           const match = localAccounts.find(a => a.id === parsed.id || a.username?.toLowerCase() === parsed.username?.toLowerCase() || a.email?.toLowerCase() === parsed.email?.toLowerCase());
           if (match) return match;
+          if (parsed && (parsed.id || parsed.username)) return parsed;
         }
       } catch {}
       return localAccounts[0] || null;
@@ -399,6 +478,13 @@ export default function CounsellingPortal({
   const [whatsAppModalEnquiry, setWhatsAppModalEnquiry] = useState<CounsellingEnquiry | null>(null);
   const [showClearConfirmModal, setShowClearConfirmModal] = useState<boolean>(false);
 
+  // Joint Sibling Session States
+  const [isJointSiblingMode, setIsJointSiblingMode] = useState<boolean>(false);
+  const [siblingActiveTab, setSiblingActiveTab] = useState<"child1" | "child2">("child1");
+  const [siblingFormData, setSiblingFormData] = useState<CounsellingEnquiry | null>(null);
+  const [linkedSiblingTokens, setLinkedSiblingTokens] = useState<ParentSelfEntry[]>([]);
+  const [applyFollowUpToSibling, setApplyFollowUpToSibling] = useState<boolean>(true);
+
   // Reception Lounge Controls: Collapse (Minimize), Hide (Close), and Maximize (Full-height)
   const [isLoungeCollapsed, setIsLoungeCollapsed] = useState<boolean>(() => {
     try {
@@ -431,6 +517,29 @@ export default function CounsellingPortal({
     } catch {}
     return null;
   });
+
+  // Scheduled Follow-Up Reminder Hub States
+  const [isFollowUpHubCollapsed, setIsFollowUpHubCollapsed] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem("counsellor_followup_hub_collapsed");
+      return saved !== null ? saved === "true" : false;
+    } catch {
+      return false;
+    }
+  });
+  const [followUpTab, setFollowUpTab] = useState<"today" | "overdue" | "upcoming" | "all">("today");
+  const [followUpSearchQuery, setFollowUpSearchQuery] = useState<string>("");
+  const [reschedulingEnquiry, setReschedulingEnquiry] = useState<CounsellingEnquiry | null>(null);
+  const [rescheduleCustomDate, setRescheduleCustomDate] = useState<string>("");
+  const [rescheduleNote, setRescheduleNote] = useState<string>("");
+
+  const toggleFollowUpHubCollapsed = () => {
+    setIsFollowUpHubCollapsed(prev => {
+      const next = !prev;
+      try { localStorage.setItem("counsellor_followup_hub_collapsed", String(next)); } catch {}
+      return next;
+    });
+  };
 
   const [isRefreshingDept, setIsRefreshingDept] = useState(false);
 
@@ -570,6 +679,38 @@ export default function CounsellingPortal({
         return new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime();
       });
   }, [parentSelfEntries, activeCounsellor]);
+
+  // Automatic Sibling Family Detection in Reception Lounge
+  const pendingSiblingGroups = useMemo(() => {
+    const phoneMap = new Map<string, ParentSelfEntry[]>();
+    const processedIds = new Set<string>();
+
+    for (const entry of pendingParentEntries) {
+      const cleanPhone = (entry.contactNo || "").replace(/\D/g, "");
+      if (cleanPhone.length >= 10) {
+        if (!phoneMap.has(cleanPhone)) phoneMap.set(cleanPhone, []);
+        phoneMap.get(cleanPhone)!.push(entry);
+      }
+    }
+
+    const siblingGroups: { phone: string; entries: ParentSelfEntry[] }[] = [];
+    const soloEntries: ParentSelfEntry[] = [];
+
+    for (const entry of pendingParentEntries) {
+      if (processedIds.has(entry.id)) continue;
+      const cleanPhone = (entry.contactNo || "").replace(/\D/g, "");
+      const group = (cleanPhone.length >= 10 && phoneMap.get(cleanPhone)) || [];
+      if (group.length > 1) {
+        siblingGroups.push({ phone: cleanPhone, entries: group });
+        group.forEach(g => processedIds.add(g.id));
+      } else {
+        soloEntries.push(entry);
+        processedIds.add(entry.id);
+      }
+    }
+
+    return { siblingGroups, soloEntries };
+  }, [pendingParentEntries]);
 
   const isEntryToday = (e: ParentSelfEntry) => {
     const now = new Date();
@@ -783,8 +924,183 @@ export default function CounsellingPortal({
     setActiveDraft(draftObj);
 
     setSelectedEnquiry(null);
+    setIsJointSiblingMode(false);
+    setSiblingFormData(null);
     setActiveView("form");
     setDeleteToast(`✓ Claimed ${entry.studentName}'s enquiry! Form auto-populated successfully.`);
+    setTimeout(() => setDeleteToast(null), 4000);
+  };
+
+  const handleStartJointSiblingCounselling = async (entry1: ParentSelfEntry, entry2: ParentSelfEntry) => {
+    const currentCounsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR-01";
+    const currentCounsellorName = activeCounsellor ? activeCounsellor.name : "Admissions Counsellor";
+
+    // Mark both claimed
+    const claimTime = new Date().toISOString();
+    const updatedEntries = parentSelfEntries.map(e => {
+      if (e.id === entry1.id || e.id === entry2.id) {
+        return {
+          ...e,
+          status: "claimed" as const,
+          claimedBy: currentCounsellorId,
+          claimedByName: currentCounsellorName,
+          claimedAt: claimTime
+        };
+      }
+      return e;
+    });
+
+    setParentSelfEntries(updatedEntries);
+    saveParentSelfEntries(updatedEntries);
+
+    try {
+      if (isFirebaseConfigured()) {
+        await Promise.all([
+          saveDocument("parent_self_entries", entry1.id, {
+            status: "claimed",
+            claimedBy: currentCounsellorId,
+            claimedByName: currentCounsellorName,
+            claimedAt: claimTime
+          }),
+          saveDocument("parent_self_entries", entry2.id, {
+            status: "claimed",
+            claimedBy: currentCounsellorId,
+            claimedByName: currentCounsellorName,
+            claimedAt: claimTime
+          })
+        ]);
+      }
+    } catch {}
+
+    // Generate consecutive clean Enquiry IDs
+    const draftNo1 = getNextEnquiryNo(safeEnquiries);
+    let nextNum = 1;
+    const match = draftNo1.match(/ENQ-(\d{4})-(\d+)/i) || draftNo1.match(/(\d+)$/);
+    if (match) {
+      nextNum = parseInt(match[2] || match[1], 10) + 1;
+    }
+    const currentYear = new Date().getFullYear();
+    const draftNo2 = `ENQ-${currentYear}-${String(nextNum).padStart(3, "0")}`;
+    const dateToday = new Date().toLocaleDateString("en-GB").replace(/\//g, "-");
+
+    const sharedFather = (entry1.fatherName || entry2.fatherName || "").trim();
+    const sharedMother = (entry1.motherName || entry2.motherName || "").trim();
+    const sharedPhone = (entry1.contactNo || entry2.contactNo || "").trim();
+    const sharedWhatsapp = (entry1.whatsappNo || entry2.whatsappNo || sharedPhone).trim();
+    const sharedAddress = (entry1.residentialAddress || entry2.residentialAddress || "").trim();
+    const sharedHeard = (entry1.heardAboutSchool && entry1.heardAboutSchool.length > 0)
+      ? entry1.heardAboutSchool
+      : (entry2.heardAboutSchool || []);
+
+    const newClaimedData1: CounsellingEnquiry = {
+      id: draftNo1,
+      enquiryNo: draftNo1,
+      date: dateToday,
+      studentName: entry1.studentName,
+      applyingForClass: entry1.applyingForClass || "Grade 1",
+      academicYear: "2026-2027",
+      dateOfBirth: entry1.dateOfBirth || "",
+      gender: entry1.gender || "Male",
+      fatherName: sharedFather,
+      motherName: sharedMother,
+      contactNo: sharedPhone,
+      whatsappNo: sharedWhatsapp,
+      previousSchool: entry1.previousSchool || "",
+      previousClass: entry1.previousClass || "",
+      residentialAddress: sharedAddress,
+      heardAboutSchool: sharedHeard,
+      reasonForChoosing: entry1.reasonForChoosing || entry2.reasonForChoosing || "",
+      preferredContact: entry1.preferredContact || "Call",
+      bestTimeToContact: "",
+      academicPerformance: "",
+      studentInterests: "",
+      strengths: "",
+      areasNeedingSupport: "",
+      transportRequired: entry1.transportRequired || entry2.transportRequired || false,
+      hostelRequired: false,
+      specialLearningSupport: entry1.specialLearningSupport || false,
+      specialLearningDetails: "",
+      pointsDiscussed: "",
+      counsellorObservations: "",
+      explainedSchoolFacilities: false,
+      explainedAcademicProgramme: false,
+      explainedFeeStructure: false,
+      explainedTransportDetails: false,
+      explainedSchoolRules: false,
+      explainedActivitiesSports: false,
+      admissionStatus: "Interested",
+      followUpDate: "",
+      counsellorId: currentCounsellorId,
+      counsellorName: currentCounsellorName,
+      parentSignatureRecorded: true,
+      isSibling: true,
+      siblingEnquiryNo: draftNo2,
+      siblingStudentName: entry2.studentName,
+      siblingClass: entry2.applyingForClass,
+      siblingTokenNo: entry2.dailyTokenNo,
+      createdAt: `${dateToday} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+      updatedAt: new Date().toLocaleDateString()
+    };
+
+    const newClaimedData2: CounsellingEnquiry = {
+      id: draftNo2,
+      enquiryNo: draftNo2,
+      date: dateToday,
+      studentName: entry2.studentName,
+      applyingForClass: entry2.applyingForClass || "PP1 (LKG)",
+      academicYear: "2026-2027",
+      dateOfBirth: entry2.dateOfBirth || "",
+      gender: entry2.gender || "Female",
+      fatherName: sharedFather,
+      motherName: sharedMother,
+      contactNo: sharedPhone,
+      whatsappNo: sharedWhatsapp,
+      previousSchool: entry2.previousSchool || entry1.previousSchool || "",
+      previousClass: entry2.previousClass || "",
+      residentialAddress: sharedAddress,
+      heardAboutSchool: sharedHeard,
+      reasonForChoosing: entry2.reasonForChoosing || entry1.reasonForChoosing || "",
+      preferredContact: entry2.preferredContact || "Call",
+      bestTimeToContact: "",
+      academicPerformance: "",
+      studentInterests: "",
+      strengths: "",
+      areasNeedingSupport: "",
+      transportRequired: entry1.transportRequired || entry2.transportRequired || false,
+      hostelRequired: false,
+      specialLearningSupport: entry2.specialLearningSupport || false,
+      specialLearningDetails: "",
+      pointsDiscussed: "",
+      counsellorObservations: "",
+      explainedSchoolFacilities: false,
+      explainedAcademicProgramme: false,
+      explainedFeeStructure: false,
+      explainedTransportDetails: false,
+      explainedSchoolRules: false,
+      explainedActivitiesSports: false,
+      admissionStatus: "Interested",
+      followUpDate: "",
+      counsellorId: currentCounsellorId,
+      counsellorName: currentCounsellorName,
+      parentSignatureRecorded: true,
+      isSibling: true,
+      siblingEnquiryNo: draftNo1,
+      siblingStudentName: entry1.studentName,
+      siblingClass: entry1.applyingForClass,
+      siblingTokenNo: entry1.dailyTokenNo,
+      createdAt: `${dateToday} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+      updatedAt: new Date().toLocaleDateString()
+    };
+
+    setFormData(newClaimedData1);
+    setSiblingFormData(newClaimedData2);
+    setIsJointSiblingMode(true);
+    setSiblingActiveTab("child1");
+    setLinkedSiblingTokens([entry1, entry2]);
+
+    setSelectedEnquiry(null);
+    setActiveView("form");
+    setDeleteToast(`✓ Starting Joint Sibling Meeting for Tokens #${entry1.dailyTokenNo || 1} & #${entry2.dailyTokenNo || 2}!`);
     setTimeout(() => setDeleteToast(null), 4000);
   };
 
@@ -844,7 +1160,7 @@ export default function CounsellingPortal({
         if (!isNaN(n) && n > maxNum) maxNum = n;
       }
     });
-    const nextIndex = Math.max(localAccounts.length + 1, maxNum + 1);
+    const nextIndex = maxNum + 1;
     const nextId = `COUNSELLOR-${String(nextIndex).padStart(2, "0")}`;
     const today = new Date();
     const dd = String(today.getDate()).padStart(2, "0");
@@ -855,9 +1171,9 @@ export default function CounsellingPortal({
     setAccountFormData({
       id: nextId,
       name: "",
-      username: `counsellor${nextIndex}`,
-      password: `Password@${100 + nextIndex}`,
-      email: `counsellor${nextIndex}@birlainstitute.edu.in`,
+      username: "",
+      password: "",
+      email: "",
       phone: "+91 98765 00000",
       roleTitle: "Admissions Counsellor",
       assignedGrades: "All Grades",
@@ -893,41 +1209,105 @@ export default function CounsellingPortal({
     }
 
     const cleanUsername = accountFormData.username.trim().toLowerCase();
-    const duplicate = localAccounts.find(a => 
-      a.username.toLowerCase() === cleanUsername && a.id !== accountFormData.id
-    );
-    if (duplicate) {
-      alert(`The username "${cleanUsername}" is already taken by ${duplicate.name}. Please choose a unique username.`);
-      return;
-    }
 
-    const finalAccount: CounsellorAccount = {
-      ...accountFormData,
-      username: cleanUsername,
-      name: accountFormData.name.trim(),
-      password: accountFormData.password.trim(),
-      createdAt: accountFormData.createdAt || new Date().toLocaleDateString("en-GB")
-    };
-
-    setLocalAccounts(prev => {
-      const idx = prev.findIndex(a => a.id === finalAccount.id || a.username.toLowerCase() === cleanUsername);
-      let updated: CounsellorAccount[];
-      if (idx >= 0) {
-        updated = [...prev];
-        updated[idx] = finalAccount;
-      } else {
-        updated = [...prev, finalAccount];
+    if (accountModalMode === "create") {
+      const duplicate = localAccounts.find(a => a.username.toLowerCase() === cleanUsername);
+      if (duplicate) {
+        alert(`❌ The username "${cleanUsername}" is already taken by "${duplicate.name}" (${duplicate.id})!\n\nPlease choose a unique username.`);
+        return;
       }
-      const merged = mergeWithDefaultCounsellorAccounts(updated);
-      saveCounsellorAccounts(merged);
-      return merged;
-    });
 
-    if (onSaveCounsellorAccount) {
-      onSaveCounsellorAccount(finalAccount);
+      // Guaranteed non-colliding ID
+      let maxNum = 0;
+      localAccounts.forEach(a => {
+        const match = a.id?.match(/COUNSELLOR-(\d+)/i) || a.id?.match(/(\d+)$/);
+        if (match) {
+          const n = parseInt(match[1] || match[0], 10);
+          if (!isNaN(n) && n > maxNum) maxNum = n;
+        }
+      });
+      const finalId = `COUNSELLOR-${String(maxNum + 1).padStart(2, "0")}`;
+
+      const finalAccount: CounsellorAccount = {
+        ...accountFormData,
+        id: finalId,
+        username: cleanUsername,
+        name: accountFormData.name.trim(),
+        password: accountFormData.password.trim(),
+        email: accountFormData.email.trim() || `${cleanUsername}.counsellor@birlainstitute.edu.in`,
+        createdAt: accountFormData.createdAt || new Date().toLocaleDateString("en-GB")
+      };
+
+      unrecordDeletedCounsellorAccountId(finalAccount.id, finalAccount.username);
+
+      setLocalAccounts(prev => {
+        const nextList = [...prev.filter(a => a.id !== finalAccount.id), finalAccount];
+        const merged = mergeWithDefaultCounsellorAccounts(nextList);
+        saveCounsellorAccounts(merged);
+        return merged;
+      });
+
+      if (isFirebaseConfigured()) {
+        deleteDocument("deleted_counsellor_accounts", (finalAccount.id || "").toLowerCase());
+        deleteDocument("deleted_counsellor_accounts", cleanUsername);
+        saveDocument("counsellor_accounts", finalAccount.id, finalAccount);
+      }
+
+      fetch("/api/accounts/counsellor", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(finalAccount)
+      }).catch(() => {});
+
+      if (onSaveCounsellorAccount) {
+        onSaveCounsellorAccount(finalAccount);
+      }
+      setIsAccountModalOpen(false);
+    } else {
+      // EDIT MODE: Match strictly by ID
+      const targetId = accountFormData.id;
+      const userConflict = localAccounts.find(
+        a => a.id !== targetId && a.username.toLowerCase() === cleanUsername
+      );
+      if (userConflict) {
+        alert(`❌ The username "${cleanUsername}" is already in use by "${userConflict.name}" (${userConflict.id})!\n\nPlease choose a different username.`);
+        return;
+      }
+
+      const finalAccount: CounsellorAccount = {
+        ...accountFormData,
+        id: targetId,
+        username: cleanUsername,
+        name: accountFormData.name.trim(),
+        password: accountFormData.password.trim(),
+        email: accountFormData.email.trim() || `${cleanUsername}.counsellor@birlainstitute.edu.in`,
+        createdAt: accountFormData.createdAt || new Date().toLocaleDateString("en-GB")
+      };
+
+      unrecordDeletedCounsellorAccountId(finalAccount.id, finalAccount.username);
+
+      setLocalAccounts(prev => {
+        const nextList = prev.map(a => a.id === targetId ? finalAccount : a);
+        const merged = mergeWithDefaultCounsellorAccounts(nextList);
+        saveCounsellorAccounts(merged);
+        return merged;
+      });
+
+      if (isFirebaseConfigured()) {
+        saveDocument("counsellor_accounts", finalAccount.id, finalAccount);
+      }
+
+      fetch("/api/accounts/counsellor", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(finalAccount)
+      }).catch(() => {});
+
+      if (onSaveCounsellorAccount) {
+        onSaveCounsellorAccount(finalAccount);
+      }
+      setIsAccountModalOpen(false);
     }
-
-    setIsAccountModalOpen(false);
   };
 
   const handleSaveNewPassword = async (e: React.FormEvent) => {
@@ -1034,6 +1414,14 @@ export default function CounsellingPortal({
       saveCounsellorAccounts(next);
       return next;
     });
+    if (isFirebaseConfigured()) {
+      saveDocument("counsellor_accounts", updated.id, updated);
+    }
+    fetch("/api/accounts/counsellor", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updated)
+    }).catch(() => {});
     if (onSaveCounsellorAccount) {
       onSaveCounsellorAccount(updated);
     }
@@ -1080,6 +1468,17 @@ export default function CounsellingPortal({
       saveCounsellorAccounts(next);
       return next;
     });
+    if (isFirebaseConfigured()) {
+      deleteDocument("counsellor_accounts", accId);
+      saveDocument("deleted_counsellor_accounts", accId.toLowerCase(), {
+        id: accId.toLowerCase(),
+        username: accUsername.toLowerCase(),
+        deletedAt: Date.now()
+      });
+    }
+    fetch(`/api/accounts/counsellor/${encodeURIComponent(accId)}`, {
+      method: "DELETE"
+    }).catch(() => {});
     if (onDeleteCounsellorAccount) {
       onDeleteCounsellorAccount(accId);
     }
@@ -1393,13 +1792,80 @@ export default function CounsellingPortal({
       if (!isNaN(numVal)) recordHighestEnquiryNumber(numVal);
     }
 
+    // Joint Sibling Session Commit
+    if (isJointSiblingMode && siblingFormData && siblingFormData.studentName.trim()) {
+      let sibCandidateNo = siblingFormData.enquiryNo;
+      if (!sibCandidateNo || sibCandidateNo === nextEnquiryNo || existingEnquiryNos.has(sibCandidateNo.toUpperCase())) {
+        let guard2 = 0;
+        let candNum = (numMatch ? parseInt(numMatch[1] || numMatch[0], 10) : 1) + 1;
+        while (existingEnquiryNos.has(`ENQ-${new Date().getFullYear()}-${String(candNum).padStart(2, "0")}`.toUpperCase()) && guard2 < 200) {
+          candNum++;
+          guard2++;
+        }
+        sibCandidateNo = `ENQ-${new Date().getFullYear()}-${String(candNum).padStart(2, "0")}`;
+      }
+
+      // Link cross-references
+      updated.isSibling = true;
+      updated.siblingEnquiryNo = sibCandidateNo;
+      updated.siblingStudentName = siblingFormData.studentName;
+      updated.siblingClass = siblingFormData.applyingForClass;
+
+      const jointNames = `${updated.studentName} (${updated.applyingForClass}) & ${siblingFormData.studentName} (${siblingFormData.applyingForClass})`;
+      const jointEnqs = [updated.enquiryNo, sibCandidateNo];
+
+      if (updated.audioRecording) {
+        updated.audioRecording.isJointSiblingSession = true;
+        updated.audioRecording.jointSiblingEnquiries = jointEnqs;
+        updated.audioRecording.jointSiblingNames = jointNames;
+      }
+
+      const sibUpdated: CounsellingEnquiry = {
+        ...siblingFormData,
+        id: sibCandidateNo,
+        enquiryNo: sibCandidateNo,
+        counsellorId: assignedCounsellorId,
+        counsellorName: assignedCounsellorName,
+        isSibling: true,
+        siblingEnquiryNo: updated.enquiryNo,
+        siblingStudentName: updated.studentName,
+        siblingClass: updated.applyingForClass,
+        audioRecording: updated.audioRecording ? {
+          ...updated.audioRecording,
+          id: `${updated.audioRecording.id}-SIB`,
+          enquiryNo: sibCandidateNo,
+          studentName: siblingFormData.studentName,
+          isJointSiblingSession: true,
+          jointSiblingEnquiries: jointEnqs,
+          jointSiblingNames: jointNames
+        } : undefined,
+        updatedAt: new Date().toLocaleDateString()
+      };
+
+      unmarkDeletedEnquiryId(sibUpdated.id, sibUpdated.enquiryNo);
+      onSaveEnquiry(sibUpdated);
+
+      const sibNumMatch = sibCandidateNo.match(/ENQ-.*-(\d+)/i) || sibCandidateNo.match(/(\d+)$/);
+      if (sibNumMatch) {
+        const sibNumVal = parseInt(sibNumMatch[1] || sibNumMatch[0], 10);
+        if (!isNaN(sibNumVal)) recordHighestEnquiryNumber(sibNumVal);
+      }
+    }
+
     unmarkDeletedEnquiryId(updated.id, updated.enquiryNo);
     onSaveEnquiry(updated);
     try { localStorage.removeItem("bomis_counsellor_active_draft"); } catch {}
     setActiveDraft(null);
 
-    setDeleteToast(`✅ Enquiry ${updated.enquiryNo} (${updated.studentName}) submitted successfully!`);
-    setTimeout(() => setDeleteToast(null), 3500);
+    if (isJointSiblingMode && siblingFormData) {
+      setDeleteToast(`✅ Joint Sibling Enquiries ${updated.enquiryNo} (${updated.studentName}) & ${siblingFormData.enquiryNo || "Child 2"} (${siblingFormData.studentName}) saved successfully with shared meeting audio!`);
+    } else {
+      setDeleteToast(`✅ Enquiry ${updated.enquiryNo} (${updated.studentName}) submitted successfully!`);
+    }
+    setTimeout(() => setDeleteToast(null), 4000);
+    setIsJointSiblingMode(false);
+    setSiblingFormData(null);
+    setLinkedSiblingTokens([]);
     setActiveView("list");
     setSelectedEnquiry(null);
   };
@@ -1473,6 +1939,29 @@ export default function CounsellingPortal({
       setSelectedEnquiry(updated);
     }
     setFormData(prev => prev.id === targetEnquiry.id ? updated : prev);
+
+    // Sync to sibling record if applicable
+    if (applyFollowUpToSibling && targetEnquiry.isSibling && targetEnquiry.siblingEnquiryNo) {
+      const sibling = safeEnquiries.find(e => 
+        e.enquiryNo?.toUpperCase() === targetEnquiry.siblingEnquiryNo?.toUpperCase() ||
+        e.id?.toUpperCase() === targetEnquiry.siblingEnquiryNo?.toUpperCase()
+      );
+      if (sibling) {
+        const sibLog: CounsellingFollowUpLog = {
+          ...newLog,
+          id: `LOG-${Date.now() + 1}`,
+          notes: `[Family Follow-up with ${targetEnquiry.studentName}]: ${followUpNotes.trim()}`
+        };
+        const sibUpdated: CounsellingEnquiry = {
+          ...sibling,
+          followUpLogs: [...(sibling.followUpLogs || []), sibLog],
+          followUpDate: followUpNextDate || sibling.followUpDate,
+          updatedAt: nowStr
+        };
+        onSaveEnquiry(sibUpdated);
+      }
+    }
+
     setFollowUpNotes("");
     setFollowUpNextDate("");
     setIsAddingFollowUp(false);
@@ -1612,6 +2101,212 @@ export default function CounsellingPortal({
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, "0");
     return `${y}-${m}-01`;
+  };
+
+  // Helper functions for follow-up date calculations & presets
+  const formatDMYFromDate = (d: Date): string => {
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const yyyy = d.getFullYear();
+    return `${dd}-${mm}-${yyyy}`;
+  };
+
+  const getFutureDateDMY = (daysToAdd: number): string => {
+    const d = new Date();
+    d.setDate(d.getDate() + daysToAdd);
+    return formatDMYFromDate(d);
+  };
+
+  const dmyToYmd = (dmyStr?: string): string => {
+    if (!dmyStr) return "";
+    const clean = dmyStr.trim().replace(/[\/\.]/g, "-");
+    const parts = clean.split("-");
+    if (parts.length === 3 && parts[2].length === 4) {
+      const dd = parts[0].padStart(2, "0");
+      const mm = parts[1].padStart(2, "0");
+      const yyyy = parts[2];
+      return `${yyyy}-${mm}-${dd}`;
+    }
+    if (parts.length === 3 && parts[0].length === 4) {
+      return clean;
+    }
+    return "";
+  };
+
+  const ymdToDmy = (ymdStr?: string): string => {
+    if (!ymdStr) return "";
+    const clean = ymdStr.trim().replace(/[\/\.]/g, "-");
+    const parts = clean.split("-");
+    if (parts.length === 3 && parts[0].length === 4) {
+      const yyyy = parts[0];
+      const mm = parts[1].padStart(2, "0");
+      const dd = parts[2].padStart(2, "0");
+      return `${dd}-${mm}-${yyyy}`;
+    }
+    return clean;
+  };
+
+  const getFollowUpStatusInfo = (followUpDateStr?: string) => {
+    if (!followUpDateStr || !followUpDateStr.trim()) return null;
+    const parsed = parseEnquiryDateInfo(followUpDateStr.trim());
+    if (!parsed.ymd) return null;
+    const todayYMD = getTodayYMDStr();
+    const isToday = parsed.ymd === todayYMD;
+    const isOverdue = parsed.ymd < todayYMD;
+    const isUpcoming = parsed.ymd > todayYMD;
+
+    const todayDate = new Date();
+    todayDate.setHours(0, 0, 0, 0);
+    const targetDate = new Date(parsed.timestamp);
+    targetDate.setHours(0, 0, 0, 0);
+    const diffDays = Math.round((targetDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
+
+    return {
+      ...parsed,
+      isToday,
+      isOverdue,
+      isUpcoming,
+      diffDays
+    };
+  };
+
+  // Follow-up enquiries for the current counsellor's scope
+  const followUpEnquiries = useMemo(() => {
+    return counsellorScopeEnquiries.filter(e => {
+      const hasDate = Boolean(e.followUpDate && e.followUpDate.trim());
+      if (!hasDate) return false;
+      return e.admissionStatus === "Follow-up Required" || (e.admissionStatus === "Interested" && hasDate);
+    });
+  }, [counsellorScopeEnquiries]);
+
+  const { todayFollowUps, overdueFollowUps, upcomingFollowUps, allFollowUpsWithInfo } = useMemo(() => {
+    const todayList: Array<{ enquiry: CounsellingEnquiry; info: NonNullable<ReturnType<typeof getFollowUpStatusInfo>> }> = [];
+    const overdueList: Array<{ enquiry: CounsellingEnquiry; info: NonNullable<ReturnType<typeof getFollowUpStatusInfo>> }> = [];
+    const upcomingList: Array<{ enquiry: CounsellingEnquiry; info: NonNullable<ReturnType<typeof getFollowUpStatusInfo>> }> = [];
+    const allList: Array<{ enquiry: CounsellingEnquiry; info: NonNullable<ReturnType<typeof getFollowUpStatusInfo>> }> = [];
+
+    followUpEnquiries.forEach(e => {
+      const info = getFollowUpStatusInfo(e.followUpDate);
+      if (!info) return;
+      const item = { enquiry: e, info };
+      allList.push(item);
+      if (info.isToday) {
+        todayList.push(item);
+      } else if (info.isOverdue) {
+        overdueList.push(item);
+      } else if (info.isUpcoming) {
+        upcomingList.push(item);
+      }
+    });
+
+    // Sort: overdue by oldest first (highest urgency), upcoming by nearest first
+    overdueList.sort((a, b) => a.info.timestamp - b.info.timestamp);
+    upcomingList.sort((a, b) => a.info.timestamp - b.info.timestamp);
+
+    return {
+      todayFollowUps: todayList,
+      overdueFollowUps: overdueList,
+      upcomingFollowUps: upcomingList,
+      allFollowUpsWithInfo: allList
+    };
+  }, [followUpEnquiries]);
+
+  // 1-Click Action Handlers for Scheduled Follow-Ups
+  const handleQuickConfirmAdmission = async (enquiry: CounsellingEnquiry) => {
+    const updated: CounsellingEnquiry = {
+      ...enquiry,
+      admissionStatus: "Admission Confirmed",
+      counsellorObservations: enquiry.counsellorObservations
+        ? `${enquiry.counsellorObservations}\n[${formatDMYFromDate(new Date())} Follow-up Call]: Parent confirmed admission.`
+        : `[${formatDMYFromDate(new Date())} Follow-up Call]: Parent confirmed admission.`,
+      updatedAt: formatDMYFromDate(new Date())
+    };
+    onSaveEnquiry(updated);
+    if (isFirebaseConfigured()) {
+      try {
+        await saveDocument("enquiries", updated.id, updated);
+      } catch {}
+    }
+    setDeleteToast(`🎉 Admission Confirmed for ${enquiry.studentName} (${enquiry.enquiryNo})!`);
+    setTimeout(() => setDeleteToast(null), 4000);
+  };
+
+  const handleQuickNotInterested = async (enquiry: CounsellingEnquiry) => {
+    const reason = prompt(`Reason for "Not Interested" for ${enquiry.studentName}? (e.g. Distance / High Fees / Opted for another school / Relocation)`, "Opted for another school") || "Not interested";
+    const updated: CounsellingEnquiry = {
+      ...enquiry,
+      admissionStatus: "Not Interested",
+      counsellorObservations: enquiry.counsellorObservations
+        ? `${enquiry.counsellorObservations}\n[${formatDMYFromDate(new Date())} Follow-up Call]: Marked Not Interested. Reason: ${reason}`
+        : `[${formatDMYFromDate(new Date())} Follow-up Call]: Marked Not Interested. Reason: ${reason}`,
+      updatedAt: formatDMYFromDate(new Date())
+    };
+    onSaveEnquiry(updated);
+    if (isFirebaseConfigured()) {
+      try {
+        await saveDocument("enquiries", updated.id, updated);
+      } catch {}
+    }
+    setDeleteToast(`Enquiry ${enquiry.enquiryNo} (${enquiry.studentName}) marked as Not Interested.`);
+    setTimeout(() => setDeleteToast(null), 3500);
+  };
+
+  const handleApplyReschedule = async (enquiry: CounsellingEnquiry, newDateDMY: string, note?: string) => {
+    if (!newDateDMY || !newDateDMY.trim()) {
+      alert("Please select or enter a valid reschedule date!");
+      return;
+    }
+    const updated: CounsellingEnquiry = {
+      ...enquiry,
+      admissionStatus: "Follow-up Required",
+      followUpDate: newDateDMY.trim(),
+      counsellorObservations: enquiry.counsellorObservations
+        ? `${enquiry.counsellorObservations}\n[${formatDMYFromDate(new Date())} Follow-up Call]: Rescheduled next call to ${newDateDMY.trim()}${note ? ` (${note})` : ""}`
+        : `[${formatDMYFromDate(new Date())} Follow-up Call]: Rescheduled next call to ${newDateDMY.trim()}${note ? ` (${note})` : ""}`,
+      updatedAt: formatDMYFromDate(new Date())
+    };
+    onSaveEnquiry(updated);
+    if (isFirebaseConfigured()) {
+      try {
+        await saveDocument("enquiries", updated.id, updated);
+      } catch {}
+    }
+    setReschedulingEnquiry(null);
+    setRescheduleCustomDate("");
+    setRescheduleNote("");
+    setDeleteToast(`📅 Follow-up for ${enquiry.studentName} rescheduled to ${newDateDMY.trim()}!`);
+    setTimeout(() => setDeleteToast(null), 3500);
+  };
+
+  const handleDirectWhatsAppFollowUp = (enquiry: CounsellingEnquiry) => {
+    const rawPhone = (enquiry.whatsappNo || enquiry.contactNo || "").replace(/\D/g, "");
+    if (!rawPhone) {
+      alert("No contact phone number available for WhatsApp.");
+      return;
+    }
+    const cleanPhone = rawPhone.length === 10 ? `91${rawPhone}` : rawPhone.startsWith("91") ? rawPhone : `91${rawPhone}`;
+    const parentSalutation = enquiry.fatherName ? `Dear Mr. ${enquiry.fatherName}` : enquiry.motherName ? `Dear Mrs. ${enquiry.motherName}` : "Dear Parent";
+    const msg = 
+`🏫 *BIRLA OPEN MINDS INTERNATIONAL SCHOOL*
+*Admissions Follow-up & Support Desk*
+
+${parentSalutation},
+
+Greetings! We are following up regarding your admission enquiry for *${enquiry.studentName}* for *Class ${enquiry.applyingForClass}* (Enquiry No: *${enquiry.enquiryNo || enquiry.id}*).
+
+We wanted to check if you had any questions regarding:
+✨ World-class CBSE curriculum & experienced faculty
+✨ 5.5-acre modern campus facilities & student safety
+✨ Transport routes & fee structure breakdown
+✨ Special admission benefits for 2026-27
+
+Please let us know if you would like to schedule a campus tour or reserve the admission seat today.
+
+Warm regards,
+*${activeCounsellor?.name || enquiry.counsellorName || "Admissions Counsellor"}*
+📞 Birla Open Minds International School`;
+
+    window.open(`https://wa.me/${cleanPhone}?text=${encodeURIComponent(msg)}`, "_blank");
   };
 
   const handleCardClick = (cardKey: MetricCardType) => {
@@ -2409,6 +3104,351 @@ export default function CounsellingPortal({
         </div>
       )}
 
+      {/* 🔔 SMART SCHEDULED FOLLOW-UP CALLS NOTIFICATION HUB */}
+      {activeView === "list" && (
+        <div className={`rounded-2xl transition-all border-2 shadow-md overflow-hidden ${
+          todayFollowUps.length > 0 || overdueFollowUps.length > 0
+            ? "bg-gradient-to-r from-orange-500/10 via-amber-500/10 to-rose-500/10 dark:bg-slate-900 border-orange-400 dark:border-orange-500/60 ring-2 ring-orange-400/20"
+            : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800"
+        }`}>
+          {/* Hub Header Bar */}
+          <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-orange-200/50 dark:border-slate-800">
+            <div className="flex items-center gap-3">
+              <span className={`p-2.5 rounded-xl shrink-0 ${
+                todayFollowUps.length > 0 || overdueFollowUps.length > 0
+                  ? "bg-orange-500 text-white animate-pulse shadow-md"
+                  : "bg-orange-100 dark:bg-orange-950/60 text-orange-600 dark:text-orange-400"
+              }`}>
+                <Clock size={20} />
+              </span>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-sm font-black tracking-wide text-slate-900 dark:text-white flex items-center gap-1.5">
+                    <span>🔔</span>
+                    <span>TODAY'S SCHEDULED PARENT FOLLOW-UPS</span>
+                  </h3>
+                  {todayFollowUps.length > 0 && (
+                    <span className="px-2.5 py-0.5 rounded-full bg-orange-600 text-white text-xs font-black shadow-xs animate-bounce">
+                      📞 {todayFollowUps.length} Call(s) Due Today
+                    </span>
+                  )}
+                  {overdueFollowUps.length > 0 && (
+                    <span className="px-2.5 py-0.5 rounded-full bg-red-600 text-white text-xs font-black shadow-xs">
+                      ⚠️ {overdueFollowUps.length} Overdue
+                    </span>
+                  )}
+                  {todayFollowUps.length === 0 && overdueFollowUps.length === 0 && (
+                    <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-xs font-bold border border-emerald-300 dark:border-emerald-800">
+                      ✓ All Calls Caught Up ({upcomingFollowUps.length} upcoming scheduled)
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  {userRole === "Counsellor" && activeCounsellor
+                    ? `Showing scheduled follow-up dates assigned to ${activeCounsellor.name} (${activeCounsellor.id}).`
+                    : `Admissions Desk Department Follow-ups (${counsellorScopeEnquiries.length} total active records).`}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={toggleFollowUpHubCollapsed}
+                className="px-3 py-1.5 rounded-xl text-xs font-bold bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
+              >
+                {isFollowUpHubCollapsed ? (
+                  <>
+                    <ChevronDown size={14} />
+                    <span>Expand Calls ({todayFollowUps.length + overdueFollowUps.length})</span>
+                  </>
+                ) : (
+                  <>
+                    <ChevronUp size={14} />
+                    <span>Minimize</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Hub Content (when expanded) */}
+          {!isFollowUpHubCollapsed && (
+            <div className="p-4 space-y-4">
+              {/* Filter Tabs & Quick Search */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setFollowUpTab("today")}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
+                      followUpTab === "today"
+                        ? "bg-orange-600 text-white border-orange-600 shadow-sm"
+                        : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-orange-50"
+                    }`}
+                  >
+                    🔥 Due Today ({todayFollowUps.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFollowUpTab("overdue")}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
+                      followUpTab === "overdue"
+                        ? "bg-red-600 text-white border-red-600 shadow-sm"
+                        : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-red-50"
+                    }`}
+                  >
+                    ⚠️ Overdue ({overdueFollowUps.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFollowUpTab("upcoming")}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
+                      followUpTab === "upcoming"
+                        ? "bg-blue-600 text-white border-blue-600 shadow-sm"
+                        : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-blue-50"
+                    }`}
+                  >
+                    📅 Upcoming ({upcomingFollowUps.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFollowUpTab("all")}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
+                      followUpTab === "all"
+                        ? "bg-slate-800 text-white border-slate-800 shadow-sm"
+                        : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100"
+                    }`}
+                  >
+                    📋 All Follow-ups ({allFollowUpsWithInfo.length})
+                  </button>
+                </div>
+
+                <div className="relative sm:w-64">
+                  <Search size={14} className="absolute left-3 top-2.5 text-slate-400" />
+                  <input
+                    type="text"
+                    value={followUpSearchQuery}
+                    onChange={(e) => setFollowUpSearchQuery(e.target.value)}
+                    placeholder="Search parent / student / phone..."
+                    className="w-full pl-8 pr-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  />
+                </div>
+              </div>
+
+              {/* Display Follow-up Cards */}
+              {(() => {
+                let list = 
+                  followUpTab === "today" ? todayFollowUps :
+                  followUpTab === "overdue" ? overdueFollowUps :
+                  followUpTab === "upcoming" ? upcomingFollowUps :
+                  allFollowUpsWithInfo;
+
+                if (followUpSearchQuery.trim()) {
+                  const q = followUpSearchQuery.toLowerCase();
+                  list = list.filter(item => {
+                    const e = item.enquiry;
+                    return (
+                      e.studentName?.toLowerCase().includes(q) ||
+                      e.fatherName?.toLowerCase().includes(q) ||
+                      e.motherName?.toLowerCase().includes(q) ||
+                      e.contactNo?.includes(q) ||
+                      e.whatsappNo?.includes(q) ||
+                      e.enquiryNo?.toLowerCase().includes(q) ||
+                      e.applyingForClass?.toLowerCase().includes(q)
+                    );
+                  });
+                }
+
+                if (list.length === 0) {
+                  return (
+                    <div className="p-8 text-center bg-white/60 dark:bg-slate-800/40 rounded-xl border border-dashed border-slate-300 dark:border-slate-700">
+                      <Clock size={32} className="mx-auto text-slate-400 mb-2 opacity-50" />
+                      <p className="text-xs font-bold text-slate-600 dark:text-slate-300">
+                        {followUpTab === "today" 
+                          ? "No calls scheduled for today! All parent follow-ups are up to date." 
+                          : followUpTab === "overdue" 
+                          ? "No overdue calls! Great job maintaining fast parent response times."
+                          : "No records found matching this filter."}
+                      </p>
+                      {followUpTab === "today" && upcomingFollowUps.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setFollowUpTab("upcoming")}
+                          className="mt-2 text-xs font-extrabold text-orange-600 hover:underline cursor-pointer"
+                        >
+                          View {upcomingFollowUps.length} upcoming scheduled call(s) →
+                        </button>
+                      )}
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3.5 max-h-[500px] overflow-y-auto pr-1">
+                    {list.map(({ enquiry, info }) => {
+                      const cleanPhone = (enquiry.contactNo || "").replace(/\D/g, "");
+                      return (
+                        <div
+                          key={`followup-${enquiry.id}-${info.dmy}`}
+                          className={`p-4 rounded-xl border transition-all shadow-xs hover:shadow-md flex flex-col justify-between gap-3 ${
+                            info.isToday
+                              ? "bg-white dark:bg-slate-900 border-orange-400 dark:border-orange-500 ring-2 ring-orange-400/20"
+                              : info.isOverdue
+                              ? "bg-rose-50/50 dark:bg-rose-950/20 border-red-300 dark:border-red-900/60"
+                              : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800"
+                          }`}
+                        >
+                          <div>
+                            {/* Card Top: Status & Date Badges */}
+                            <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
+                              <div className="flex items-center gap-1.5">
+                                {info.isToday ? (
+                                  <span className="px-2.5 py-0.5 rounded-full bg-orange-600 text-white text-[10px] font-black uppercase tracking-wider flex items-center gap-1 animate-pulse">
+                                    <span>🔥</span> DUE TODAY
+                                  </span>
+                                ) : info.isOverdue ? (
+                                  <span className="px-2.5 py-0.5 rounded-full bg-red-600 text-white text-[10px] font-black uppercase tracking-wider flex items-center gap-1">
+                                    <span>⚠️</span> OVERDUE BY {Math.abs(info.diffDays)} DAY{Math.abs(info.diffDays) !== 1 ? "S" : ""}
+                                  </span>
+                                ) : (
+                                  <span className="px-2.5 py-0.5 rounded-full bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 text-[10px] font-bold border border-blue-200 dark:border-blue-800">
+                                    📅 Due in {info.diffDays} day{info.diffDays !== 1 ? "s" : ""} ({info.dmy})
+                                  </span>
+                                )}
+
+                                <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-bold">
+                                  #{enquiry.enquiryNo || enquiry.id}
+                                </span>
+                              </div>
+
+                              <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 flex items-center gap-1">
+                                <Calendar size={12} className="text-slate-400" />
+                                <span>Target: <strong className="text-slate-800 dark:text-white">{info.dmy}</strong></span>
+                              </span>
+                            </div>
+
+                            {/* Student & Parent Info */}
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <h4 className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2">
+                                  <span>{enquiry.studentName}</span>
+                                  <span className="px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 text-[10px] font-extrabold border border-amber-300 dark:border-amber-800">
+                                    Class: {enquiry.applyingForClass}
+                                  </span>
+                                </h4>
+                                <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">
+                                  Parent: <strong className="text-slate-800 dark:text-slate-200">{enquiry.fatherName || enquiry.motherName || "Parent"}</strong>
+                                  {enquiry.contactNo && (
+                                    <span className="font-mono ml-2 text-slate-700 dark:text-slate-300 font-bold">
+                                      📞 {enquiry.contactNo}
+                                    </span>
+                                  )}
+                                </p>
+                              </div>
+
+                              <span className="text-[10px] px-2 py-0.5 rounded bg-orange-100 dark:bg-orange-950/60 text-orange-700 dark:text-orange-400 font-bold shrink-0">
+                                {enquiry.counsellorName ? `Assigned: ${enquiry.counsellorName.split(" ")[0]}` : "Assigned"}
+                              </span>
+                            </div>
+
+                            {/* Previous Notes / Observation if any */}
+                            {enquiry.counsellorObservations && (
+                              <div className="mt-2 p-2 bg-slate-50 dark:bg-slate-800/60 rounded-lg text-[11px] text-slate-600 dark:text-slate-300 border border-slate-200/60 dark:border-slate-700/60 line-clamp-2">
+                                <span className="font-bold text-slate-500 mr-1">📝 Notes:</span>
+                                {enquiry.counsellorObservations}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* 1-Click Action Buttons Bar */}
+                          <div className="pt-2.5 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-1.5 flex-wrap">
+                            <div className="flex items-center gap-1.5">
+                              {/* Direct Dial Call */}
+                              <a
+                                href={`tel:${cleanPhone}`}
+                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-xl text-xs font-black shadow-xs transition-all flex items-center gap-1 cursor-pointer"
+                                title={`Call ${enquiry.studentName}'s parent (${enquiry.contactNo})`}
+                              >
+                                <Phone size={13} />
+                                <span>Call</span>
+                              </a>
+
+                              {/* Direct WhatsApp */}
+                              <button
+                                type="button"
+                                onClick={() => handleDirectWhatsAppFollowUp(enquiry)}
+                                className="px-3 py-1.5 bg-green-500 hover:bg-green-600 active:scale-95 text-white rounded-xl text-xs font-black shadow-xs transition-all flex items-center gap-1 cursor-pointer"
+                                title="Send pre-filled WhatsApp follow-up greeting"
+                              >
+                                <MessageSquare size={13} />
+                                <span>WhatsApp</span>
+                              </button>
+
+                              {/* 1-Click Confirm Admission */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (confirm(`Confirm admission for ${enquiry.studentName} (${enquiry.enquiryNo})?`)) {
+                                    handleQuickConfirmAdmission(enquiry);
+                                  }
+                                }}
+                                className="px-3 py-1.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 active:scale-95 text-white rounded-xl text-xs font-black shadow-xs transition-all flex items-center gap-1 cursor-pointer"
+                                title="Parent agreed to take admission - mark Confirmed!"
+                              >
+                                <CheckCircle2 size={13} />
+                                <span>🎉 Confirm</span>
+                              </button>
+                            </div>
+
+                            <div className="flex items-center gap-1.5">
+                              {/* Quick Reschedule */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setReschedulingEnquiry(enquiry);
+                                  setRescheduleCustomDate(dmyToYmd(getFutureDateDMY(3)));
+                                  setRescheduleNote("");
+                                }}
+                                className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                                title="Parent requested call later? Reschedule follow-up date"
+                              >
+                                <Clock size={13} />
+                                <span>Reschedule</span>
+                              </button>
+
+                              {/* Not Interested */}
+                              <button
+                                type="button"
+                                onClick={() => handleQuickNotInterested(enquiry)}
+                                className="px-2 py-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-slate-800 rounded-lg text-xs font-bold transition-all cursor-pointer"
+                                title="Mark parent as Not Interested"
+                              >
+                                ✕
+                              </button>
+
+                              {/* Open Form to view/edit */}
+                              <button
+                                type="button"
+                                onClick={() => editEnquiry(enquiry)}
+                                className="px-2 py-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-slate-800 rounded-lg text-xs font-bold transition-all cursor-pointer"
+                                title="Open full enquiry form"
+                              >
+                                📝
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Permanent Reception Walk-In Lounge & Parent QR Kiosk Desk */}
       {isLoungeHidden ? (
         /* Minimized / Closed Dock Bar */
@@ -2605,6 +3645,41 @@ export default function CounsellingPortal({
           {/* Lounge Content: Only shown when NOT collapsed */}
           {!isLoungeCollapsed && (
             <>
+              {/* Sibling Admissions Alert Banner */}
+              {pendingSiblingGroups.siblingGroups.length > 0 && (
+                <div className="mb-3.5 p-3.5 rounded-2xl bg-gradient-to-r from-purple-950 via-indigo-950 to-slate-900 border-2 border-purple-400 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-3 text-white">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-purple-500/20 border border-purple-400/40 flex items-center justify-center text-xl shrink-0">
+                      👨‍👩‍👧‍👦
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-purple-400 text-slate-950">
+                          Sibling Admission Group Detected
+                        </span>
+                        <span className="text-xs text-purple-200 font-bold">
+                          {pendingSiblingGroups.siblingGroups.length} family with multiple children in lounge
+                        </span>
+                      </div>
+                      <p className="text-xs font-bold text-purple-100 mt-1">
+                        {pendingSiblingGroups.siblingGroups[0].entries.map(e => `${e.studentName} (Token #${e.dailyTokenNo || 1}, ${e.applyingForClass})`).join(" & ")}
+                      </p>
+                      <p className="text-[11px] text-purple-300">
+                        Parent: {pendingSiblingGroups.siblingGroups[0].entries[0].fatherName || pendingSiblingGroups.siblingGroups[0].entries[0].motherName || "Same Family"} • Contact: {pendingSiblingGroups.siblingGroups[0].entries[0].contactNo}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleStartJointSiblingCounselling(pendingSiblingGroups.siblingGroups[0].entries[0], pendingSiblingGroups.siblingGroups[0].entries[1])}
+                    className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-purple-500 via-indigo-500 to-purple-600 hover:from-purple-400 hover:to-indigo-400 text-white font-black text-xs shadow-lg hover:shadow-purple-500/30 flex items-center gap-2 active:scale-95 transition-all shrink-0 cursor-pointer border border-purple-300"
+                  >
+                    <Zap size={14} className="fill-amber-300 text-amber-300" />
+                    <span>Start Joint Sibling Counselling (Tokens #{pendingSiblingGroups.siblingGroups[0].entries[0].dailyTokenNo || 1} & #{pendingSiblingGroups.siblingGroups[0].entries[1]?.dailyTokenNo || 2})</span>
+                  </button>
+                </div>
+              )}
+
               {pendingParentEntries.length > 0 ? (
                 <div className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 ${
                   isLoungeMaximized ? "" : "max-h-[380px] overflow-y-auto pr-1"
@@ -2651,6 +3726,26 @@ export default function CounsellingPortal({
                                   Class: {entry.applyingForClass}
                                 </span>
                               </div>
+
+                              {/* Sibling detection badge */}
+                              {(() => {
+                                const cleanCurPhone = (entry.contactNo || "").replace(/\D/g, "");
+                                const waitingSibling = pendingParentEntries.find(p => p.id !== entry.id && (
+                                  (cleanCurPhone.length >= 10 && (p.contactNo || "").replace(/\D/g, "") === cleanCurPhone) ||
+                                  (entry.linkedSiblingEntryId && p.id === entry.linkedSiblingEntryId) ||
+                                  (p.linkedSiblingEntryId && p.linkedSiblingEntryId === entry.id)
+                                ));
+                                if (!waitingSibling) return null;
+                                return (
+                                  <div className="mt-1.5 flex items-center gap-1.5">
+                                    <span className="px-2 py-0.5 rounded-md bg-purple-500/30 border border-purple-400/50 text-purple-200 text-[10px] font-bold flex items-center gap-1">
+                                      <span>👨‍👩‍👧‍👦</span>
+                                      <span>Sibling in Lounge: <strong>{waitingSibling.studentName}</strong> (Token #{waitingSibling.dailyTokenNo || 2}, {waitingSibling.applyingForClass})</span>
+                                    </span>
+                                  </div>
+                                );
+                              })()}
+
                               <p className="text-xs text-slate-200 mt-1.5">
                                 Parent: <strong className="text-white">{entry.fatherName || entry.motherName || "Parent"}</strong>
                                 {entry.dateOfBirth && (
@@ -2689,6 +3784,29 @@ export default function CounsellingPortal({
                         </div>
 
                         <div className="flex items-center gap-2 pt-2 border-t border-white/10">
+                          {(() => {
+                            const cleanCurPhone = (entry.contactNo || "").replace(/\D/g, "");
+                            const waitingSibling = pendingParentEntries.find(p => p.id !== entry.id && (
+                              (cleanCurPhone.length >= 10 && (p.contactNo || "").replace(/\D/g, "") === cleanCurPhone) ||
+                              (entry.linkedSiblingEntryId && p.id === entry.linkedSiblingEntryId) ||
+                              (p.linkedSiblingEntryId && p.linkedSiblingEntryId === entry.id)
+                            ));
+                            if (waitingSibling) {
+                              return (
+                                <button
+                                  type="button"
+                                  onClick={() => handleStartJointSiblingCounselling(entry, waitingSibling)}
+                                  className="py-2.5 px-3 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 active:scale-95 text-white rounded-xl text-xs font-black shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ring-2 ring-purple-400/40 shrink-0"
+                                  title={`Start Joint Sibling Session for Token #${entry.dailyTokenNo || 1} & Token #${waitingSibling.dailyTokenNo || 2}`}
+                                >
+                                  <Zap size={14} className="fill-amber-300 text-amber-300" />
+                                  <span>Joint (Both #{entry.dailyTokenNo}&amp;#{waitingSibling.dailyTokenNo})</span>
+                                </button>
+                              );
+                            }
+                            return null;
+                          })()}
+
                           <button
                             type="button"
                             onClick={() => handleClaimAndAutoFill(entry)}
@@ -2696,7 +3814,7 @@ export default function CounsellingPortal({
                             title={`Claim Token #${entry.dailyTokenNo || 1} exclusively: auto-fills all fields into your admission form`}
                           >
                             <CheckCircle2 size={16} />
-                            <span>⚡ Claim Token #{entry.dailyTokenNo || 1} &amp; Auto-Fill</span>
+                            <span>⚡ Claim Token #{entry.dailyTokenNo || 1}</span>
                           </button>
                           <button
                             type="button"
@@ -2819,10 +3937,13 @@ export default function CounsellingPortal({
           </div>
         </button>
 
-        {/* Card 3: Follow-up Due */}
+        {/* Card 4: Follow-up Due */}
         <button
           type="button"
-          onClick={() => handleCardClick("followup")}
+          onClick={() => {
+            handleCardClick("followup");
+            setIsFollowUpHubCollapsed(false);
+          }}
           className={`text-left p-4 rounded-xl border shadow-sm transition-all duration-200 cursor-pointer group hover:-translate-y-0.5 hover:shadow-md ${
             selectedMetricCard === "followup"
               ? "bg-orange-50/90 dark:bg-orange-950/50 border-orange-500 ring-2 ring-orange-500/20 shadow-md"
@@ -3361,8 +4482,17 @@ export default function CounsellingPortal({
 
                               {/* Student Name */}
                               <td className="px-4 py-3 whitespace-nowrap">
-                                <div className="font-bold text-slate-900 dark:text-white">
-                                  {item.studentName}
+                                <div className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5 flex-wrap">
+                                  <span>{item.studentName}</span>
+                                  {item.isSibling && (
+                                    <span
+                                      title={`Sibling of ${item.siblingStudentName || "Sibling"} (${item.siblingClass || ""}) - ${item.siblingEnquiryNo || ""}`}
+                                      className="px-1.5 py-0.5 rounded-md bg-purple-100 dark:bg-purple-950/80 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 text-[10px] font-black flex items-center gap-1 shadow-xs"
+                                    >
+                                      <span>👨‍👩‍👧‍👦</span>
+                                      <span>Sibling: {item.siblingStudentName} ({item.siblingClass})</span>
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="text-[10px] text-slate-400">
                                   {item.gender} • DOB: {item.dateOfBirth || "N/A"}
@@ -3767,7 +4897,24 @@ export default function CounsellingPortal({
                           <p className="font-bold text-slate-900 dark:text-white text-sm">
                             {enquiry.studentName}
                           </p>
-                          <div className="flex items-center gap-2 mt-0.5">
+
+                          {/* Sibling badge */}
+                          {enquiry.isSibling && (
+                            <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                              <span
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-purple-100 dark:bg-purple-950/80 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 text-[10px] font-bold shadow-xs"
+                                title={`Sibling of ${enquiry.siblingStudentName || "Sibling"} (${enquiry.siblingClass || ""}) - ${enquiry.siblingEnquiryNo || ""}`}
+                              >
+                                <span>👨‍👩‍👧‍👦</span>
+                                <span>Sibling: <strong className="font-black">{enquiry.siblingStudentName}</strong> ({enquiry.siblingClass})</span>
+                                {enquiry.siblingEnquiryNo && (
+                                  <span className="font-mono text-[9px] opacity-75">#{enquiry.siblingEnquiryNo}</span>
+                                )}
+                              </span>
+                            </div>
+                          )}
+
+                          <div className="flex items-center gap-2 mt-1">
                             <span className="px-2 py-0.5 bg-slate-100 dark:bg-slate-800 rounded font-semibold text-slate-700 dark:text-slate-300 text-[10px]">
                               {enquiry.applyingForClass}
                             </span>
@@ -4257,13 +5404,95 @@ export default function CounsellingPortal({
           </div>
 
           <div className="p-6 space-y-8">
+            {/* JOINT SIBLING SESSION BANNER & DUAL-CHILD TABS */}
+            {isJointSiblingMode && siblingFormData && (
+              <div className="p-4 bg-gradient-to-r from-purple-950 via-indigo-950 to-slate-900 border-2 border-purple-400 rounded-2xl shadow-xl text-white space-y-3.5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-purple-500/20 border border-purple-400/40 flex items-center justify-center text-xl shrink-0">
+                      👨‍👩‍👧‍👦
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-purple-400 text-slate-950">
+                          Joint Sibling Session Active
+                        </span>
+                        <span className="text-xs text-purple-200 font-bold">
+                          Tokens #{linkedSiblingTokens[0]?.dailyTokenNo || formData.siblingTokenNo || 1} &amp; #{linkedSiblingTokens[1]?.dailyTokenNo || siblingFormData.siblingTokenNo || 2}
+                        </span>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 font-bold">
+                          🎙️ 1 Shared Meeting Audio
+                        </span>
+                      </div>
+                      <p className="text-xs text-purple-200 mt-1">
+                        Fill child-specific grades &amp; DOBs using the tabs below. Family contacts and audio are shared automatically!
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (confirm("Switch off Joint Sibling Mode? You will only save Child 1.")) {
+                        setIsJointSiblingMode(false);
+                      }
+                    }}
+                    className="text-[11px] text-purple-300 hover:text-white underline self-start sm:self-auto cursor-pointer"
+                  >
+                    Cancel Joint Mode
+                  </button>
+                </div>
+
+                {/* Dual Child Switcher Tabs */}
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setSiblingActiveTab("child1")}
+                    className={`px-4 py-3 rounded-xl font-black text-xs transition-all flex items-center justify-center gap-2 cursor-pointer border ${
+                      siblingActiveTab === "child1"
+                        ? "bg-white text-slate-950 border-white shadow-xl scale-[1.01]"
+                        : "bg-purple-950/70 hover:bg-purple-900 text-purple-200 border-purple-400/30"
+                    }`}
+                  >
+                    <span className="text-base">👦</span>
+                    <div className="text-left">
+                      <div className="text-[10px] uppercase font-bold opacity-75">CHILD 1 (ENQ #{formData.enquiryNo})</div>
+                      <div className="text-xs font-black truncate max-w-[160px]">{formData.studentName || "First Child"} ({formData.applyingForClass})</div>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSiblingActiveTab("child2")}
+                    className={`px-4 py-3 rounded-xl font-black text-xs transition-all flex items-center justify-center gap-2 cursor-pointer border ${
+                      siblingActiveTab === "child2"
+                        ? "bg-white text-slate-950 border-white shadow-xl scale-[1.01]"
+                        : "bg-purple-950/70 hover:bg-purple-900 text-purple-200 border-purple-400/30"
+                    }`}
+                  >
+                    <span className="text-base">👧</span>
+                    <div className="text-left">
+                      <div className="text-[10px] uppercase font-bold opacity-75">CHILD 2 (ENQ #{siblingFormData.enquiryNo})</div>
+                      <div className="text-xs font-black truncate max-w-[160px]">{siblingFormData.studentName || "Second Child"} ({siblingFormData.applyingForClass})</div>
+                    </div>
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* SECTION 1: STUDENT & PARENT DETAILS */}
             <div className="space-y-4">
-              <div className="flex items-center gap-2 border-b-2 border-orange-500 pb-1.5">
-                <span className="w-6 h-6 rounded-full bg-orange-600 text-white flex items-center justify-center font-bold text-xs">1</span>
-                <h3 className="text-sm font-black uppercase text-slate-900 dark:text-white tracking-wider">
-                  STUDENT & PARENT DETAILS
-                </h3>
+              <div className="flex items-center justify-between border-b-2 border-orange-500 pb-1.5 flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-full bg-orange-600 text-white flex items-center justify-center font-bold text-xs">1</span>
+                  <h3 className="text-sm font-black uppercase text-slate-900 dark:text-white tracking-wider">
+                    STUDENT &amp; PARENT DETAILS
+                  </h3>
+                </div>
+                {isJointSiblingMode && siblingFormData && (
+                  <span className="text-xs font-bold text-purple-600 dark:text-purple-400 font-mono">
+                    Currently Editing: {siblingActiveTab === "child1" ? `Child 1 (${formData.studentName || "First"})` : `Child 2 (${siblingFormData.studentName || "Second"})`}
+                  </span>
+                )}
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -4272,7 +5501,13 @@ export default function CounsellingPortal({
                   <input
                     type="text"
                     value={formData.date}
-                    onChange={(e) => setFormData({ ...formData, date: e.target.value })}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setFormData(prev => ({ ...prev, date: val }));
+                      if (isJointSiblingMode && siblingFormData) {
+                        setSiblingFormData(prev => prev ? ({ ...prev, date: val }) : null);
+                      }
+                    }}
                     placeholder="DD-MM-YYYY"
                     className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
                     required
@@ -4280,11 +5515,20 @@ export default function CounsellingPortal({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Enquiry No.</label>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Enquiry No. {isJointSiblingMode && (siblingActiveTab === "child1" ? "(Child 1)" : "(Child 2)")}
+                  </label>
                   <input
                     type="text"
-                    value={formData.enquiryNo}
-                    onChange={(e) => setFormData({ ...formData, enquiryNo: e.target.value })}
+                    value={isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData ? siblingFormData.enquiryNo : formData.enquiryNo}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData) {
+                        setSiblingFormData(prev => prev ? ({ ...prev, enquiryNo: val, id: val }) : null);
+                      } else {
+                        setFormData(prev => ({ ...prev, enquiryNo: val, id: val }));
+                      }
+                    }}
                     className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-mono font-bold text-orange-600 dark:text-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-500"
                     required
                   />
@@ -4292,12 +5536,19 @@ export default function CounsellingPortal({
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Student Name <span className="text-red-500">*</span>
+                    Student Name {isJointSiblingMode && (siblingActiveTab === "child1" ? "(Child 1)" : "(Child 2)")} <span className="text-red-500">*</span>
                   </label>
                   <input
                     type="text"
-                    value={formData.studentName}
-                    onChange={(e) => setFormData({ ...formData, studentName: e.target.value })}
+                    value={isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData ? siblingFormData.studentName : formData.studentName}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData) {
+                        setSiblingFormData(prev => prev ? ({ ...prev, studentName: val }) : null);
+                      } else {
+                        setFormData(prev => ({ ...prev, studentName: val }));
+                      }
+                    }}
                     placeholder="Enter Student Full Name"
                     className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
                     required
@@ -4306,11 +5557,18 @@ export default function CounsellingPortal({
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Applying for Class <span className="text-red-500">*</span>
+                    Applying for Class {isJointSiblingMode && (siblingActiveTab === "child1" ? "(Child 1)" : "(Child 2)")} <span className="text-red-500">*</span>
                   </label>
                   <select
-                    value={formData.applyingForClass}
-                    onChange={(e) => setFormData({ ...formData, applyingForClass: e.target.value })}
+                    value={isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData ? siblingFormData.applyingForClass : formData.applyingForClass}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData) {
+                        setSiblingFormData(prev => prev ? ({ ...prev, applyingForClass: val }) : null);
+                      } else {
+                        setFormData(prev => ({ ...prev, applyingForClass: val }));
+                      }
+                    }}
                     className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
                   >
                     {CLASS_OPTIONS.map(c => (
@@ -4325,7 +5583,13 @@ export default function CounsellingPortal({
                   </label>
                   <select
                     value={formData.academicYear || "2026-2027"}
-                    onChange={(e) => setFormData({ ...formData, academicYear: e.target.value })}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setFormData(prev => ({ ...prev, academicYear: val }));
+                      if (isJointSiblingMode && siblingFormData) {
+                        setSiblingFormData(prev => prev ? ({ ...prev, academicYear: val }) : null);
+                      }
+                    }}
                     className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-bold text-orange-600 dark:text-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-500 cursor-pointer"
                   >
                     <option value="2026-2027">2026-2027 (Current Academic Year)</option>
@@ -4335,26 +5599,43 @@ export default function CounsellingPortal({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Date of Birth</label>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Date of Birth {isJointSiblingMode && (siblingActiveTab === "child1" ? "(Child 1)" : "(Child 2)")}
+                  </label>
                   <input
                     type="text"
-                    value={formData.dateOfBirth}
-                    onChange={(e) => setFormData({ ...formData, dateOfBirth: e.target.value })}
+                    value={isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData ? (siblingFormData.dateOfBirth || "") : formData.dateOfBirth}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData) {
+                        setSiblingFormData(prev => prev ? ({ ...prev, dateOfBirth: val }) : null);
+                      } else {
+                        setFormData(prev => ({ ...prev, dateOfBirth: val }));
+                      }
+                    }}
                     placeholder="DD-MM-YYYY"
                     className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Gender</label>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Gender {isJointSiblingMode && (siblingActiveTab === "child1" ? "(Child 1)" : "(Child 2)")}
+                  </label>
                   <div className="flex items-center gap-6 mt-2">
                     <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-slate-700 dark:text-slate-300">
                       <input
                         type="radio"
-                        name="gender"
+                        name="student_gender"
                         value="Male"
-                        checked={formData.gender === "Male"}
-                        onChange={() => setFormData({ ...formData, gender: "Male" })}
+                        checked={(isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData ? siblingFormData.gender : formData.gender) === "Male"}
+                        onChange={() => {
+                          if (isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData) {
+                            setSiblingFormData(prev => prev ? ({ ...prev, gender: "Male" }) : null);
+                          } else {
+                            setFormData(prev => ({ ...prev, gender: "Male" }));
+                          }
+                        }}
                         className="text-orange-600 focus:ring-orange-500"
                       />
                       <span>Male</span>
@@ -4362,10 +5643,16 @@ export default function CounsellingPortal({
                     <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-slate-700 dark:text-slate-300">
                       <input
                         type="radio"
-                        name="gender"
+                        name="student_gender"
                         value="Female"
-                        checked={formData.gender === "Female"}
-                        onChange={() => setFormData({ ...formData, gender: "Female" })}
+                        checked={(isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData ? siblingFormData.gender : formData.gender) === "Female"}
+                        onChange={() => {
+                          if (isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData) {
+                            setSiblingFormData(prev => prev ? ({ ...prev, gender: "Female" }) : null);
+                          } else {
+                            setFormData(prev => ({ ...prev, gender: "Female" }));
+                          }
+                        }}
                         className="text-orange-600 focus:ring-orange-500"
                       />
                       <span>Female</span>
@@ -4381,7 +5668,13 @@ export default function CounsellingPortal({
                     type="text"
                     required
                     value={formData.fatherName}
-                    onChange={(e) => setFormData({ ...formData, fatherName: e.target.value })}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setFormData(prev => ({ ...prev, fatherName: val }));
+                      if (isJointSiblingMode && siblingFormData) {
+                        setSiblingFormData(prev => prev ? ({ ...prev, fatherName: val }) : null);
+                      }
+                    }}
                     placeholder="Father Name"
                     className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
                   />
@@ -4395,7 +5688,13 @@ export default function CounsellingPortal({
                     type="text"
                     required
                     value={formData.motherName}
-                    onChange={(e) => setFormData({ ...formData, motherName: e.target.value })}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setFormData(prev => ({ ...prev, motherName: val }));
+                      if (isJointSiblingMode && siblingFormData) {
+                        setSiblingFormData(prev => prev ? ({ ...prev, motherName: val }) : null);
+                      }
+                    }}
                     placeholder="Mother Name"
                     className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
                   />
@@ -4408,7 +5707,13 @@ export default function CounsellingPortal({
                   <input
                     type="tel"
                     value={formData.contactNo}
-                    onChange={(e) => setFormData({ ...formData, contactNo: e.target.value })}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setFormData(prev => ({ ...prev, contactNo: val }));
+                      if (isJointSiblingMode && siblingFormData) {
+                        setSiblingFormData(prev => prev ? ({ ...prev, contactNo: val }) : null);
+                      }
+                    }}
                     placeholder="Primary Calling Number"
                     className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
                     required
@@ -4420,7 +5725,13 @@ export default function CounsellingPortal({
                     <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">WhatsApp No.</label>
                     <button
                       type="button"
-                      onClick={() => setFormData({ ...formData, whatsappNo: formData.contactNo })}
+                      onClick={() => {
+                        const val = formData.contactNo;
+                        setFormData(prev => ({ ...prev, whatsappNo: val }));
+                        if (isJointSiblingMode && siblingFormData) {
+                          setSiblingFormData(prev => prev ? ({ ...prev, whatsappNo: val }) : null);
+                        }
+                      }}
                       className="text-[10px] text-orange-600 dark:text-orange-400 hover:underline font-semibold"
                     >
                       Same as Contact
@@ -4429,7 +5740,13 @@ export default function CounsellingPortal({
                   <input
                     type="tel"
                     value={formData.whatsappNo}
-                    onChange={(e) => setFormData({ ...formData, whatsappNo: e.target.value })}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setFormData(prev => ({ ...prev, whatsappNo: val }));
+                      if (isJointSiblingMode && siblingFormData) {
+                        setSiblingFormData(prev => prev ? ({ ...prev, whatsappNo: val }) : null);
+                      }
+                    }}
                     placeholder="WhatsApp Number"
                     className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
                   />
@@ -4437,24 +5754,40 @@ export default function CounsellingPortal({
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Previous School <span className="text-red-500 font-black">*</span>
+                    Previous School {isJointSiblingMode && (siblingActiveTab === "child1" ? "(Child 1)" : "(Child 2)")} <span className="text-red-500 font-black">*</span>
                   </label>
                   <input
                     type="text"
                     required
-                    value={formData.previousSchool}
-                    onChange={(e) => setFormData({ ...formData, previousSchool: e.target.value })}
+                    value={isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData ? (siblingFormData.previousSchool || "") : formData.previousSchool}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData) {
+                        setSiblingFormData(prev => prev ? ({ ...prev, previousSchool: val }) : null);
+                      } else {
+                        setFormData(prev => ({ ...prev, previousSchool: val }));
+                      }
+                    }}
                     placeholder="Name of previous school & board"
                     className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Previous Class</label>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Previous Class {isJointSiblingMode && (siblingActiveTab === "child1" ? "(Child 1)" : "(Child 2)")}
+                  </label>
                   <input
                     type="text"
-                    value={formData.previousClass}
-                    onChange={(e) => setFormData({ ...formData, previousClass: e.target.value })}
+                    value={isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData ? (siblingFormData.previousClass || "") : formData.previousClass}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData) {
+                        setSiblingFormData(prev => prev ? ({ ...prev, previousClass: val }) : null);
+                      } else {
+                        setFormData(prev => ({ ...prev, previousClass: val }));
+                      }
+                    }}
                     placeholder="Class completed"
                     className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
                   />
@@ -4468,7 +5801,13 @@ export default function CounsellingPortal({
                     type="text"
                     required
                     value={formData.residentialAddress || ""}
-                    onChange={(e) => setFormData({ ...formData, residentialAddress: e.target.value })}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setFormData(prev => ({ ...prev, residentialAddress: val }));
+                      if (isJointSiblingMode && siblingFormData) {
+                        setSiblingFormData(prev => prev ? ({ ...prev, residentialAddress: val }) : null);
+                      }
+                    }}
                     placeholder="House / Flat No., Area / Locality, Landmark"
                     className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500 font-medium transition-all"
                   />
@@ -4789,7 +6128,16 @@ export default function CounsellingPortal({
                       <button
                         type="button"
                         key={status}
-                        onClick={() => setFormData({ ...formData, admissionStatus: status })}
+                        onClick={() => {
+                          let newFollowUp = formData.followUpDate;
+                          if (status === "Follow-up Required" && !newFollowUp) {
+                            newFollowUp = getFutureDateDMY(7); // Default 1 week if blank
+                          }
+                          setFormData({ ...formData, admissionStatus: status, followUpDate: newFollowUp });
+                          if (isJointSiblingMode && applyFollowUpToSibling && siblingFormData) {
+                            setSiblingFormData({ ...siblingFormData, admissionStatus: status, followUpDate: newFollowUp });
+                          }
+                        }}
                         className={`px-3 py-2.5 rounded-xl border text-xs font-bold text-center cursor-pointer transition-all ${
                           isSelected 
                             ? `${conf.bg} ${conf.text} ${conf.border} ring-2 ring-orange-500` 
@@ -4804,15 +6152,107 @@ export default function CounsellingPortal({
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Follow-up Date</label>
-                  <input
-                    type="text"
-                    value={formData.followUpDate}
-                    onChange={(e) => setFormData({ ...formData, followUpDate: e.target.value })}
-                    placeholder="DD-MM-YYYY"
-                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  />
+                <div className={formData.admissionStatus === "Follow-up Required" ? "p-3 bg-orange-50/80 dark:bg-orange-950/20 border-2 border-orange-400 dark:border-orange-600/60 rounded-2xl shadow-sm" : ""}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                      <Calendar size={14} className="text-orange-500" />
+                      <span>Follow-up Date</span>
+                      {formData.admissionStatus === "Follow-up Required" && (
+                        <span className="text-[10px] px-1.5 py-0.2 rounded-md bg-orange-600 text-white font-black uppercase">
+                          Alert Enabled
+                        </span>
+                      )}
+                    </label>
+                    {formData.followUpDate && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFormData({ ...formData, followUpDate: "" });
+                          if (isJointSiblingMode && applyFollowUpToSibling && siblingFormData) {
+                            setSiblingFormData({ ...siblingFormData, followUpDate: "" });
+                          }
+                        }}
+                        className="text-[10px] text-slate-400 hover:text-red-500 font-bold cursor-pointer"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Quick Date Presets */}
+                  <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                    <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">⚡ Quick:</span>
+                    {[
+                      { label: "Tomorrow (+1D)", days: 1 },
+                      { label: "In 3 Days (+3D)", days: 3 },
+                      { label: "In 1 Week (+7D)", days: 7 },
+                      { label: "In 2 Weeks (+14D)", days: 14 }
+                    ].map(preset => {
+                      const targetDate = getFutureDateDMY(preset.days);
+                      const isSelected = formData.followUpDate === targetDate;
+                      return (
+                        <button
+                          type="button"
+                          key={preset.days}
+                          onClick={() => {
+                            setFormData({ ...formData, followUpDate: targetDate, admissionStatus: "Follow-up Required" });
+                            if (isJointSiblingMode && applyFollowUpToSibling && siblingFormData) {
+                              setSiblingFormData({ ...siblingFormData, followUpDate: targetDate, admissionStatus: "Follow-up Required" });
+                            }
+                          }}
+                          className={`px-2 py-0.5 rounded-lg text-[10px] font-extrabold transition-all cursor-pointer border active:scale-95 ${
+                            isSelected
+                              ? "bg-orange-600 text-white border-orange-600 shadow-sm ring-1 ring-orange-400/40"
+                              : "bg-white dark:bg-slate-800 hover:bg-orange-100 dark:hover:bg-orange-950/60 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700"
+                          }`}
+                          title={`Set follow-up date to ${targetDate}`}
+                        >
+                          {preset.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Dual Input: Text Box + Native Calendar Date Picker */}
+                  <div className="flex items-center gap-1.5">
+                    <div className="relative flex-1">
+                      <input
+                        type="text"
+                        value={formData.followUpDate}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setFormData({ ...formData, followUpDate: val });
+                          if (isJointSiblingMode && applyFollowUpToSibling && siblingFormData) {
+                            setSiblingFormData({ ...siblingFormData, followUpDate: val });
+                          }
+                        }}
+                        placeholder="DD-MM-YYYY"
+                        className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      />
+                    </div>
+
+                    <div className="relative shrink-0" title="Open Calendar Picker">
+                      <input
+                        type="date"
+                        value={dmyToYmd(formData.followUpDate)}
+                        onChange={(e) => {
+                          const selectedDMY = ymdToDmy(e.target.value);
+                          setFormData({ ...formData, followUpDate: selectedDMY, admissionStatus: "Follow-up Required" });
+                          if (isJointSiblingMode && applyFollowUpToSibling && siblingFormData) {
+                            setSiblingFormData({ ...siblingFormData, followUpDate: selectedDMY, admissionStatus: "Follow-up Required" });
+                          }
+                        }}
+                        className="w-9 h-8 p-1 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      />
+                    </div>
+                  </div>
+
+                  {formData.admissionStatus === "Follow-up Required" && (
+                    <p className="text-[10px] text-orange-700 dark:text-orange-300 mt-1.5 font-medium flex items-center gap-1">
+                      <span>🔔</span>
+                      <span>Will automatically pop up in your morning <strong>Follow-up Calls Alert</strong> on this date.</span>
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -5917,6 +7357,131 @@ export default function CounsellingPortal({
               >
                 <Trash2 size={14} />
                 <span>Yes, Clear All ({pendingParentEntries.length})</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: QUICK RESCHEDULE SCHEDULED FOLLOW-UP */}
+      {reschedulingEnquiry && (
+        <div className="fixed inset-0 z-[100] bg-slate-950/75 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-start justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-orange-100 dark:bg-orange-950/80 text-orange-600 dark:text-orange-400 flex items-center justify-center font-bold">
+                  <Clock size={20} />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-900 dark:text-white">
+                    Reschedule Follow-up
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    {reschedulingEnquiry.studentName} (Class {reschedulingEnquiry.applyingForClass})
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReschedulingEnquiry(null)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Current Follow-up details */}
+            <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl text-xs space-y-1 text-slate-600 dark:text-slate-300">
+              <p>Parent: <strong className="text-slate-800 dark:text-slate-100">{reschedulingEnquiry.fatherName || reschedulingEnquiry.motherName || "Parent"}</strong> • 📞 {reschedulingEnquiry.contactNo}</p>
+              <p>Current Follow-up: <span className="font-mono font-bold text-orange-600 dark:text-orange-400">{reschedulingEnquiry.followUpDate || "None"}</span></p>
+            </div>
+
+            {/* Quick Preset Buttons */}
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
+                ⚡ Quick Presets (Click to choose new date):
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { label: "Tomorrow (+1 Day)", days: 1 },
+                  { label: "In 3 Days (+3 Days)", days: 3 },
+                  { label: "In 1 Week (+7 Days)", days: 7 },
+                  { label: "In 2 Weeks (+14 Days)", days: 14 }
+                ].map(preset => {
+                  const targetDMY = getFutureDateDMY(preset.days);
+                  const isSelected = ymdToDmy(rescheduleCustomDate) === targetDMY;
+                  return (
+                    <button
+                      type="button"
+                      key={preset.days}
+                      onClick={() => setRescheduleCustomDate(dmyToYmd(targetDMY))}
+                      className={`p-2 rounded-xl text-xs font-bold text-left border transition-all cursor-pointer ${
+                        isSelected
+                          ? "bg-orange-600 text-white border-orange-600 ring-2 ring-orange-400/40 shadow-xs"
+                          : "bg-white dark:bg-slate-800 hover:bg-orange-50 dark:hover:bg-orange-950/40 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700"
+                      }`}
+                    >
+                      <div className="font-black">{preset.label}</div>
+                      <div className={`text-[10px] ${isSelected ? "text-orange-100" : "text-slate-400 font-mono"}`}>
+                        {targetDMY}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Or Specific Custom Date Picker */}
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                Or Pick Custom Specific Date:
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="date"
+                  value={rescheduleCustomDate}
+                  onChange={(e) => setRescheduleCustomDate(e.target.value)}
+                  className="flex-1 px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                />
+                <span className="font-mono text-xs font-black text-orange-600 dark:text-orange-400 px-3 py-2 bg-orange-50 dark:bg-orange-950/60 rounded-xl border border-orange-200 dark:border-orange-800/60 shrink-0">
+                  {ymdToDmy(rescheduleCustomDate) || "DD-MM-YYYY"}
+                </span>
+              </div>
+            </div>
+
+            {/* Call Reason / Note */}
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                Note / Parent Remark (Optional):
+              </label>
+              <input
+                type="text"
+                value={rescheduleNote}
+                onChange={(e) => setRescheduleNote(e.target.value)}
+                placeholder="e.g. Parent requested callback after salary / out of station"
+                className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+              />
+            </div>
+
+            {/* Actions */}
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setReschedulingEnquiry(null)}
+                className="px-4 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const targetDMY = ymdToDmy(rescheduleCustomDate);
+                  handleApplyReschedule(reschedulingEnquiry, targetDMY, rescheduleNote);
+                }}
+                className="px-5 py-2.5 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white rounded-xl text-xs font-black shadow-md transition-all cursor-pointer flex items-center gap-1.5"
+              >
+                <Check size={14} />
+                <span>Save Rescheduled Date</span>
               </button>
             </div>
           </div>

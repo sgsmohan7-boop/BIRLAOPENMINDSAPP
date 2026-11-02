@@ -2402,7 +2402,30 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
     return res.json({ success: true, entries });
   });
 
-  // POST /api/parent-self-entry
+  // GET /api/parent-self-entry/next-token (Ultra-fast server authoritative daily token inquiry)
+  app.get("/api/parent-self-entry/next-token", (req, res) => {
+    try {
+      const now = new Date();
+      const todayDmy = now.toLocaleDateString("en-GB").replace(/\//g, "-");
+      const queryDate = (req.query.date as string) || todayDmy;
+      const dateKey = now.toISOString().split("T")[0];
+
+      const entries = readParentSelfEntries();
+      let maxToken = 0;
+      entries.forEach((e: any) => {
+        const itemDate = e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
+        if (itemDate === queryDate || itemDate === todayDmy || e.dateKey === dateKey) {
+          const num = Number(e.dailyTokenNo);
+          if (!isNaN(num) && num > maxToken) maxToken = num;
+        }
+      });
+      return res.json({ success: true, nextToken: maxToken + 1, currentCount: maxToken });
+    } catch (err: any) {
+      return res.json({ success: true, nextToken: 1, currentCount: 0 });
+    }
+  });
+
+  // POST /api/parent-self-entry (Server-authoritative token verification & allocation)
   app.post("/api/parent-self-entry", (req, res) => {
     try {
       const entry = req.body;
@@ -2410,9 +2433,32 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
         return res.status(400).json({ success: false, message: "Invalid parent self entry payload" });
       }
       const current = readParentSelfEntries();
+
+      // Authoritative daily token sequence check
+      const now = new Date();
+      const todayDmy = now.toLocaleDateString("en-GB").replace(/\//g, "-");
+      const entryDate = entry.entryDate || (entry.formattedDate ? entry.formattedDate.split(" ")[0] : todayDmy);
+      const entryDateKey = entry.dateKey || now.toISOString().split("T")[0];
+
+      let maxTodayToken = 0;
+      current.forEach((e: any) => {
+        if (e.id === entry.id) return; // ignore current entry if updating existing
+        const itemDate = e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
+        if (itemDate === entryDate || itemDate === todayDmy || e.dateKey === entryDateKey) {
+          const num = Number(e.dailyTokenNo);
+          if (!isNaN(num) && num > maxTodayToken) maxTodayToken = num;
+        }
+      });
+
+      // If client submitted with 0, NaN, or a stale/duplicate token (e.g. mobile lagged and sent 1 when already at 24)
+      const clientToken = Number(entry.dailyTokenNo);
+      if (isNaN(clientToken) || clientToken <= 0 || clientToken <= maxTodayToken) {
+        entry.dailyTokenNo = maxTodayToken + 1;
+      }
+
       const updated = [entry, ...current.filter((e: any) => e.id !== entry.id)];
       writeParentSelfEntries(updated);
-      return res.json({ success: true, entries: updated });
+      return res.json({ success: true, entry, entries: updated });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err?.message });
     }
@@ -3618,7 +3664,7 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
     }
 
     const existingIdx = data.counsellors.findIndex((c: any) => 
-      c.id === account.id || c.username?.toLowerCase() === cleanUsername
+      c.id === account.id
     );
     if (existingIdx >= 0) {
       data.counsellors[existingIdx] = { ...data.counsellors[existingIdx], ...account, username: cleanUsername };

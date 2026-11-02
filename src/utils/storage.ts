@@ -641,10 +641,17 @@ export const getDeletedCounsellorAccountIds = (): string[] => {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    // Ensure radhika and counsellor-01 are protected and cleaned from local deleted set
+    // Protect core staff accounts from local deletion state
+    const PROTECTED_CORE = new Set([
+      "radhika", "counsellor-01",
+      "sravan", "counsellor-02",
+      "sowjanya", "counsellor-03",
+      "kavya", "counsellor-04",
+      "test", "counsellor-05"
+    ]);
     const cleaned = parsed.filter(d => {
       const lower = String(d).toLowerCase();
-      return lower !== "radhika" && lower !== "counsellor-01";
+      return !PROTECTED_CORE.has(lower);
     });
     if (cleaned.length !== parsed.length) {
       localStorage.setItem(DELETED_ACCOUNTS_KEY, JSON.stringify(cleaned));
@@ -658,10 +665,17 @@ export const getDeletedCounsellorAccountIds = (): string[] => {
 export const recordDeletedCounsellorAccountId = (id: string, username?: string) => {
   if (typeof window === "undefined") return;
   try {
+    const PROTECTED_CORE = new Set([
+      "radhika", "counsellor-01",
+      "sravan", "counsellor-02",
+      "sowjanya", "counsellor-03",
+      "kavya", "counsellor-04",
+      "test", "counsellor-05"
+    ]);
     const deleted = getDeletedCounsellorAccountIds();
     const set = new Set(deleted.map(d => d.toLowerCase()));
-    if (id && id.toLowerCase() !== "counsellor-01") set.add(id.toLowerCase());
-    if (username && username.toLowerCase() !== "radhika") set.add(username.toLowerCase());
+    if (id && !PROTECTED_CORE.has(id.toLowerCase())) set.add(id.toLowerCase());
+    if (username && !PROTECTED_CORE.has(username.toLowerCase())) set.add(username.toLowerCase());
     localStorage.setItem(DELETED_ACCOUNTS_KEY, JSON.stringify(Array.from(set)));
   } catch {}
 };
@@ -669,12 +683,19 @@ export const recordDeletedCounsellorAccountId = (id: string, username?: string) 
 export const recordDeletedCounsellorAccountIds = (ids: string[]) => {
   if (typeof window === "undefined" || !Array.isArray(ids)) return;
   try {
+    const PROTECTED_CORE = new Set([
+      "radhika", "counsellor-01",
+      "sravan", "counsellor-02",
+      "sowjanya", "counsellor-03",
+      "kavya", "counsellor-04",
+      "test", "counsellor-05"
+    ]);
     const deleted = getDeletedCounsellorAccountIds();
     const set = new Set(deleted.map(d => d.toLowerCase()));
     ids.forEach(i => {
       if (i) {
         const lower = String(i).toLowerCase();
-        if (lower !== "radhika" && lower !== "counsellor-01") {
+        if (!PROTECTED_CORE.has(lower)) {
           set.add(lower);
         }
       }
@@ -702,24 +723,29 @@ export const mergeWithDefaultCounsellorAccounts = (
   const localDeleted = getDeletedCounsellorAccountIds().map(d => d.toLowerCase());
   const extraClean = (extraDeletedIds || []).map(d => String(d).toLowerCase());
   const deletedSet = new Set([...localDeleted, ...extraClean]);
-  // Never treat main radhika account as deleted
+  // Never treat core staff as deleted
   deletedSet.delete("radhika");
   deletedSet.delete("counsellor-01");
+  deletedSet.delete("sravan");
+  deletedSet.delete("counsellor-02");
+  deletedSet.delete("sowjanya");
+  deletedSet.delete("counsellor-03");
+  deletedSet.delete("kavya");
+  deletedSet.delete("counsellor-04");
+  deletedSet.delete("test");
+  deletedSet.delete("counsellor-05");
 
   const seenIds = new Set<string>();
-  const seenUsernames = new Set<string>();
+  const seenUsernames = new Map<string, string>(); // username -> account ID
   const result: CounsellorAccount[] = [];
 
   const addAccount = (acc: CounsellorAccount) => {
     if (!acc || !acc.username) return;
-    const userLower = acc.username.trim().toLowerCase();
+    let userLower = acc.username.trim().toLowerCase();
     const idLower = (acc.id || "").trim().toLowerCase();
 
     // Skip if explicitly deleted by user action
     if (deletedSet.has(idLower) || deletedSet.has(userLower)) return;
-
-    // Skip if username is already present (preserves user updates & deactivations)
-    if (seenUsernames.has(userLower)) return;
 
     // Pin canonical IDs for primary accounts
     let finalId = (acc.id || "").trim();
@@ -727,10 +753,21 @@ export const mergeWithDefaultCounsellorAccounts = (
       finalId = "COUNSELLOR-01";
     } else if (userLower === "sravan") {
       finalId = "COUNSELLOR-02";
+    } else if (userLower === "sowjanya") {
+      finalId = "COUNSELLOR-03";
+    } else if (userLower === "kavya") {
+      finalId = "COUNSELLOR-04";
+    } else if (userLower === "test") {
+      finalId = "COUNSELLOR-05";
     }
 
-    // Ensure unique ID across all accounts if ID is missing or collides
-    if (!finalId || seenIds.has(finalId.toLowerCase())) {
+    // If ID or username already registered from a higher priority source, skip to avoid duplicates/overwriting
+    if (seenIds.has(finalId.toLowerCase()) || seenUsernames.has(userLower)) {
+      return;
+    }
+
+    // Ensure unique ID across all accounts if ID is missing
+    if (!finalId) {
       let num = 1;
       while (seenIds.has(`counsellor-${String(num).padStart(2, "0")}`)) {
         num++;
@@ -739,12 +776,12 @@ export const mergeWithDefaultCounsellorAccounts = (
     }
 
     seenIds.add(finalId.toLowerCase());
-    seenUsernames.add(userLower);
+    seenUsernames.set(userLower, finalId.toLowerCase());
     result.push({
       ...acc,
       id: finalId,
       username: userLower,
-      name: acc.name ? acc.name.trim() : (userLower === "radhika" ? "K. Radhika" : userLower === "sravan" ? "sravan" : userLower)
+      name: acc.name ? acc.name.trim() : (userLower === "radhika" ? "RADHIKA DAS V" : userLower === "sravan" ? "sravan" : userLower)
     });
   };
 
@@ -808,7 +845,16 @@ export const loadCounsellorAccounts = (): CounsellorAccount[] => {
 };
 
 export const saveCounsellorAccounts = (accounts: CounsellorAccount[]) => {
-  localStorage.setItem(KEYS.COUNSELLOR_ACCOUNTS, JSON.stringify(accounts));
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(KEYS.COUNSELLOR_ACCOUNTS, JSON.stringify(accounts));
+    window.dispatchEvent(new CustomEvent("counsellor_accounts_updated", { detail: accounts }));
+    if ("BroadcastChannel" in window) {
+      const channel = new BroadcastChannel("birla_accounts_sync");
+      channel.postMessage({ type: "COUNSELLORS_SYNC", accounts });
+      channel.close();
+    }
+  } catch {}
 };
 
 const parseAbsoluteDateStr = (str: string): string | null => {

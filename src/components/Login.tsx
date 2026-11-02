@@ -262,11 +262,13 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
     if (typeof window !== "undefined") {
       window.addEventListener("storage", handleSyncEvent);
       window.addEventListener("management_accounts_updated", handleSyncEvent);
+      window.addEventListener("counsellor_accounts_updated", handleSyncEvent);
     }
     return () => {
       if (typeof window !== "undefined") {
         window.removeEventListener("storage", handleSyncEvent);
         window.removeEventListener("management_accounts_updated", handleSyncEvent);
+        window.removeEventListener("counsellor_accounts_updated", handleSyncEvent);
       }
     };
   }, []);
@@ -726,22 +728,24 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
 
     const matchAccount = (accList: CounsellorAccount[]) => {
       const uNorm = u.replace(/[^a-z0-9]/g, "");
-      return accList.find(a => {
-        const usernameNorm = a.username.toLowerCase().replace(/[^a-z0-9]/g, "");
-        const idNorm = (a.id || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-        const nameNorm = a.name.toLowerCase().replace(/[^a-z0-9]/g, "");
-        const emailNorm = a.email.toLowerCase().replace(/[^a-z0-9]/g, "");
-        return (
-          a.username.toLowerCase() === u ||
-          a.email.toLowerCase() === u ||
-          a.id.toLowerCase() === u ||
-          a.name.toLowerCase() === u ||
-          usernameNorm === uNorm ||
-          idNorm === uNorm ||
-          nameNorm === uNorm ||
-          emailNorm === uNorm
-        );
-      });
+      // 1. Exact username match (Top Priority)
+      const exactUser = accList.find(a => a.username.toLowerCase() === u);
+      if (exactUser) return exactUser;
+
+      // 2. Exact email match
+      const exactEmail = accList.find(a => a.email.toLowerCase() === u);
+      if (exactEmail) return exactEmail;
+
+      // 3. Exact ID match
+      const exactId = accList.find(a => a.id.toLowerCase() === u);
+      if (exactId) return exactId;
+
+      // 4. Normalized username match
+      const normUser = accList.find(a => a.username.toLowerCase().replace(/[^a-z0-9]/g, "") === uNorm);
+      if (normUser) return normUser;
+
+      // 5. Normalized ID match
+      return accList.find(a => (a.id || "").toLowerCase().replace(/[^a-z0-9]/g, "") === uNorm);
     };
 
     // 1. Search in live state and localStorage

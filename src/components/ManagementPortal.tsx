@@ -55,8 +55,7 @@ import {
 import { loadCounsellorAccounts, saveCounsellorAccounts, DEMO_COUNSELLING, mergeWithDefaultCounsellorAccounts, recordDeletedCounsellorAccountId, unrecordDeletedCounsellorAccountId, getAllowCounsellorMultiDelete, setAllowCounsellorMultiDelete } from "../utils/storage";
 import ManagementAudioDesk from "./ManagementAudioDesk";
 import ManagementAdmissionDesk from "./ManagementAdmissionDesk";
-import { formatAudioDuration } from "../utils/audioStorage";
-import { isFirebaseConfigured, saveDocument, deleteDocument } from "../utils/firebase";
+import { isFirebaseConfigured, saveDocument, deleteDocument, syncCollection } from "../utils/firebase";
 
 
 interface ManagementPortalProps {
@@ -136,6 +135,82 @@ export default function ManagementPortal({
       setLocalCounsellorAccounts(mergeWithDefaultCounsellorAccounts(counsellorAccounts));
     }
   }, [counsellorAccounts]);
+
+  useEffect(() => {
+    const handleCounsellorSync = (e?: any) => {
+      if (e?.detail && Array.isArray(e.detail)) {
+        setLocalCounsellorAccounts(mergeWithDefaultCounsellorAccounts(e.detail));
+      } else {
+        setLocalCounsellorAccounts(loadCounsellorAccounts());
+      }
+    };
+
+    let channel: BroadcastChannel | null = null;
+    if (typeof window !== "undefined") {
+      window.addEventListener("counsellor_accounts_updated", handleCounsellorSync);
+      window.addEventListener("storage", handleCounsellorSync);
+      if ("BroadcastChannel" in window) {
+        channel = new BroadcastChannel("birla_accounts_sync");
+        channel.onmessage = (event) => {
+          if (event.data?.type === "COUNSELLORS_SYNC") {
+            if (Array.isArray(event.data.accounts)) {
+              setLocalCounsellorAccounts(mergeWithDefaultCounsellorAccounts(event.data.accounts));
+            } else {
+              setLocalCounsellorAccounts(loadCounsellorAccounts());
+            }
+          }
+        };
+      }
+    }
+
+    // Direct real-time Firestore sync for instant cross-device updates
+    let unsubFirestore: (() => void) | undefined;
+    if (isFirebaseConfigured()) {
+      try {
+        unsubFirestore = syncCollection<CounsellorAccount>(
+          "counsellor_accounts",
+          (items) => {
+            if (Array.isArray(items) && items.length > 0) {
+              const merged = mergeWithDefaultCounsellorAccounts(items);
+              setLocalCounsellorAccounts(merged);
+              saveCounsellorAccounts(merged);
+            }
+          },
+          []
+        );
+      } catch (err) {
+        console.warn("Management counsellor Firestore sync error:", err);
+      }
+    }
+
+    // Periodic fallback server pull (10s)
+    const fetchServer = async () => {
+      try {
+        const res = await fetch("/api/accounts");
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && Array.isArray(json.accounts?.counsellors)) {
+            const extraDeleted = Array.isArray(json.accounts.deletedCounsellors) ? json.accounts.deletedCounsellors : [];
+            const merged = mergeWithDefaultCounsellorAccounts(json.accounts.counsellors, extraDeleted);
+            setLocalCounsellorAccounts(merged);
+            saveCounsellorAccounts(merged);
+          }
+        }
+      } catch {}
+    };
+    fetchServer();
+    const interval = setInterval(fetchServer, 10000);
+
+    return () => {
+      clearInterval(interval);
+      if (unsubFirestore) unsubFirestore();
+      if (channel) channel.close();
+      if (typeof window !== "undefined") {
+        window.removeEventListener("counsellor_accounts_updated", handleCounsellorSync);
+        window.removeEventListener("storage", handleCounsellorSync);
+      }
+    };
+  }, []);
 
   // Management Account modal states
   const [isMgmtModalOpen, setIsMgmtModalOpen] = useState(false);
@@ -350,18 +425,19 @@ export default function ManagementPortal({
         if (!isNaN(n) && n > maxNum) maxNum = n;
       }
     });
-    const nextIdx = Math.max(localCounsellorAccounts.length + 1, maxNum + 1);
+    const nextIdx = maxNum + 1;
+    const colorPalette = ["#EA580C", "#2563EB", "#059669", "#7C3AED", "#DB2777", "#0284C7", "#D97706", "#0D9488", "#4F46E5", "#E11D48"];
     setCounsellorFormData({
       id: `COUNSELLOR-${String(nextIdx).padStart(2, "0")}`,
       name: "",
-      username: `counsellor${nextIdx}`,
-      password: `Password@${100 + nextIdx}`,
-      email: `counsellor${nextIdx}@birlainstitute.edu.in`,
+      username: "",
+      password: "",
+      email: "",
       phone: "+91 98765 00000",
       roleTitle: "Admissions Counsellor",
       assignedGrades: "All Grades",
       status: "active",
-      color: "#EA580C",
+      color: colorPalette[(nextIdx - 1) % colorPalette.length],
       createdAt: new Date().toLocaleDateString("en-GB")
     });
     setCounsellorModalMode("create");
@@ -383,35 +459,106 @@ export default function ManagementPortal({
       return;
     }
     const cleanUser = counsellorFormData.username.trim().toLowerCase();
-    const finalAcc: CounsellorAccount = {
-      ...counsellorFormData,
-      name: counsellorFormData.name.trim(),
-      username: cleanUser,
-      password: counsellorFormData.password.trim(),
-      email: counsellorFormData.email.trim() || `${cleanUser}@birlainstitute.edu.in`,
-      createdAt: counsellorFormData.createdAt || new Date().toLocaleDateString("en-GB")
-    };
 
-    unrecordDeletedCounsellorAccountId(finalAcc.id, finalAcc.username);
-
-    setLocalCounsellorAccounts(prev => {
-      const idx = prev.findIndex(a => a.id === finalAcc.id || a.username.toLowerCase() === cleanUser);
-      let updated: CounsellorAccount[];
-      if (idx >= 0) {
-        updated = [...prev];
-        updated[idx] = finalAcc;
-      } else {
-        updated = [...prev, finalAcc];
+    // Check for duplicate username
+    if (counsellorModalMode === "create") {
+      const existingUser = localCounsellorAccounts.find(a => a.username.toLowerCase() === cleanUser);
+      if (existingUser) {
+        alert(`❌ The username "${cleanUser}" is already taken by "${existingUser.name}" (${existingUser.id})!\n\nPlease choose a unique username so login credentials do not conflict.`);
+        return;
       }
-      const merged = mergeWithDefaultCounsellorAccounts(updated);
-      saveCounsellorAccounts(merged);
-      return merged;
-    });
 
-    if (onSaveCounsellorAccount) onSaveCounsellorAccount(finalAcc);
-    setDeleteToast(`✓ Counsellor account "${finalAcc.name}" (${finalAcc.username}) created/saved successfully!`);
-    setTimeout(() => setDeleteToast(null), 3500);
-    setIsCounsellorModalOpen(false);
+      // Guaranteed non-colliding ID
+      let maxNum = 0;
+      localCounsellorAccounts.forEach(a => {
+        const match = a.id?.match(/COUNSELLOR-(\d+)/i) || a.id?.match(/(\d+)$/);
+        if (match) {
+          const n = parseInt(match[1] || match[0], 10);
+          if (!isNaN(n) && n > maxNum) maxNum = n;
+        }
+      });
+      const finalId = `COUNSELLOR-${String(maxNum + 1).padStart(2, "0")}`;
+
+      const finalAcc: CounsellorAccount = {
+        ...counsellorFormData,
+        id: finalId,
+        name: counsellorFormData.name.trim(),
+        username: cleanUser,
+        password: counsellorFormData.password.trim(),
+        email: counsellorFormData.email.trim() || `${cleanUser}.counsellor@birlainstitute.edu.in`,
+        createdAt: counsellorFormData.createdAt || new Date().toLocaleDateString("en-GB")
+      };
+
+      unrecordDeletedCounsellorAccountId(finalAcc.id, finalAcc.username);
+
+      setLocalCounsellorAccounts(prev => {
+        const nextList = [...prev.filter(a => a.id !== finalAcc.id), finalAcc];
+        const merged = mergeWithDefaultCounsellorAccounts(nextList);
+        saveCounsellorAccounts(merged);
+        return merged;
+      });
+
+      if (isFirebaseConfigured()) {
+        deleteDocument("deleted_counsellor_accounts", (finalAcc.id || "").toLowerCase());
+        deleteDocument("deleted_counsellor_accounts", cleanUser);
+        saveDocument("counsellor_accounts", finalAcc.id, finalAcc);
+      }
+
+      fetch("/api/accounts/counsellor", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(finalAcc)
+      }).catch(() => {});
+
+      if (onSaveCounsellorAccount) onSaveCounsellorAccount(finalAcc);
+      setDeleteToast(`✓ New Counsellor account "${finalAcc.name}" (Username: ${finalAcc.username}) created successfully!`);
+      setTimeout(() => setDeleteToast(null), 3500);
+      setIsCounsellorModalOpen(false);
+    } else {
+      // EDIT MODE: Match strictly by ID
+      const targetId = counsellorFormData.id;
+      const userConflict = localCounsellorAccounts.find(
+        a => a.id !== targetId && a.username.toLowerCase() === cleanUser
+      );
+      if (userConflict) {
+        alert(`❌ The username "${cleanUser}" is already in use by "${userConflict.name}" (${userConflict.id})!\n\nPlease choose a different username.`);
+        return;
+      }
+
+      const finalAcc: CounsellorAccount = {
+        ...counsellorFormData,
+        id: targetId,
+        name: counsellorFormData.name.trim(),
+        username: cleanUser,
+        password: counsellorFormData.password.trim(),
+        email: counsellorFormData.email.trim() || `${cleanUser}.counsellor@birlainstitute.edu.in`,
+        createdAt: counsellorFormData.createdAt || new Date().toLocaleDateString("en-GB")
+      };
+
+      unrecordDeletedCounsellorAccountId(finalAcc.id, finalAcc.username);
+
+      setLocalCounsellorAccounts(prev => {
+        const nextList = prev.map(a => a.id === targetId ? finalAcc : a);
+        const merged = mergeWithDefaultCounsellorAccounts(nextList);
+        saveCounsellorAccounts(merged);
+        return merged;
+      });
+
+      if (isFirebaseConfigured()) {
+        saveDocument("counsellor_accounts", finalAcc.id, finalAcc);
+      }
+
+      fetch("/api/accounts/counsellor", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(finalAcc)
+      }).catch(() => {});
+
+      if (onSaveCounsellorAccount) onSaveCounsellorAccount(finalAcc);
+      setDeleteToast(`✓ Counsellor account "${finalAcc.name}" (${finalAcc.username}) updated successfully!`);
+      setTimeout(() => setDeleteToast(null), 3500);
+      setIsCounsellorModalOpen(false);
+    }
   };
 
   const handleToggleCounsellorStatus = (acc: CounsellorAccount) => {
@@ -424,6 +571,14 @@ export default function ManagementPortal({
       saveCounsellorAccounts(next);
       return next;
     });
+    if (isFirebaseConfigured()) {
+      saveDocument("counsellor_accounts", updated.id, updated);
+    }
+    fetch("/api/accounts/counsellor", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updated)
+    }).catch(() => {});
     if (onSaveCounsellorAccount) onSaveCounsellorAccount(updated);
   };
 
@@ -442,6 +597,17 @@ export default function ManagementPortal({
       saveCounsellorAccounts(next);
       return next;
     });
+    if (isFirebaseConfigured()) {
+      deleteDocument("counsellor_accounts", target.id);
+      saveDocument("deleted_counsellor_accounts", target.id.toLowerCase(), {
+        id: target.id.toLowerCase(),
+        username: target.username.toLowerCase(),
+        deletedAt: Date.now()
+      });
+    }
+    fetch(`/api/accounts/counsellor/${encodeURIComponent(target.id)}`, {
+      method: "DELETE"
+    }).catch(() => {});
     if (onDeleteCounsellorAccount) onDeleteCounsellorAccount(target.id);
     setDeleteToast(`Counsellor account "${target.name}" deleted successfully! All enquiries and performance metrics remain intact.`);
     setTimeout(() => setDeleteToast(null), 3500);

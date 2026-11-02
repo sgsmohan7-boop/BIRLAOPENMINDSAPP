@@ -512,7 +512,21 @@ export async function getNextDailyTokenNo(dmy: string, dateKey: string): Promise
     }
   } catch {}
 
-  // 3. Server API endpoint query
+  // 3. Fast Server API endpoint query
+  try {
+    const fastTokenRes = await Promise.race([
+      fetch(`/api/parent-self-entry/next-token?date=${dmy}`),
+      new Promise<null>((r) => setTimeout(() => r(null), 1200))
+    ]);
+    if (fastTokenRes && 'json' in fastTokenRes) {
+      const data: any = await fastTokenRes.json();
+      if (data && data.success && typeof data.nextToken === "number" && data.nextToken > 1) {
+        tokenSet.add(data.nextToken - 1);
+      }
+    }
+  } catch {}
+
+  // 4. Server full entries list query
   try {
     const res = await Promise.race([
       fetch("/api/parent-self-entry?scope=today"),

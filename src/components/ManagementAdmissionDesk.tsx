@@ -405,8 +405,18 @@ export default function ManagementAdmissionDesk({
                               key={cand.id}
                               className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/60 dark:border-slate-700/60 text-xs space-y-1.5"
                             >
-                              <div className="flex items-center justify-between font-bold text-slate-900 dark:text-white">
-                                <span>{cand.studentName}</span>
+                              <div className="flex items-center justify-between font-bold text-slate-900 dark:text-white flex-wrap gap-1">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span>{cand.studentName}</span>
+                                  {cand.isSibling && (
+                                    <span
+                                      title={`Sibling of ${cand.siblingStudentName || "Sibling"} (${cand.siblingClass || ""}) - ${cand.siblingEnquiryNo || ""}`}
+                                      className="px-1.5 py-0.2 bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 rounded text-[9px] font-black border border-purple-200 dark:border-purple-800"
+                                    >
+                                      👨‍👩‍👧‍👦 Sibling: {cand.siblingStudentName} ({cand.siblingClass})
+                                    </span>
+                                  )}
+                                </div>
                                 <span className="font-mono text-[10px] text-slate-400">{cand.enquiryNo}</span>
                               </div>
 
@@ -511,7 +521,17 @@ export default function ManagementAdmissionDesk({
                 filteredEnquiries.map((enq) => (
                   <tr key={enq.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
                     <td className="py-3.5 px-4">
-                      <div className="font-bold text-slate-900 dark:text-white">{enq.studentName}</div>
+                      <div className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5 flex-wrap">
+                        <span>{enq.studentName}</span>
+                        {enq.isSibling && (
+                          <span
+                            title={`Sibling of ${enq.siblingStudentName || "Sibling"} (${enq.siblingClass || ""}) - ${enq.siblingEnquiryNo || ""}`}
+                            className="px-1.5 py-0.5 bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 rounded text-[9px] font-black border border-purple-200 dark:border-purple-800"
+                          >
+                            👨‍👩‍👧‍👦 Sibling: {enq.siblingStudentName} ({enq.siblingClass})
+                          </span>
+                        )}
+                      </div>
                       <div className="font-mono text-[10px] text-slate-400">{enq.enquiryNo}</div>
                     </td>
                     <td className="py-3.5 px-4 font-bold text-indigo-600 dark:text-indigo-400">

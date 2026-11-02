@@ -658,8 +658,16 @@ export default function AudioMeetingRecorder({
   const [speechSupported, setSpeechSupported] = useState<boolean>(true);
   const [speechBlockedWarning, setSpeechBlockedWarning] = useState<boolean>(false);
 
-  // Gemini Speech Recognition Mode (Telugu + English default for regional admissions)
-  const [speechMode, setSpeechMode] = useState<"bilingual_admissions" | "english_indian" | "telugu_native" | "hindi_native" | "english_global">("telugu_native");
+  // Gemini Speech Recognition Mode (Indian English default as requested)
+  const [speechMode, setSpeechMode] = useState<"bilingual_admissions" | "english_indian" | "telugu_native" | "hindi_native" | "english_global">(() => {
+    try {
+      const saved = localStorage.getItem("counsellor_speech_mode");
+      if (saved && ["bilingual_admissions", "english_indian", "telugu_native", "hindi_native", "english_global"].includes(saved)) {
+        return saved as any;
+      }
+    } catch {}
+    return "english_indian";
+  });
 
   // Transcript Display Mode: Unified Continuous Transcript (Default - no speaker division confusion) vs Speaker Bubbles
   const [transcriptDisplayMode, setTranscriptDisplayMode] = useState<"unified_continuous" | "speaker_bubbles">("unified_continuous");
@@ -766,7 +774,7 @@ export default function AudioMeetingRecorder({
   const dialogueTurnsRef = useRef<DialogueTurn[]>([]);
   const interimSpeechTextRef = useRef<string>("");
   const isRecognitionRunningRef = useRef<boolean>(false);
-  const speechModeRef = useRef<string>("telugu_native");
+  const speechModeRef = useRef<string>("english_indian");
 
   useEffect(() => {
     isRecordingRef.current = isRecording;
@@ -1184,6 +1192,9 @@ export default function AudioMeetingRecorder({
   const handleSwitchSpeechMode = (mode: "bilingual_admissions" | "english_indian" | "telugu_native" | "hindi_native" | "english_global") => {
     setSpeechMode(mode);
     speechModeRef.current = mode;
+    try {
+      localStorage.setItem("counsellor_speech_mode", mode);
+    } catch {}
     if (isRecordingRef.current) {
       stopLiveSpeechRecognition();
       scheduleSpeechRestart(150, mode);
@@ -2404,7 +2415,7 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
               </span>
             </h4>
             <p className="text-[11px] text-slate-500 dark:text-slate-400">
-              Live speech converts directly into verbatim chat dialogue bubbles (Telugu + English mixed).
+              Live speech converts directly into verbatim chat dialogue bubbles (Indian English &amp; Regional admissions dialogue).
             </p>
           </div>
         </div>
@@ -2418,9 +2429,9 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
               onChange={(e) => handleSwitchSpeechMode(e.target.value as any)}
               className="bg-transparent text-xs font-bold text-slate-700 dark:text-slate-200 focus:outline-none cursor-pointer"
             >
+              <option value="english_indian">🇮🇳 Indian English (Default)</option>
               <option value="bilingual_admissions">🌐 Smart Auto (Telugu + English)</option>
               <option value="telugu_native">🇮🇳 Pure Telugu (తెలుగు)</option>
-              <option value="english_indian">🇮🇳 Indian English</option>
               <option value="hindi_native">🇮🇳 Hindi (हिंदी)</option>
               <option value="english_global">🌍 Global English</option>
             </select>

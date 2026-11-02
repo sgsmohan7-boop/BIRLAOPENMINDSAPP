@@ -1329,6 +1329,20 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT COACHING ONLY
                           <h4 className="font-black text-sm text-slate-900 dark:text-white mt-1 truncate">
                             {enq.studentName}
                           </h4>
+
+                          {/* Joint Sibling / Family Session Badge */}
+                          {(audio?.isJointSiblingSession || enq.isSibling) && (
+                            <div className="mt-1 flex items-center gap-1">
+                              <span
+                                className="px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/80 text-amber-900 dark:text-amber-200 border border-amber-300 dark:border-amber-800 text-[10px] font-black flex items-center gap-1 shadow-xs"
+                                title="Single joint family counselling meeting audio shared across sibling admission records"
+                              >
+                                <span>🎙️</span>
+                                <span>Joint Family Session ({audio?.jointSiblingNames || enq.siblingStudentName || "Siblings"})</span>
+                              </span>
+                            </div>
+                          )}
+
                           <p className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-2 mt-0.5">
                             <span>👤 {enq.counsellorName}</span>
                             <span>•</span>
@@ -1489,6 +1503,26 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT COACHING ONLY
                         <span>•</span>
                         <span className="font-mono text-slate-400">Recorded: {activeEnquiry.audioRecording.recordedAt}</span>
                       </p>
+
+                      {/* Joint Family Session Banner */}
+                      {(activeEnquiry.audioRecording.isJointSiblingSession || activeEnquiry.isSibling) && (
+                        <div className="mt-2.5 p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 flex items-center justify-between gap-3 text-xs">
+                          <div className="flex items-center gap-2">
+                            <span className="text-lg">🎙️</span>
+                            <div>
+                              <span className="font-black text-amber-900 dark:text-amber-200">
+                                Joint Family Session (Siblings: {activeEnquiry.audioRecording.jointSiblingNames || activeEnquiry.siblingStudentName || "Siblings"})
+                              </span>
+                              <p className="text-[11px] text-amber-800 dark:text-amber-300 mt-0.5">
+                                Single combined meeting recording shared between sibling enquiries ({activeEnquiry.enquiryNo} &amp; {activeEnquiry.siblingEnquiryNo || "Linked"}). Full dialogue covers both children.
+                              </p>
+                            </div>
+                          </div>
+                          <span className="px-2.5 py-1 rounded-lg bg-amber-200 dark:bg-amber-900 text-amber-950 dark:text-amber-100 font-mono font-bold text-[10px] shrink-0 border border-amber-300 dark:border-amber-700">
+                            👨‍👩‍👧‍👦 Joint Meeting
+                          </span>
+                        </div>
+                      )}
                     </div>
 
                     {/* Sleek Cohesive Action Toolbar */}

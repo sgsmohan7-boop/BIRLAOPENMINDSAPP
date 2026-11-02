@@ -330,6 +330,14 @@ export interface CounsellingEnquiry {
     actionItems?: string[];
   };
 
+  // Sibling Linkage Profile
+  isSibling?: boolean;
+  siblingEnquiryNo?: string; // e.g. "ENQ-2026-46"
+  siblingStudentName?: string; // e.g. "Ananya"
+  siblingClass?: string; // e.g. "PP1 (LKG)"
+  siblingTokenNo?: number; // e.g. 13
+  linkedSiblingEnquiryIds?: string[];
+
   createdAt: string;
   updatedAt: string;
 }
@@ -362,6 +370,18 @@ export interface ParentSelfEntry {
   dailyTokenNo?: number; // Daily arrival token/S.No (resets to 1 each new day)
   entryDate?: string; // "DD-MM-YYYY" e.g. "27-10-2026"
   dateKey?: string; // "YYYY-MM-DD" e.g. "2026-10-27"
+
+  // Sibling Registration Linkage
+  hasSibling?: boolean;
+  siblingDetails?: {
+    studentName: string;
+    dateOfBirth?: string;
+    applyingForClass: string;
+    previousSchool?: string;
+    gender?: "Male" | "Female" | "Other";
+  };
+  siblingOfTokenNo?: number;
+  linkedSiblingEntryId?: string;
 }
 
 export interface CounsellingFollowUpLog {
@@ -455,6 +475,12 @@ export interface CounsellingAudioRecord {
   translatedAudioData?: string;
   translatedAudioMimeType?: string;
   translatedAt?: string;
+
+  // Joint Sibling Session Identification
+  isJointSiblingSession?: boolean;
+  jointSiblingEnquiries?: string[]; // e.g. ["ENQ-2026-45", "ENQ-2026-46"]
+  jointSiblingNames?: string; // e.g. "Rahul (Grade 4) & Ananya (PP1)"
+  jointSiblingTokenNos?: number[]; // e.g. [12, 13]
 }
 
 export interface NvrStorageStatus {
@@ -514,22 +540,22 @@ export interface CounsellorAccount {
 export const DEFAULT_COUNSELLOR_ACCOUNTS: CounsellorAccount[] = [
   {
     id: "COUNSELLOR-01",
-    name: "K. Radhika",
+    name: "RADHIKA DAS V",
     username: "radhika",
-    password: "Password@111",
+    password: "12345",
     email: "radhika.counsellor@birlainstitute.edu.in",
     phone: "+91 98765 00011",
     roleTitle: "Admissions & Parent Counsellor",
     assignedGrades: "All Grades / Parent Liaison",
     status: "active",
-    color: "#F97316",
+    color: "#DB2777",
     createdAt: "01-08-2025"
   },
   {
     id: "COUNSELLOR-02",
     name: "sravan",
     username: "sravan",
-    password: "123456",
+    password: "83148314",
     email: "counsellor2@birlainstitute.edu.in",
     phone: "+91 98765 00000",
     roleTitle: "Admissions Counsellor",
@@ -540,133 +566,42 @@ export const DEFAULT_COUNSELLOR_ACCOUNTS: CounsellorAccount[] = [
   },
   {
     id: "COUNSELLOR-03",
-    name: "P. Sunitha",
-    username: "sunitha",
-    password: "Password@101",
-    email: "sunitha.counsellor@birlainstitute.edu.in",
-    phone: "+91 98765 00001",
-    roleTitle: "Head Admissions Counsellor",
-    assignedGrades: "All Grades / Admissions Lead",
+    name: "sowjanya",
+    username: "sowjanya",
+    password: "12345",
+    email: "sowjanya.counsellor@birlainstitute.edu.in",
+    phone: "+91 98765 00000",
+    roleTitle: "Admissions Counsellor",
+    assignedGrades: "All Grades",
     status: "active",
     color: "#EA580C",
-    createdAt: "01-06-2025"
+    createdAt: "02/11/2026"
   },
   {
     id: "COUNSELLOR-04",
-    name: "M. Haritha",
-    username: "haritha",
-    password: "Password@102",
-    email: "haritha.counsellor@birlainstitute.edu.in",
-    phone: "+91 98765 00002",
-    roleTitle: "Primary Wing Counsellor",
-    assignedGrades: "Grades 1 to 5",
+    name: "kavya rao",
+    username: "kavya",
+    password: "12345",
+    email: "kavya.counsellor@birlainstitute.edu.in",
+    phone: "+91 98765 00000",
+    roleTitle: "Admissions Counsellor",
+    assignedGrades: "All Grades",
     status: "active",
-    color: "#2563EB",
-    createdAt: "01-06-2025"
+    color: "#EA580C",
+    createdAt: "02/11/2026"
   },
   {
     id: "COUNSELLOR-05",
-    name: "K. Rajesh",
-    username: "rajesh",
-    password: "Password@103",
-    email: "rajesh.counsellor@birlainstitute.edu.in",
-    phone: "+91 98765 00003",
-    roleTitle: "Middle School Counsellor",
-    assignedGrades: "Grades 6 to 8",
+    name: "testing",
+    username: "test",
+    password: "123456",
+    email: "test.counsellor@birlainstitute.edu.in",
+    phone: "+91 98765 00000",
+    roleTitle: "Admissions Counsellor",
+    assignedGrades: "All Grades",
     status: "active",
     color: "#059669",
-    createdAt: "01-06-2025"
-  },
-  {
-    id: "COUNSELLOR-06",
-    name: "S. Priya",
-    username: "priya",
-    password: "Password@104",
-    email: "priya.counsellor@birlainstitute.edu.in",
-    phone: "+91 98765 00004",
-    roleTitle: "High School Counsellor",
-    assignedGrades: "Grades 9 to 10",
-    status: "active",
-    color: "#7C3AED",
-    createdAt: "15-06-2025"
-  },
-  {
-    id: "COUNSELLOR-07",
-    name: "V. Anjali",
-    username: "anjali",
-    password: "Password@105",
-    email: "anjali.counsellor@birlainstitute.edu.in",
-    phone: "+91 98765 00005",
-    roleTitle: "Pre-Primary Counsellor",
-    assignedGrades: "Playgroup, Nursery, PP1, PP2",
-    status: "active",
-    color: "#DB2777",
-    createdAt: "15-06-2025"
-  },
-  {
-    id: "COUNSELLOR-08",
-    name: "R. Sandeep",
-    username: "sandeep",
-    password: "Password@106",
-    email: "sandeep.counsellor@birlainstitute.edu.in",
-    phone: "+91 98765 00006",
-    roleTitle: "Senior Secondary Counsellor",
-    assignedGrades: "Grades 11 to 12 (Science/Comm)",
-    status: "active",
-    color: "#D97706",
-    createdAt: "01-07-2025"
-  },
-  {
-    id: "COUNSELLOR-09",
-    name: "T. Kavitha",
-    username: "kavitha",
-    password: "Password@107",
-    email: "kavitha.counsellor@birlainstitute.edu.in",
-    phone: "+91 98765 00007",
-    roleTitle: "International Curriculum Counsellor",
-    assignedGrades: "Cambridge / IB Primary & Middle",
-    status: "active",
-    color: "#0D9488",
-    createdAt: "01-07-2025"
-  },
-  {
-    id: "COUNSELLOR-10",
-    name: "N. Ramesh",
-    username: "ramesh",
-    password: "Password@108",
-    email: "ramesh.counsellor@birlainstitute.edu.in",
-    phone: "+91 98765 00008",
-    roleTitle: "Special Needs Support Counsellor",
-    assignedGrades: "Inclusive Education & Remedial",
-    status: "active",
-    color: "#4F46E5",
-    createdAt: "10-07-2025"
-  },
-  {
-    id: "COUNSELLOR-11",
-    name: "D. Sneha",
-    username: "sneha",
-    password: "Password@109",
-    email: "sneha.counsellor@birlainstitute.edu.in",
-    phone: "+91 98765 00009",
-    roleTitle: "Day Boarding & Campus Tour Incharge",
-    assignedGrades: "Boarding & Day-Care Facilities",
-    status: "active",
-    color: "#E11D48",
-    createdAt: "15-07-2025"
-  },
-  {
-    id: "COUNSELLOR-12",
-    name: "G. Deepa",
-    username: "deepa",
-    password: "Password@110",
-    email: "deepa.counsellor@birlainstitute.edu.in",
-    phone: "+91 98765 00010",
-    roleTitle: "Parent Relations & Enrollment Officer",
-    assignedGrades: "Walk-ins & Telephonic Followups",
-    status: "active",
-    color: "#0284C7",
-    createdAt: "01-08-2025"
+    createdAt: "02/11/2026"
   }
 ];
 

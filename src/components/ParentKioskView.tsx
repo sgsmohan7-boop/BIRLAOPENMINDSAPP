@@ -112,6 +112,7 @@ export default function ParentKioskView({
   const [studentName, setStudentName] = useState("");
   const [dateOfBirth, setDateOfBirth] = useState("");
   const [applyingForClass, setApplyingForClass] = useState("Grade 1");
+  const [gender, setGender] = useState<"Male" | "Female" | "Other">("Male");
   const [parentNames, setParentNames] = useState("");
   const [fatherName, setFatherName] = useState("");
   const [motherName, setMotherName] = useState("");
@@ -122,6 +123,15 @@ export default function ParentKioskView({
   const [residentialAddress, setResidentialAddress] = useState("");
   const [heardAboutSchool, setHeardAboutSchool] = useState<string[]>(["Google / Online Search"]);
   const [reasonForChoosing, setReasonForChoosing] = useState("");
+
+  // Sibling (2nd Child) State
+  const [hasSibling, setHasSibling] = useState(false);
+  const [siblingName, setSiblingName] = useState("");
+  const [siblingDob, setSiblingDob] = useState("");
+  const [siblingClass, setSiblingClass] = useState("PP1 (LKG)");
+  const [siblingGender, setSiblingGender] = useState<"Male" | "Female" | "Other">("Female");
+  const [siblingPrevSchool, setSiblingPrevSchool] = useState("");
+  const [siblingAssignedToken, setSiblingAssignedToken] = useState<number | null>(null);
 
   const handlePhoneChange = (val: string) => {
     // Strictly restrict to digits only and maximum 10 numbers
@@ -214,26 +224,34 @@ export default function ParentKioskView({
       return;
     }
 
+    if (hasSibling && !siblingName.trim()) {
+      alert("Please enter the Sibling (2nd Child)'s full name, or untick the Sibling option.");
+      return;
+    }
+
     setIsSubmitting(true);
     const now = new Date();
     const dmy = now.toLocaleDateString("en-GB").replace(/\//g, "-");
     const dateKey = now.toISOString().split("T")[0]; // YYYY-MM-DD
     const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const id = `PSE-${now.getFullYear()}-${Math.floor(100 + Math.random() * 900)}-${Date.now()}`;
+    const id1 = `PSE-${now.getFullYear()}-${Math.floor(100 + Math.random() * 900)}-${Date.now()}`;
+    const id2 = `PSE-${now.getFullYear()}-${Math.floor(100 + Math.random() * 900)}-${Date.now() + 1}`;
 
     // Calculate daily token S.No (1, 2, 3...) resetting daily each morning across all devices/networks
-    let dailyTokenNo = 1;
+    let dailyTokenNo1 = 1;
     try {
-      dailyTokenNo = await getNextDailyTokenNo(dmy, dateKey);
+      dailyTokenNo1 = await getNextDailyTokenNo(dmy, dateKey);
     } catch {
-      dailyTokenNo = 1;
+      dailyTokenNo1 = 1;
     }
+    const dailyTokenNo2 = dailyTokenNo1 + 1;
 
-    let finalEntry: ParentSelfEntry = {
-      id,
+    let finalEntry1: ParentSelfEntry = {
+      id: id1,
       studentName: studentName.trim(),
       dateOfBirth: dateOfBirth.trim(),
       applyingForClass,
+      gender,
       fatherName: finalFather || "—",
       motherName: finalMother || "—",
       contactNo: cleanPhone,
@@ -245,33 +263,108 @@ export default function ParentKioskView({
       submittedAt: now.toISOString(),
       formattedDate: `${dmy} ${timeStr}`,
       status: "pending",
-      dailyTokenNo,
+      dailyTokenNo: dailyTokenNo1,
       entryDate: dmy,
-      dateKey
+      dateKey,
+      hasSibling: hasSibling && Boolean(siblingName.trim()),
+      siblingOfTokenNo: hasSibling ? dailyTokenNo2 : undefined,
+      linkedSiblingEntryId: hasSibling ? id2 : undefined,
+      siblingDetails: hasSibling && siblingName.trim() ? {
+        studentName: siblingName.trim(),
+        dateOfBirth: siblingDob.trim(),
+        applyingForClass: siblingClass,
+        previousSchool: siblingPrevSchool.trim() || previousSchool.trim(),
+        gender: siblingGender
+      } : undefined
     };
+
+    let finalEntry2: ParentSelfEntry | null = null;
+    if (hasSibling && siblingName.trim()) {
+      finalEntry2 = {
+        id: id2,
+        studentName: siblingName.trim(),
+        dateOfBirth: siblingDob.trim() || dateOfBirth.trim(),
+        applyingForClass: siblingClass,
+        gender: siblingGender,
+        fatherName: finalFather || "—",
+        motherName: finalMother || "—",
+        contactNo: cleanPhone,
+        whatsappNo: (whatsappNo.trim() || cleanPhone).replace(/\D/g, "").slice(0, 10),
+        previousSchool: siblingPrevSchool.trim() || previousSchool.trim(),
+        residentialAddress: residentialAddress.trim(),
+        heardAboutSchool,
+        reasonForChoosing: reasonForChoosing.trim(),
+        submittedAt: new Date(now.getTime() + 100).toISOString(),
+        formattedDate: `${dmy} ${timeStr}`,
+        status: "pending",
+        dailyTokenNo: dailyTokenNo2,
+        entryDate: dmy,
+        dateKey,
+        hasSibling: true,
+        siblingOfTokenNo: dailyTokenNo1,
+        linkedSiblingEntryId: id1,
+        siblingDetails: {
+          studentName: studentName.trim(),
+          dateOfBirth: dateOfBirth.trim(),
+          applyingForClass,
+          previousSchool: previousSchool.trim(),
+          gender
+        }
+      };
+    }
 
     // 1. Post to 24/7 server endpoint to get server-verified unique daily token number
     try {
       const serverRes = await fetch("/api/parent-self-entry", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(finalEntry)
+        body: JSON.stringify(finalEntry1)
       });
       if (serverRes.ok) {
         const resData = await serverRes.json();
         if (resData && resData.entry && resData.entry.dailyTokenNo) {
-          finalEntry.dailyTokenNo = resData.entry.dailyTokenNo;
-          dailyTokenNo = resData.entry.dailyTokenNo;
+          finalEntry1.dailyTokenNo = resData.entry.dailyTokenNo;
+          dailyTokenNo1 = resData.entry.dailyTokenNo;
         }
       }
     } catch (err) {
       console.warn("Server parent-self-entry post warning:", err);
     }
 
+    if (finalEntry2) {
+      finalEntry2.dailyTokenNo = dailyTokenNo1 + 1;
+      finalEntry1.siblingOfTokenNo = dailyTokenNo1 + 1;
+      finalEntry2.siblingOfTokenNo = dailyTokenNo1;
+      try {
+        await fetch("/api/parent-self-entry", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(finalEntry2)
+        });
+      } catch (err) {
+        console.warn("Server sibling parent entry post error:", err);
+      }
+    }
+
+    setAssignedToken(dailyTokenNo1);
+    if (finalEntry2) {
+      setSiblingAssignedToken(dailyTokenNo1 + 1);
+    } else {
+      setSiblingAssignedToken(null);
+    }
+
+    setSubmissionTimestamp({
+      date: dmy,
+      time: timeStr
+    });
+
     // 2. Direct real-time Firebase Firestore save with verified token number so counsellor sees it within 100ms
     try {
       if (isFirebaseConfigured()) {
-        await saveDocument("parent_self_entries", id, finalEntry);
+        await saveDocument("parent_self_entries", id1, finalEntry1);
+        if (finalEntry2) {
+          await saveDocument("parent_self_entries", id2, finalEntry2);
+        }
       }
     } catch (fErr) {
       console.warn("Firestore parent entry save warning:", fErr);
@@ -281,23 +374,23 @@ export default function ParentKioskView({
     try {
       const existingRaw = localStorage.getItem("parent_self_entries");
       const existing: ParentSelfEntry[] = existingRaw ? JSON.parse(existingRaw) : [];
-      const updated = [finalEntry, ...existing.filter(e => e.id !== id)];
+      let updated = [finalEntry1, ...existing.filter(e => e.id !== id1 && e.id !== id2)];
+      if (finalEntry2) {
+        updated = [finalEntry2, ...updated];
+      }
       localStorage.setItem("parent_self_entries", JSON.stringify(updated));
 
       // Dispatch event to notify open Counsellor tabs
-      window.dispatchEvent(new CustomEvent("parent_self_entry_added", { detail: finalEntry }));
+      window.dispatchEvent(new CustomEvent("parent_self_entry_added", { detail: finalEntry1 }));
     } catch (err) {
       console.warn("Local storage parent entry save warning:", err);
     }
 
-    setAssignedToken(dailyTokenNo);
-    setSubmissionTimestamp({
-      date: dmy,
-      time: timeStr
-    });
-
     if (onSubmitSuccess) {
-      onSubmitSuccess(finalEntry);
+      onSubmitSuccess(finalEntry1);
+      if (finalEntry2) {
+        onSubmitSuccess(finalEntry2);
+      }
     }
 
     setIsSubmittedSuccess(true);
@@ -308,6 +401,7 @@ export default function ParentKioskView({
     setStudentName("");
     setDateOfBirth("");
     setApplyingForClass("Grade 1");
+    setGender("Male");
     setParentNames("");
     setFatherName("");
     setMotherName("");
@@ -317,6 +411,13 @@ export default function ParentKioskView({
     setPreviousSchool("");
     setResidentialAddress("");
     setReasonForChoosing("");
+    setHasSibling(false);
+    setSiblingName("");
+    setSiblingDob("");
+    setSiblingClass("PP1 (LKG)");
+    setSiblingGender("Female");
+    setSiblingPrevSchool("");
+    setSiblingAssignedToken(null);
     setSubmissionTimestamp({ date: "", time: "" });
     setIsSubmittedSuccess(false);
   };
@@ -951,16 +1052,36 @@ export default function ParentKioskView({
                   </div>
                   <div className="w-[1.5px] h-12 bg-amber-400/80 shrink-0"></div>
                   <div className="flex-1 text-slate-800 text-xs sm:text-sm leading-relaxed">
-                    <p className="font-medium text-slate-900">
-                      Your{" "}
-                      <span className="inline-block bg-[#800020] text-white font-extrabold px-2.5 py-0.5 rounded-md shadow-xs text-xs sm:text-sm mx-0.5">
-                        Token #{assignedToken}
-                      </span>{" "}
-                      is live at our Admissions Counsellor's desk.
-                    </p>
-                    <p className="text-slate-600 text-[11px] sm:text-xs mt-0.5">
-                      If you are at school, please relax in our waiting area; you will be called shortly.
-                    </p>
+                    {siblingAssignedToken ? (
+                      <div>
+                        <p className="font-bold text-slate-900">
+                          Family Sibling Admission Tokens:{" "}
+                          <span className="inline-block bg-[#800020] text-white font-extrabold px-2 py-0.5 rounded-md shadow-xs text-xs sm:text-sm mx-0.5">
+                            #{assignedToken} ({studentName})
+                          </span>{" "}
+                          &amp;{" "}
+                          <span className="inline-block bg-purple-700 text-white font-extrabold px-2 py-0.5 rounded-md shadow-xs text-xs sm:text-sm mx-0.5">
+                            #{siblingAssignedToken} ({siblingName})
+                          </span>
+                        </p>
+                        <p className="text-purple-700 font-semibold text-[11px] sm:text-xs mt-1">
+                          👨‍👩‍👧‍👦 Both tokens are linked for one single family counselling meeting.
+                        </p>
+                      </div>
+                    ) : (
+                      <div>
+                        <p className="font-medium text-slate-900">
+                          Your{" "}
+                          <span className="inline-block bg-[#800020] text-white font-extrabold px-2.5 py-0.5 rounded-md shadow-xs text-xs sm:text-sm mx-0.5">
+                            Token #{assignedToken}
+                          </span>{" "}
+                          is live at our Admissions Counsellor's desk.
+                        </p>
+                        <p className="text-slate-600 text-[11px] sm:text-xs mt-0.5">
+                          If you are at school, please relax in our waiting area; you will be called shortly.
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -983,23 +1104,40 @@ export default function ParentKioskView({
                 </div>
 
                 {/* Candidate Verification Summary Details */}
-                <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3 text-left text-xs grid grid-cols-2 gap-2">
-                  <div>
-                    <span className="text-[10px] text-slate-500 uppercase font-bold block">Student Name</span>
-                    <span className="font-extrabold text-[#800020] text-sm">{studentName}</span>
+                <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3 text-left text-xs space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <span className="text-[10px] text-slate-500 uppercase font-bold block">
+                        {siblingAssignedToken ? "Child 1 Name" : "Student Name"}
+                      </span>
+                      <span className="font-extrabold text-[#800020] text-sm">{studentName}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-slate-500 uppercase font-bold block">Class</span>
+                      <span className="font-bold text-slate-800">{applyingForClass}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-slate-500 uppercase font-bold block">Date of Birth</span>
+                      <span className="font-semibold text-slate-700">{dateOfBirth || "—"}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-slate-500 uppercase font-bold block">Contact Phone</span>
+                      <span className="font-mono font-bold text-slate-800">+91 {contactNo}</span>
+                    </div>
                   </div>
-                  <div>
-                    <span className="text-[10px] text-slate-500 uppercase font-bold block">Applying For Class</span>
-                    <span className="font-bold text-slate-800">{applyingForClass}</span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-slate-500 uppercase font-bold block">Date of Birth</span>
-                    <span className="font-semibold text-slate-700">{dateOfBirth || "—"}</span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-slate-500 uppercase font-bold block">Contact Phone</span>
-                    <span className="font-mono font-bold text-slate-800">+91 {contactNo}</span>
-                  </div>
+
+                  {siblingAssignedToken && siblingName && (
+                    <div className="pt-2 border-t border-amber-200 grid grid-cols-2 gap-2 bg-purple-50/80 -mx-3 -mb-3 p-3 rounded-b-xl border-purple-200">
+                      <div>
+                        <span className="text-[10px] text-purple-700 uppercase font-bold block">Child 2 (Sibling)</span>
+                        <span className="font-extrabold text-purple-900 text-sm">{siblingName}</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-purple-700 uppercase font-bold block">Class</span>
+                        <span className="font-bold text-purple-800">{siblingClass}</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Register Another Student & Print Slip Buttons */}
@@ -1102,6 +1240,139 @@ export default function ParentKioskView({
                         <option key={c} value={c}>{c}</option>
                       ))}
                     </select>
+                  </div>
+
+                  {/* Gender for Child 1 */}
+                  <div className="space-y-1">
+                    <label className="block text-xs font-black text-slate-200 tracking-wide">
+                      Student Gender
+                    </label>
+                    <div className="flex items-center gap-6 pt-2">
+                      <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-300">
+                        <input
+                          type="radio"
+                          name="kioskGender"
+                          value="Male"
+                          checked={gender === "Male"}
+                          onChange={() => setGender("Male")}
+                          className="text-orange-600 focus:ring-orange-500"
+                        />
+                        <span>Boy (Male)</span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-300">
+                        <input
+                          type="radio"
+                          name="kioskGender"
+                          value="Female"
+                          checked={gender === "Female"}
+                          onChange={() => setGender("Female")}
+                          className="text-orange-600 focus:ring-orange-500"
+                        />
+                        <span>Girl (Female)</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* SIBLING (2ND CHILD) OPTIONAL SECTION */}
+                  <div className="sm:col-span-2 p-4 bg-purple-950/40 border border-purple-500/40 rounded-2xl space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xl">👨‍👩‍👧‍👦</span>
+                        <div>
+                          <span className="text-xs font-black text-purple-200 block">
+                            Applying for Two Children (Siblings)?
+                          </span>
+                          <span className="text-[10px] text-purple-300/80">
+                            Register both together for one joint family meeting
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setHasSibling(!hasSibling)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
+                          hasSibling
+                            ? "bg-purple-600 text-white shadow-md"
+                            : "bg-purple-900/60 text-purple-200 hover:bg-purple-800"
+                        }`}
+                      >
+                        {hasSibling ? "✓ Sibling Added" : "+ Add Sibling"}
+                      </button>
+                    </div>
+
+                    {hasSibling && (
+                      <div className="pt-3 border-t border-purple-500/30 space-y-3 animate-in fade-in duration-200">
+                        <div className="space-y-1">
+                          <label className="block text-[11px] font-black text-purple-200">
+                            Sibling (2nd Child) Full Name <span className="text-orange-400">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={siblingName}
+                            onChange={(e) => setSiblingName(e.target.value)}
+                            placeholder="e.g. Baby Ananya / Master Rahul"
+                            className="w-full px-3.5 py-2.5 bg-slate-950 border border-purple-800/80 rounded-xl text-xs text-white font-semibold focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div className="space-y-1">
+                            <label className="block text-[11px] font-black text-purple-200">
+                              Sibling Class <span className="text-orange-400">*</span>
+                            </label>
+                            <select
+                              value={siblingClass}
+                              onChange={(e) => setSiblingClass(e.target.value)}
+                              className="w-full px-3 py-2 bg-slate-950 border border-purple-800/80 rounded-xl text-xs text-white font-bold focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            >
+                              {CLASS_OPTIONS.map((c) => (
+                                <option key={`kiosk-sib-${c}`} value={c}>{c}</option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="block text-[11px] font-black text-purple-200">
+                              Sibling Date of Birth
+                            </label>
+                            <input
+                              type="date"
+                              value={siblingDob}
+                              max={new Date().toISOString().split("T")[0]}
+                              onClick={(e) => { try { e.currentTarget.showPicker?.(); } catch {} }}
+                              onChange={(e) => setSiblingDob(e.target.value)}
+                              className="w-full px-3 py-2 bg-slate-950 border border-purple-800/80 rounded-xl text-xs text-white font-bold focus:outline-none focus:ring-2 focus:ring-purple-500 [color-scheme:dark]"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-4 pt-1">
+                          <span className="text-[11px] font-bold text-purple-300">Sibling Gender:</span>
+                          <label className="flex items-center gap-1.5 cursor-pointer text-xs text-purple-200">
+                            <input
+                              type="radio"
+                              name="kioskSiblingGender"
+                              value="Male"
+                              checked={siblingGender === "Male"}
+                              onChange={() => setSiblingGender("Male")}
+                              className="text-purple-600 focus:ring-purple-500"
+                            />
+                            <span>Boy</span>
+                          </label>
+                          <label className="flex items-center gap-1.5 cursor-pointer text-xs text-purple-200">
+                            <input
+                              type="radio"
+                              name="kioskSiblingGender"
+                              value="Female"
+                              checked={siblingGender === "Female"}
+                              onChange={() => setSiblingGender("Female")}
+                              className="text-purple-600 focus:ring-purple-500"
+                            />
+                            <span>Girl</span>
+                          </label>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* 2. Parent Contact - Strictly 10 Digits */}

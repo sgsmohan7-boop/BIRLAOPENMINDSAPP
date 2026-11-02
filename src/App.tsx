@@ -1111,7 +1111,7 @@ export default function App() {
 
     setCounsellorAccounts((prev) => {
       const base = prev && prev.length > 0 ? prev : loadCounsellorAccounts();
-      const idx = base.findIndex((a) => a.id === account.id || a.username.toLowerCase() === account.username.toLowerCase());
+      const idx = base.findIndex((a) => a.id === account.id);
       let nextList: CounsellorAccount[];
       if (idx >= 0) {
         nextList = [...base];
@@ -1128,6 +1128,9 @@ export default function App() {
         }
         saveDocument("counsellor_accounts", account.id, account);
       }
+      try {
+        window.dispatchEvent(new Event("counsellor_accounts_updated"));
+      } catch {}
       return merged;
     });
 
@@ -1160,6 +1163,9 @@ export default function App() {
           deletedAt: Date.now()
         });
       }
+      try {
+        window.dispatchEvent(new Event("counsellor_accounts_updated"));
+      } catch {}
       return nextList;
     });
 
@@ -1517,7 +1523,7 @@ export default function App() {
       case "management-desk":
       case "management-portal":
         return (
-          <div className="flex-1 overflow-y-auto custom-scrollbar">
+          <div className="h-full w-full overflow-y-auto custom-scrollbar">
             <ManagementPortal
               enquiries={counsellingEnquiries}
               onSaveEnquiry={handleSaveCounselling}
@@ -1562,7 +1568,7 @@ export default function App() {
         return <TransportDashboard />;
       case "google-drive":
         return (
-          <div className="flex-1 overflow-y-auto custom-scrollbar">
+          <div className="h-full w-full overflow-y-auto custom-scrollbar">
             <GoogleDriveManager
               userEmail={userEmail}
               userRole={userRole}
@@ -1580,13 +1586,13 @@ export default function App() {
         );
       case "portal-links":
         return (
-          <div className="flex-1 overflow-y-auto p-4 md:p-6 custom-scrollbar bg-slate-950/10">
+          <div className="h-full w-full overflow-y-auto p-4 md:p-6 custom-scrollbar bg-slate-950/10">
             <PortalLinksModal isEmbedded={true} isOpen={true} onClose={() => setCurrentTab("dashboard")} theme={theme} />
           </div>
         );
       case "cloudflare-r2":
         return (
-          <div className="flex-1 overflow-y-auto p-4 md:p-6 custom-scrollbar bg-slate-950/10">
+          <div className="h-full w-full overflow-y-auto p-4 md:p-6 custom-scrollbar bg-slate-950/10">
             <CctvNvrStorageModal isEmbedded={true} />
           </div>
         );
@@ -1927,7 +1933,7 @@ export default function App() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 transition={{ duration: 0.2 }}
-                className="h-full w-full overflow-hidden"
+                className="h-full w-full overflow-hidden flex flex-col"
               >
                 <PortalErrorBoundary sectionName={`Department View (${currentTab})`}>
                   {renderTabContent()}
