@@ -267,51 +267,14 @@ export default function ParentKioskView({
       entryDate: dmy,
       dateKey,
       hasSibling: hasSibling && Boolean(siblingName.trim()),
-      siblingOfTokenNo: hasSibling ? dailyTokenNo2 : undefined,
-      linkedSiblingEntryId: hasSibling ? id2 : undefined,
       siblingDetails: hasSibling && siblingName.trim() ? {
         studentName: siblingName.trim(),
-        dateOfBirth: siblingDob.trim(),
+        dateOfBirth: siblingDob.trim() || dateOfBirth.trim(),
         applyingForClass: siblingClass,
         previousSchool: siblingPrevSchool.trim() || previousSchool.trim(),
         gender: siblingGender
       } : undefined
     };
-
-    let finalEntry2: ParentSelfEntry | null = null;
-    if (hasSibling && siblingName.trim()) {
-      finalEntry2 = {
-        id: id2,
-        studentName: siblingName.trim(),
-        dateOfBirth: siblingDob.trim() || dateOfBirth.trim(),
-        applyingForClass: siblingClass,
-        gender: siblingGender,
-        fatherName: finalFather || "—",
-        motherName: finalMother || "—",
-        contactNo: cleanPhone,
-        whatsappNo: (whatsappNo.trim() || cleanPhone).replace(/\D/g, "").slice(0, 10),
-        previousSchool: siblingPrevSchool.trim() || previousSchool.trim(),
-        residentialAddress: residentialAddress.trim(),
-        heardAboutSchool,
-        reasonForChoosing: reasonForChoosing.trim(),
-        submittedAt: new Date(now.getTime() + 100).toISOString(),
-        formattedDate: `${dmy} ${timeStr}`,
-        status: "pending",
-        dailyTokenNo: dailyTokenNo2,
-        entryDate: dmy,
-        dateKey,
-        hasSibling: true,
-        siblingOfTokenNo: dailyTokenNo1,
-        linkedSiblingEntryId: id1,
-        siblingDetails: {
-          studentName: studentName.trim(),
-          dateOfBirth: dateOfBirth.trim(),
-          applyingForClass,
-          previousSchool: previousSchool.trim(),
-          gender
-        }
-      };
-    }
 
     // 1. Post to 24/7 server endpoint to get server-verified unique daily token number
     try {
@@ -331,40 +294,18 @@ export default function ParentKioskView({
       console.warn("Server parent-self-entry post warning:", err);
     }
 
-    if (finalEntry2) {
-      finalEntry2.dailyTokenNo = dailyTokenNo1 + 1;
-      finalEntry1.siblingOfTokenNo = dailyTokenNo1 + 1;
-      finalEntry2.siblingOfTokenNo = dailyTokenNo1;
-      try {
-        await fetch("/api/parent-self-entry", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(finalEntry2)
-        });
-      } catch (err) {
-        console.warn("Server sibling parent entry post error:", err);
-      }
-    }
-
     setAssignedToken(dailyTokenNo1);
-    if (finalEntry2) {
-      setSiblingAssignedToken(dailyTokenNo1 + 1);
-    } else {
-      setSiblingAssignedToken(null);
-    }
+    setSiblingAssignedToken(hasSibling && siblingName.trim() ? dailyTokenNo1 : null);
 
     setSubmissionTimestamp({
       date: dmy,
       time: timeStr
     });
 
-    // 2. Direct real-time Firebase Firestore save with verified token number so counsellor sees it within 100ms
+    // 2. Direct real-time Firebase Firestore save so counsellor sees it immediately
     try {
       if (isFirebaseConfigured()) {
         await saveDocument("parent_self_entries", id1, finalEntry1);
-        if (finalEntry2) {
-          await saveDocument("parent_self_entries", id2, finalEntry2);
-        }
       }
     } catch (fErr) {
       console.warn("Firestore parent entry save warning:", fErr);
@@ -374,10 +315,7 @@ export default function ParentKioskView({
     try {
       const existingRaw = localStorage.getItem("parent_self_entries");
       const existing: ParentSelfEntry[] = existingRaw ? JSON.parse(existingRaw) : [];
-      let updated = [finalEntry1, ...existing.filter(e => e.id !== id1 && e.id !== id2)];
-      if (finalEntry2) {
-        updated = [finalEntry2, ...updated];
-      }
+      let updated = [finalEntry1, ...existing.filter(e => e.id !== id1)];
       localStorage.setItem("parent_self_entries", JSON.stringify(updated));
 
       // Dispatch event to notify open Counsellor tabs
@@ -388,9 +326,6 @@ export default function ParentKioskView({
 
     if (onSubmitSuccess) {
       onSubmitSuccess(finalEntry1);
-      if (finalEntry2) {
-        onSubmitSuccess(finalEntry2);
-      }
     }
 
     setIsSubmittedSuccess(true);

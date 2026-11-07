@@ -41,6 +41,7 @@ import {
   Ban
 } from "lucide-react";
 import { CounsellingEnquiry, CounsellingAudioRecord, AdmissionStatus, CounsellorAccount } from "../types";
+import { normalizeCounsellorIdentity, isObsoleteOrDuplicateCounsellorAccount } from "../utils/counsellorNormalizer";
 import { 
   formatAudioDuration, 
   formatAudioFileSize, 
@@ -83,9 +84,75 @@ export default function ManagementAudioDesk({
   counsellorAccounts = [],
   onBackToHome
 }: ManagementAudioDeskProps) {
-  // Filter enquiries that have an audio recording or meeting audit attached
+  // Filter enquiries that have an audio recording or meeting audit attached (with seamless linked sibling audio resolution)
   const recordedEnquiries = useMemo(() => {
-    return enquiries.filter(e => 
+    const list = Array.isArray(enquiries) ? enquiries : [];
+
+    // Map audio by enquiry number & ID
+    const audioMap = new Map<string, any>();
+    list.forEach(e => {
+      if (e?.audioRecording && (
+        e.audioRecording.audioData || 
+        e.audioRecording.storageKey || 
+        e.audioRecording.driveFileUrl || 
+        e.audioRecording.driveFileId ||
+        e.audioRecording.audioUrl ||
+        e.audioRecording.fileName ||
+        (e.audioRecording.durationSeconds && e.audioRecording.durationSeconds > 0) ||
+        e.audioRecording.meetingTextSummary
+      )) {
+        if (e.enquiryNo) audioMap.set(e.enquiryNo.trim().toLowerCase(), e.audioRecording);
+        if (e.id) audioMap.set(e.id.trim().toLowerCase(), e.audioRecording);
+      }
+    });
+
+    const hydrated = list.map(e => {
+      if (!e) return e;
+      const hasDirectAudio = Boolean(
+        e.audioRecording && (
+          e.audioRecording.audioData || 
+          e.audioRecording.storageKey || 
+          e.audioRecording.driveFileUrl || 
+          e.audioRecording.driveFileId ||
+          e.audioRecording.audioUrl ||
+          e.audioRecording.fileName ||
+          (e.audioRecording.durationSeconds && e.audioRecording.durationSeconds > 0) ||
+          e.audioRecording.meetingTextSummary
+        )
+      );
+      if (hasDirectAudio) return e;
+
+      const sibKey = (e.siblingEnquiryNo || "").trim().toLowerCase();
+      let sharedAudio = sibKey ? audioMap.get(sibKey) : null;
+      if (!sharedAudio && (e.isSibling || e.siblingStudentName)) {
+        const linkedOther = list.find(o =>
+          o && o !== e && (
+            (o.siblingEnquiryNo && o.siblingEnquiryNo.trim().toLowerCase() === (e.enquiryNo || "").trim().toLowerCase()) ||
+            (o.contactNo && o.contactNo === e.contactNo && o.fatherName === e.fatherName && o.audioRecording)
+          )
+        );
+        if (linkedOther?.audioRecording) {
+          sharedAudio = linkedOther.audioRecording;
+        }
+      }
+
+      if (sharedAudio) {
+        return {
+          ...e,
+          audioRecording: {
+            ...sharedAudio,
+            id: `${sharedAudio.id || e.id || e.enquiryNo}-SIB`,
+            enquiryNo: e.enquiryNo || e.id,
+            studentName: e.studentName,
+            isJointSiblingSession: true,
+            jointSiblingNames: sharedAudio.jointSiblingNames || `${sharedAudio.studentName || 'Child 1'} & ${e.studentName}`
+          }
+        };
+      }
+      return e;
+    });
+
+    return hydrated.filter(e => 
       Boolean(
         (e.audioRecording && (
           e.audioRecording.audioData || 
@@ -165,21 +232,27 @@ export default function ManagementAudioDesk({
     }
   };
 
-  // Extract unique counsellors who have recordings or accounts
+  // Extract unique counsellors who have recordings or accounts (Canonical only)
   const counsellorOptions = useMemo(() => {
     const set = new Set<string>();
     if (counsellorAccounts && counsellorAccounts.length > 0) {
       counsellorAccounts.forEach(a => {
-        if (a.name) set.add(a.name.trim());
+        if (a && !isObsoleteOrDuplicateCounsellorAccount(a)) {
+          const norm = normalizeCounsellorIdentity(a.name, a.id).name;
+          if (norm) set.add(norm);
+        }
       });
     }
     recordedEnquiries.forEach(e => {
-      if (e.counsellorName) set.add(e.counsellorName.trim());
+      const norm = normalizeCounsellorIdentity(e.counsellorName, e.counsellorId).name;
+      if (norm) set.add(norm);
     });
     enquiries.forEach(e => {
-      if (e.counsellorName) set.add(e.counsellorName.trim());
+      const norm = normalizeCounsellorIdentity(e.counsellorName, e.counsellorId).name;
+      if (norm) set.add(norm);
     });
-    return Array.from(set);
+    // Explicitly exclude any duplicate/obsolete alias string like 'R SOWJANYA' or 'KAVYARAO'
+    return Array.from(set).filter(name => !isObsoleteOrDuplicateCounsellorAccount({ name }));
   }, [counsellorAccounts, recordedEnquiries, enquiries]);
 
   // Helper for admission status styling
@@ -206,9 +279,9 @@ export default function ManagementAudioDesk({
   const admissionStatusCounts = useMemo(() => {
     const baseList = recordedEnquiries.filter(e => {
       if (filterCounsellor === "ALL") return true;
-      const target = filterCounsellor.toLowerCase().trim();
-      const cName = (e.counsellorName || "").toLowerCase().trim();
-      return cName === target || (cName.length > 0 && target.length > 0 && (cName.includes(target) || target.includes(cName)));
+      const targetNorm = normalizeCounsellorIdentity(filterCounsellor).name.toLowerCase();
+      const itemNorm = normalizeCounsellorIdentity(e.counsellorName, e.counsellorId).name.toLowerCase();
+      return targetNorm === itemNorm;
     });
 
     const counts: Record<string, number> = {
@@ -245,14 +318,14 @@ export default function ManagementAudioDesk({
       
       let matchCounsellor = true;
       if (filterCounsellor !== "ALL") {
-        const target = filterCounsellor.toLowerCase().trim();
-        const cName = (e.counsellorName || "").toLowerCase().trim();
-        matchCounsellor = cName === target || (cName.length > 0 && target.length > 0 && (cName.includes(target) || target.includes(cName)));
+        const targetNorm = normalizeCounsellorIdentity(filterCounsellor).name.toLowerCase();
+        const itemNorm = normalizeCounsellorIdentity(e.counsellorName, e.counsellorId).name.toLowerCase();
+        matchCounsellor = targetNorm === itemNorm;
       }
       if (userRole === "Counsellor" && initialCounsellorFilter && initialCounsellorFilter !== "ALL") {
-        const target = initialCounsellorFilter.toLowerCase().trim();
-        const cName = (e.counsellorName || "").toLowerCase().trim();
-        matchCounsellor = cName === target || (cName.length > 0 && target.length > 0 && (cName.includes(target) || target.includes(cName)));
+        const targetNorm = normalizeCounsellorIdentity(initialCounsellorFilter).name.toLowerCase();
+        const itemNorm = normalizeCounsellorIdentity(e.counsellorName, e.counsellorId).name.toLowerCase();
+        matchCounsellor = targetNorm === itemNorm;
       }
       let matchStatus = true;
       if (filterStatus === "ALL") {
@@ -765,6 +838,32 @@ export default function ManagementAudioDesk({
     };
 
     onUpdateEnquiry(updatedEnquiry);
+
+    // Sync review to linked sibling if joint session
+    if (activeEnquiry.isSibling || activeEnquiry.siblingEnquiryNo) {
+      const linkedSib = enquiries.find(o => 
+        o && o !== activeEnquiry && (
+          (activeEnquiry.siblingEnquiryNo && (o.enquiryNo || o.id).toLowerCase() === activeEnquiry.siblingEnquiryNo.toLowerCase()) ||
+          (o.siblingEnquiryNo && (activeEnquiry.enquiryNo || activeEnquiry.id).toLowerCase() === o.siblingEnquiryNo.toLowerCase())
+        )
+      );
+      if (linkedSib) {
+        const sibUpdated: CounsellingEnquiry = {
+          ...linkedSib,
+          audioRecording: {
+            ...(linkedSib.audioRecording || updatedAudio),
+            qualityRating: updatedAudio.qualityRating,
+            reviewStatus: updatedAudio.reviewStatus,
+            managementRemarks: updatedAudio.managementRemarks,
+            reviewedBy: updatedAudio.reviewedBy,
+            reviewedAt: updatedAudio.reviewedAt
+          },
+          updatedAt: new Date().toLocaleDateString()
+        };
+        onUpdateEnquiry(sibUpdated);
+      }
+    }
+
     setSaveSuccessMsg(true);
     setTimeout(() => setSaveSuccessMsg(false), 3000);
   };
@@ -787,6 +886,32 @@ export default function ManagementAudioDesk({
     };
 
     onUpdateEnquiry(updatedEnquiry);
+
+    // Sync approval to linked sibling if joint session
+    if (activeEnquiry.isSibling || activeEnquiry.siblingEnquiryNo) {
+      const linkedSib = enquiries.find(o => 
+        o && o !== activeEnquiry && (
+          (activeEnquiry.siblingEnquiryNo && (o.enquiryNo || o.id).toLowerCase() === activeEnquiry.siblingEnquiryNo.toLowerCase()) ||
+          (o.siblingEnquiryNo && (activeEnquiry.enquiryNo || activeEnquiry.id).toLowerCase() === o.siblingEnquiryNo.toLowerCase())
+        )
+      );
+      if (linkedSib) {
+        const sibUpdated: CounsellingEnquiry = {
+          ...linkedSib,
+          audioRecording: {
+            ...(linkedSib.audioRecording || updatedAudio),
+            qualityRating: updatedAudio.qualityRating,
+            reviewStatus: updatedAudio.reviewStatus,
+            managementRemarks: updatedAudio.managementRemarks,
+            reviewedBy: updatedAudio.reviewedBy,
+            reviewedAt: updatedAudio.reviewedAt
+          },
+          updatedAt: new Date().toLocaleDateString()
+        };
+        onUpdateEnquiry(sibUpdated);
+      }
+    }
+
     setReviewStatus("Reviewed - Approved");
     setSaveSuccessMsg(true);
     setTimeout(() => setSaveSuccessMsg(false), 3000);
@@ -1652,11 +1777,40 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT COACHING ONLY
                             <span className="text-slate-400">Mother: </span>
                             <span className="text-slate-200">{activeEnquiry.motherName || "N/A"}</span>
                           </div>
-                          <div>
-                            <span className="text-slate-400">Primary Phone: </span>
-                            <span className="text-cyan-400 font-mono font-black text-sm">
-                              {activeEnquiry.contactNo || "N/A"}
-                            </span>
+                          <div className="pt-0.5 space-y-1.5">
+                            <div className="flex items-center justify-between gap-2 flex-wrap">
+                              <span className="text-slate-400">Primary Phone: </span>
+                              <a
+                                href={`tel:${activeEnquiry.contactNo}`}
+                                className="text-cyan-400 hover:text-cyan-300 font-mono font-black text-sm inline-flex items-center gap-1 transition-colors"
+                                title="Call Primary Phone"
+                              >
+                                <span>📞</span>
+                                <span>{activeEnquiry.contactNo || "N/A"}</span>
+                              </a>
+                            </div>
+                            <div className="flex items-center justify-between gap-2 flex-wrap">
+                              <span className="text-slate-400">WhatsApp No: </span>
+                              <a
+                                href={`https://wa.me/91${(activeEnquiry.whatsappNo || activeEnquiry.contactNo || "").replace(/\D/g, "")}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-emerald-400 hover:text-emerald-300 font-mono font-black text-sm inline-flex items-center gap-1 transition-colors"
+                                title="Chat on WhatsApp"
+                              >
+                                <span>💬</span>
+                                <span>{activeEnquiry.whatsappNo || activeEnquiry.contactNo || "N/A"}</span>
+                                {activeEnquiry.whatsappNo && activeEnquiry.whatsappNo !== activeEnquiry.contactNo ? (
+                                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-sans font-bold border border-emerald-500/40">
+                                    Alt WhatsApp
+                                  </span>
+                                ) : (
+                                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-sans font-normal border border-slate-700">
+                                    Same No
+                                  </span>
+                                )}
+                              </a>
+                            </div>
                           </div>
                           <div>
                             <span className="text-slate-400">Preferred Channel: </span>
@@ -1816,14 +1970,29 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT COACHING ONLY
                     </div>
 
                     {/* Parent Contact Info */}
-                    <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-300">
+                    <div className="flex items-center gap-2 text-slate-600 dark:text-slate-300 flex-wrap text-xs">
                       <span className="text-slate-400">Parent:</span>
                       <span className="font-semibold text-slate-800 dark:text-slate-200">
                         {activeEnquiry.fatherName || activeEnquiry.motherName || "Parent"}
                       </span>
-                      <span className="font-mono text-cyan-600 dark:text-cyan-400 font-bold ml-1">
+                      <a
+                        href={`tel:${activeEnquiry.contactNo}`}
+                        className="font-mono text-cyan-600 dark:text-cyan-400 font-bold hover:underline inline-flex items-center gap-0.5"
+                        title="Call Primary Phone"
+                      >
                         📞 {activeEnquiry.contactNo}
-                      </span>
+                      </a>
+                      {(activeEnquiry.whatsappNo || activeEnquiry.contactNo) && (
+                        <a
+                          href={`https://wa.me/91${(activeEnquiry.whatsappNo || activeEnquiry.contactNo || "").replace(/\D/g, "")}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-mono text-emerald-600 dark:text-emerald-400 font-bold hover:underline inline-flex items-center gap-0.5"
+                          title="Open WhatsApp Chat"
+                        >
+                          💬 WA: {activeEnquiry.whatsappNo || activeEnquiry.contactNo}
+                        </a>
+                      )}
                     </div>
 
                     {/* Counsellor */}

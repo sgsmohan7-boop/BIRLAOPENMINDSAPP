@@ -338,12 +338,20 @@ export interface CounsellingEnquiry {
   siblingTokenNo?: number; // e.g. 13
   linkedSiblingEnquiryIds?: string[];
 
+  // Enquiry Channel & Mode
+  enquiryType?: "walkin" | "online";
+  onlineRefNo?: string; // e.g. "ONL-2026-01"
+
   createdAt: string;
   updatedAt: string;
 }
 
+export type EnquiryType = "walkin" | "online";
+
 export interface ParentSelfEntry {
-  id: string; // e.g. "PSE-2026-001"
+  id: string; // e.g. "PSE-2026-001" or "ONL-2026-01"
+  enquiryType?: EnquiryType; // "walkin" (default) or "online"
+  onlineRefNo?: string; // e.g. "ONL-2026-01"
   studentName: string;
   applyingForClass: string;
   academicYear?: string;
@@ -367,7 +375,11 @@ export interface ParentSelfEntry {
   claimedBy?: string; // counsellorId
   claimedByName?: string; // counsellorName
   claimedAt?: string;
-  dailyTokenNo?: number; // Daily arrival token/S.No (resets to 1 each new day)
+  dismissedBy?: string; // counsellorName
+  dismissedById?: string; // counsellorId
+  dismissedAt?: string; // ISO string
+  dismissedReason?: string;
+  dailyTokenNo?: number; // Daily arrival token/S.No for physical walk-ins (omitted for online enquiries)
   entryDate?: string; // "DD-MM-YYYY" e.g. "27-10-2026"
   dateKey?: string; // "YYYY-MM-DD" e.g. "2026-10-27"
 
@@ -379,6 +391,7 @@ export interface ParentSelfEntry {
     applyingForClass: string;
     previousSchool?: string;
     gender?: "Male" | "Female" | "Other";
+    onlineRefNo?: string;
   };
   siblingOfTokenNo?: number;
   linkedSiblingEntryId?: string;
@@ -812,24 +825,150 @@ export function getNextEnquiryNo(
     } catch {}
   }
 
-  // Find next un-occupied sequential candidate starting from 01
-  let candidateNum = maxNum > 0 ? maxNum + 1 : 1;
+  // Gap-Filling Slot Recycling Algorithm:
+  // First scan from 1 up to maxNum to check if any cancelled/released sibling slot exists.
+  // If a gap exists (e.g. #100 was released by a counsellor switching back to single student),
+  // immediately recycle that exact slot so admissions serial numbers remain 100% sequential with zero gaps!
   const formatPad = (n: number) => n < 100 ? String(n).padStart(2, "0") : String(n);
-  let numStr = formatPad(candidateNum);
+  let candidateNum = 1;
+  let candidateStr = `ENQ-${currentYear}-${formatPad(candidateNum)}`;
 
-  let candidateStr = `ENQ-${currentYear}-${numStr}`;
-
-  // Collision guard to ensure number is 100% free
-  let guard = 0;
-  while (occupiedNumbers.has(candidateStr.trim().toUpperCase()) && guard < 500) {
+  while (occupiedNumbers.has(candidateStr.trim().toUpperCase()) && candidateNum <= maxNum) {
     candidateNum++;
-    const nextPad = formatPad(candidateNum);
-    candidateStr = `ENQ-${currentYear}-${nextPad}`;
-    guard++;
+    candidateStr = `ENQ-${currentYear}-${formatPad(candidateNum)}`;
+  }
+
+  if (candidateNum > maxNum) {
+    candidateNum = maxNum > 0 ? maxNum + 1 : 1;
+    candidateStr = `ENQ-${currentYear}-${formatPad(candidateNum)}`;
   }
 
   return candidateStr;
 }
+
+const HIGHEST_ONLINE_ENQUIRY_KEY = "sgs_highest_online_enquiry_issued";
+
+export function recordHighestOnlineEnquiryNumber(num: number) {
+  if (typeof window === "undefined" || isNaN(num) || num <= 0 || num >= 50000) return;
+  try {
+    const current = parseInt(localStorage.getItem(HIGHEST_ONLINE_ENQUIRY_KEY) || "0", 10);
+    if (num > current && num < 50000) {
+      localStorage.setItem(HIGHEST_ONLINE_ENQUIRY_KEY, String(num));
+    }
+  } catch {}
+}
+
+export function getNextOnlineEnquiryNo(existingEntries?: any[]): string {
+  const currentYear = new Date().getFullYear();
+  let maxNum = 0;
+  const occupiedNumbers = new Set<string>();
+
+  // 1. Scan passed parent entries or enquiries
+  if (Array.isArray(existingEntries)) {
+    existingEntries.forEach(e => {
+      if (!e) return;
+      const ref = (e.onlineRefNo || e.enquiryNo || e.id || "").trim().toUpperCase();
+      if (ref.startsWith("ONL-") || ref.startsWith("OEQ-") || ref.startsWith("WEB-")) {
+        occupiedNumbers.add(ref);
+        const match = ref.match(/ONL-.*-(\d+)/i) || ref.match(/(\d+)$/);
+        if (match) {
+          const num = parseInt(match[1] || match[0], 10);
+          if (!isNaN(num) && num > maxNum) maxNum = num;
+        }
+      }
+      // Also check sibling onlineRefNo
+      if (e.siblingDetails?.onlineRefNo) {
+        const sibRef = e.siblingDetails.onlineRefNo.trim().toUpperCase();
+        occupiedNumbers.add(sibRef);
+        const match = sibRef.match(/ONL-.*-(\d+)/i) || sibRef.match(/(\d+)$/);
+        if (match) {
+          const num = parseInt(match[1] || match[0], 10);
+          if (!isNaN(num) && num > maxNum) maxNum = num;
+        }
+      }
+    });
+  }
+
+  // 2. Scan localStorage parent self entries
+  if (typeof window !== "undefined") {
+    try {
+      const raw = localStorage.getItem("sgs_parent_self_entries") || localStorage.getItem("parent_self_entries");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          parsed.forEach((e: any) => {
+            if (!e) return;
+            const ref = (e.onlineRefNo || e.enquiryNo || e.id || "").trim().toUpperCase();
+            if (ref.startsWith("ONL-") || ref.startsWith("OEQ-") || ref.startsWith("WEB-")) {
+              occupiedNumbers.add(ref);
+              const match = ref.match(/ONL-.*-(\d+)/i) || ref.match(/(\d+)$/);
+              if (match) {
+                const num = parseInt(match[1] || match[0], 10);
+                if (!isNaN(num) && num > maxNum) maxNum = num;
+              }
+            }
+            if (e.siblingDetails?.onlineRefNo) {
+              const sibRef = e.siblingDetails.onlineRefNo.trim().toUpperCase();
+              occupiedNumbers.add(sibRef);
+              const match = sibRef.match(/ONL-.*-(\d+)/i) || sibRef.match(/(\d+)$/);
+              if (match) {
+                const num = parseInt(match[1] || match[0], 10);
+                if (!isNaN(num) && num > maxNum) maxNum = num;
+              }
+            }
+          });
+        }
+      }
+    } catch {}
+
+    // 3. Scan counselling records with ONL- prefix
+    try {
+      const rawC = localStorage.getItem("it_command_counselling") || localStorage.getItem("it_command_counselling_forms");
+      if (rawC) {
+        const parsedC = JSON.parse(rawC);
+        if (Array.isArray(parsedC)) {
+          parsedC.forEach((e: any) => {
+            if (!e) return;
+            const ref = (e.onlineRefNo || e.enquiryNo || e.id || "").trim().toUpperCase();
+            if (ref.startsWith("ONL-")) {
+              occupiedNumbers.add(ref);
+              const match = ref.match(/ONL-.*-(\d+)/i) || ref.match(/(\d+)$/);
+              if (match) {
+                const num = parseInt(match[1] || match[0], 10);
+                if (!isNaN(num) && num > maxNum) maxNum = num;
+              }
+            }
+          });
+        }
+      }
+    } catch {}
+
+    // 4. Scan highest issued watermark
+    try {
+      const highest = parseInt(localStorage.getItem(HIGHEST_ONLINE_ENQUIRY_KEY) || "0", 10);
+      if (!isNaN(highest) && highest > maxNum && highest < 50000) {
+        maxNum = highest;
+      }
+    } catch {}
+  }
+
+  const formatPad = (n: number) => n < 100 ? String(n).padStart(2, "0") : String(n);
+  let candidateNum = 1;
+  let candidateStr = `ONL-${currentYear}-${formatPad(candidateNum)}`;
+
+  while (occupiedNumbers.has(candidateStr.toUpperCase()) && candidateNum <= maxNum) {
+    candidateNum++;
+    candidateStr = `ONL-${currentYear}-${formatPad(candidateNum)}`;
+  }
+
+  if (candidateNum > maxNum) {
+    candidateNum = maxNum > 0 ? maxNum + 1 : 1;
+    candidateStr = `ONL-${currentYear}-${formatPad(candidateNum)}`;
+  }
+
+  return candidateStr;
+}
+
 
 export interface ManagementAccount {
   id: string;

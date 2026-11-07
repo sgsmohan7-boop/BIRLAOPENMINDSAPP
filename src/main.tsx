@@ -21,7 +21,7 @@ class RootErrorBoundary extends React.Component<{children: ReactNode}, ErrorBoun
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    // console.error("Caught by RootErrorBoundary:", error, errorInfo);
+    console.error("Caught by RootErrorBoundary:", error, errorInfo);
     this.setState({ errorInfo });
   }
 
@@ -72,6 +72,18 @@ class RootErrorBoundary extends React.Component<{children: ReactNode}, ErrorBoun
 }
 
 try {
+  // Remove splash screen immediately upon script execution
+  try {
+    const splash = document.getElementById('splash-screen');
+    if (splash) {
+      splash.style.display = 'none';
+      splash.remove();
+    }
+    if (typeof (window as any).dismissSplashScreen === 'function') {
+      (window as any).dismissSplashScreen();
+    }
+  } catch (_) {}
+
   const container = document.getElementById('root');
   if (container) {
     const root = createRoot(container);

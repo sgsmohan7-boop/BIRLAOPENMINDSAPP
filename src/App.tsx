@@ -13,30 +13,55 @@ import RoomMaster from "./components/RoomMaster";
 import EmployeeMaster from "./components/EmployeeMaster";
 import AppUpdateNotifier from "./components/AppUpdateNotifier";
 
-// Lazy-load non-critical portals and modals to reduce initial bundle and boot instantly
-const SchoolStoreHub = React.lazy(() => import("./components/SchoolStoreHub"));
-const WarrantyTracker = React.lazy(() => import("./components/WarrantyTracker"));
-const RaiseTicket = React.lazy(() => import("./components/RaiseTicket"));
-const NetworkSpeed = React.lazy(() => import("./components/NetworkSpeed"));
-const SettingsView = React.lazy(() => import("./components/Settings"));
-const Analytics = React.lazy(() => import("./components/Analytics"));
-const TeacherPortal = React.lazy(() => import("./components/TeacherPortal"));
-const AiAssistant = React.lazy(() => import("./components/AiAssistant"));
-const CctvMonitor = React.lazy(() => import("./components/CctvMonitor"));
-const TransportDashboard = React.lazy(() => import("./components/TransportDashboard"));
-const DriverPortal = React.lazy(() => import("./components/DriverPortal"));
-const StudentPortal = React.lazy(() => import("./components/StudentPortal"));
-const CounsellingPortal = React.lazy(() => import("./components/CounsellingPortal"));
-const ManagementPortal = React.lazy(() => import("./components/ManagementPortal"));
-const GoogleDriveManager = React.lazy(() => import("./components/GoogleDriveManager"));
-const CctvNvrStorageModal = React.lazy(() => import("./components/CctvNvrStorageModal"));
-const PortalLinksModal = React.lazy(() => import("./components/PortalLinksModal"));
-const AppInstallModal = React.lazy(() => import("./components/AppInstallModal"));
-const ParentFormMobileOnly = React.lazy(() => import("./components/ParentFormMobileOnly"));
+// Resilient Lazy Import Wrapper: Automatically retries up to 3 times on Vite dev-server rebuilds or transient network hiccups
+function lazyWithRetry<T extends React.ComponentType<any>>(
+  factory: () => Promise<{ default: T }>,
+  componentName: string
+): React.LazyExoticComponent<T> {
+  return React.lazy(async () => {
+    const delays = [400, 1000, 2000];
+    let lastError: any;
+    for (let attempt = 0; attempt <= delays.length; attempt++) {
+      try {
+        return await factory();
+      } catch (err: any) {
+        lastError = err;
+        if (attempt < delays.length) {
+          console.warn(`[DynamicImportRetry] Attempt ${attempt + 1} failed for ${componentName}. Retrying in ${delays[attempt]}ms...`);
+          await new Promise(r => setTimeout(r, delays[attempt]));
+        }
+      }
+    }
+    console.error(`[DynamicImportRetry] All attempts exhausted for ${componentName}:`, lastError);
+    throw lastError;
+  });
+}
+
+// Lazy-load portals and modals to keep initial bundle ultra-light and boot instantly (<500ms)
+const CounsellingPortal = lazyWithRetry(() => import("./components/CounsellingPortal"), "CounsellingPortal");
+const ManagementPortal = lazyWithRetry(() => import("./components/ManagementPortal"), "ManagementPortal");
+const SchoolStoreHub = lazyWithRetry(() => import("./components/SchoolStoreHub"), "SchoolStoreHub");
+const WarrantyTracker = lazyWithRetry(() => import("./components/WarrantyTracker"), "WarrantyTracker");
+const RaiseTicket = lazyWithRetry(() => import("./components/RaiseTicket"), "RaiseTicket");
+const NetworkSpeed = lazyWithRetry(() => import("./components/NetworkSpeed"), "NetworkSpeed");
+const SettingsView = lazyWithRetry(() => import("./components/Settings"), "Settings");
+const Analytics = lazyWithRetry(() => import("./components/Analytics"), "Analytics");
+const TeacherPortal = lazyWithRetry(() => import("./components/TeacherPortal"), "TeacherPortal");
+const AiAssistant = lazyWithRetry(() => import("./components/AiAssistant"), "AiAssistant");
+const CctvMonitor = lazyWithRetry(() => import("./components/CctvMonitor"), "CctvMonitor");
+const TransportDashboard = lazyWithRetry(() => import("./components/TransportDashboard"), "TransportDashboard");
+const DriverPortal = lazyWithRetry(() => import("./components/DriverPortal"), "DriverPortal");
+const StudentPortal = lazyWithRetry(() => import("./components/StudentPortal"), "StudentPortal");
+const GoogleDriveManager = lazyWithRetry(() => import("./components/GoogleDriveManager"), "GoogleDriveManager");
+const CctvNvrStorageModal = lazyWithRetry(() => import("./components/CctvNvrStorageModal"), "CctvNvrStorageModal");
+const PortalLinksModal = lazyWithRetry(() => import("./components/PortalLinksModal"), "PortalLinksModal");
+const AppInstallModal = lazyWithRetry(() => import("./components/AppInstallModal"), "AppInstallModal");
+const ParentFormMobileOnly = lazyWithRetry(() => import("./components/ParentFormMobileOnly"), "ParentFormMobileOnly");
 import PortalErrorBoundary from "./components/PortalErrorBoundary";
 
 
 import { loadData, saveData, calculateExpiryDate, resetToDefaults, clearAllData, loadCounselling, saveCounselling, deduplicateEnquiries, loadCounsellorAccounts, saveCounsellorAccounts, mergeWithDemoEnquiries, mergeWithDefaultCounsellorAccounts, recordDeletedCounsellorAccountId, unrecordDeletedCounsellorAccountId, recordDeletedCounsellorAccountIds, recordDeletedEnquiryId, recordDeletedEnquiryIds, getDeletedEnquiryIds, unmarkDeletedEnquiryId, mergeWithDefaultITStaffAccounts, saveITStaffAccounts, loadITStaffAccounts, recordDeletedITStaffAccountId } from "./utils/storage";
+import { isObsoleteOrDuplicateCounsellorAccount, cleanAndNormalizeCounsellorAccounts, normalizeAllEnquiries } from "./utils/counsellorNormalizer";
 import { AlertTriangle, X, Bell, ArrowRight, RefreshCw, Share2, Smartphone } from "lucide-react";
 import { Ticket, InventoryItem, Room, EmployeeAllocation, WarrantyContract, SchoolBranch, getNextTicketId, getNowFormatted, CounsellingEnquiry, CounsellorAccount, ManagementAccount, loadManagementAccounts, saveManagementAccounts, recordDeletedManagementAccountId, unrecordDeletedManagementAccountId, mergeWithDefaultManagementAccounts, ITStaffAccount } from "./types";
 import { motion, AnimatePresence } from "motion/react";
@@ -672,12 +697,18 @@ export default function App() {
             }));
 
           const deduped = deduplicateEnquiries(nonDeletedItems);
-          setCounsellingEnquiries(deduped);
-          saveCounselling(deduped);
+          const { enquiries: normalizedEnquiries, changedCount } = normalizeAllEnquiries(deduped);
+          setCounsellingEnquiries(normalizedEnquiries);
+          saveCounselling(normalizedEnquiries);
+          if (changedCount > 0 && isFirebaseConfigured()) {
+            normalizedEnquiries.forEach(item => {
+              saveDocument("counselling_forms", item.id, item).catch(() => {});
+            });
+          }
           fetch("/api/counselling", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(deduped)
+            body: JSON.stringify(normalizedEnquiries)
           }).catch(() => {});
         }, []),
 
@@ -694,9 +725,17 @@ export default function App() {
             setCounsellorAccounts([]);
             return;
           }
+          // Actively purge any obsolete duplicate documents like "R SOWJANYA" from Firestore
+          (items || []).forEach(item => {
+            if (isObsoleteOrDuplicateCounsellorAccount(item)) {
+              if (item.id) deleteDocument("counsellor_accounts", item.id).catch(() => {});
+              if (item.username) deleteDocument("counsellor_accounts", item.username.toLowerCase()).catch(() => {});
+            }
+          });
           const merged = mergeWithDefaultCounsellorAccounts(items || []);
-          setCounsellorAccounts(merged);
-          saveCounsellorAccounts(merged);
+          const cleaned = cleanAndNormalizeCounsellorAccounts(merged);
+          setCounsellorAccounts(cleaned);
+          saveCounsellorAccounts(cleaned);
         }, loadCounsellorAccounts()),
 
         syncCollection<{ id: string; username?: string }>("deleted_it_staff_accounts", (deletedDocs) => {
@@ -907,6 +946,31 @@ export default function App() {
       } else {
         nextList = [cleanEnquiry, ...prev];
       }
+
+      // If this enquiry has audio recording and is part of a sibling admission, ensure linked sibling also gets the shared recording
+      if (cleanEnquiry.audioRecording && (cleanEnquiry.isSibling || cleanEnquiry.siblingEnquiryNo)) {
+        const sibIdx = nextList.findIndex((o) => 
+          o && o.id !== cleanEnquiry.id && (
+            (cleanEnquiry.siblingEnquiryNo && (o.enquiryNo || o.id).toLowerCase() === cleanEnquiry.siblingEnquiryNo.toLowerCase()) ||
+            (o.siblingEnquiryNo && (cleanEnquiry.enquiryNo || cleanEnquiry.id).toLowerCase() === o.siblingEnquiryNo.toLowerCase())
+          )
+        );
+        if (sibIdx >= 0 && !nextList[sibIdx].audioRecording) {
+          const linkedSib = nextList[sibIdx];
+          nextList[sibIdx] = {
+            ...linkedSib,
+            audioRecording: {
+              ...cleanEnquiry.audioRecording,
+              id: `${cleanEnquiry.audioRecording.id || linkedSib.id || linkedSib.enquiryNo}-SIB`,
+              enquiryNo: linkedSib.enquiryNo || linkedSib.id,
+              studentName: linkedSib.studentName,
+              isJointSiblingSession: true,
+              jointSiblingNames: cleanEnquiry.audioRecording.jointSiblingNames || `${cleanEnquiry.studentName} & ${linkedSib.studentName}`
+            }
+          };
+        }
+      }
+
       saveCounselling(nextList);
       return nextList;
     });

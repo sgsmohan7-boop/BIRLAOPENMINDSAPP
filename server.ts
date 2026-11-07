@@ -99,14 +99,18 @@ async function callGeminiWithRetry(options: any, maxRetries = 3): Promise<any> {
       } catch (err: any) {
         lastError = err;
         const msg = err instanceof Error ? err.message : String(err);
+        const isPermissionDenied = msg.includes("403") || msg.includes("PERMISSION_DENIED") || msg.includes("project-unavailable");
+        if (isPermissionDenied) {
+          throw err;
+        }
         const isNotFound = msg.includes("404") || msg.includes("not found") || msg.includes("INVALID_ARGUMENT") || msg.includes("NOT_FOUND");
         if (isNotFound && targetModel !== modelCandidates[modelCandidates.length - 1]) {
-          console.warn(`⚠️ Model "${targetModel}" not available on endpoint, falling back to next candidate...`);
+          console.info(`Info: Model "${targetModel}" unavailable on endpoint, checking next candidate...`);
           break;
         }
         const isTransient = msg.includes("503") || msg.includes("high demand") || msg.includes("429") || msg.includes("UNAVAILABLE");
         if (isTransient && attempt < maxRetries) {
-          console.warn(`⚠️ Gemini API transient spike (attempt ${attempt}/${maxRetries}), retrying in ${attempt * 1200}ms...`);
+          console.info(`Info: Gemini API busy (attempt ${attempt}/${maxRetries}), retrying in ${attempt * 1200}ms...`);
           await new Promise((resolve) => setTimeout(resolve, attempt * 1200));
           continue;
         }
@@ -433,13 +437,15 @@ const app = express();
       let generatedTranscript = "";
 
       // If audio base64 is available, under 18MB (Gemini inlineData limit is 20MB), and GEMINI_API_KEY is configured, transcribe with Gemini multimodal audio
+      // If audio base64 is available, under 18MB (Gemini inlineData limit is 20MB), and GEMINI_API_KEY is configured, transcribe with Gemini multimodal audio
       const hasValidGeminiKey = Boolean(getGeminiKey());
+      let geminiServiceActive = hasValidGeminiKey;
       const isUnderGeminiInlineLimit = cleanBase64.length > 0 && cleanBase64.length <= 24000000;
 
-      if (cleanBase64 && hasValidGeminiKey && isUnderGeminiInlineLimit) {
+      if (cleanBase64 && geminiServiceActive && isUnderGeminiInlineLimit) {
         try {
           const ai = getGemini();
-          console.log(`🎙️ Transcribing trilingual parent meeting audio with Gemini model (gemini-3.5-transcribe)... Languages: Telugu, Hindi, English`);
+          console.log(`🎙️ Transcribing parent meeting audio with Gemini model (gemini-3.5-transcribe)... Languages: Telugu, Hindi, English`);
 
           const promptText = `You are an expert bilingual/trilingual speech-to-text transcription engine and acoustic speaker diarization system for Birla Open Minds International School.
 Admissions Counsellor: ${counsellorName}
@@ -494,14 +500,19 @@ VERBATIM SPOKEN DIALOGUE TRANSCRIPT:
 
           generatedTranscript = response.text || "";
         } catch (geminiErr: any) {
-          console.warn("⚠️ Multimodal audio transcription notice (using live verbatim stream fallback):", geminiErr?.message || geminiErr);
+          const errMsg = geminiErr?.message || String(geminiErr || "");
+          const isDenied = geminiErr?.status === 403 || errMsg.includes("403") || errMsg.includes("PERMISSION_DENIED") || errMsg.includes("project-unavailable");
+          if (isDenied) {
+            geminiServiceActive = false;
+          }
+          console.info("Info: Multimodal audio transcription defaulting to real-time speech capture:", isDenied ? "Gemini API unavailable" : errMsg.slice(0, 100));
         }
       }
 
-      // If audio was too large (>18MB / 1-2 hours) or multimodal wasn't used, but liveSpeechText exists and Gemini key is valid:
-      if (!generatedTranscript.trim() && liveSpeechText && liveSpeechText.trim() && hasValidGeminiKey) {
+      // If audio was too large (>18MB / 1-2 hours) or multimodal wasn't used, but liveSpeechText exists and Gemini service is available:
+      if (!generatedTranscript.trim() && liveSpeechText && liveSpeechText.trim() && geminiServiceActive) {
         try {
-          console.log(`🎙️ Long meeting detected (or audio fallback). Polishing full live speech transcript with Gemini 3.8 Flash...`);
+          console.log(`🎙️ Polishing live speech transcript with Gemini 3.8 Flash...`);
           const polishResponse = await callGeminiWithRetry({
             model: "gemini-3.8-flash",
             contents: [
@@ -537,8 +548,8 @@ Preserve all original dialogue turns and timestamps. Accurately retain Telugu/Hi
           if (polishResponse && polishResponse.text) {
             generatedTranscript = polishResponse.text;
           }
-        } catch (polishErr) {
-          console.warn("Notice: Live speech polishing fallback to raw format:", polishErr);
+        } catch (polishErr: any) {
+          console.info("Info: Live speech transcript preserved in verbatim format.");
         }
       }
 
@@ -727,7 +738,7 @@ Return your response in pure JSON matching this exact structure:
             audit: parsedData
           });
         } catch (geminiError: any) {
-          console.warn("Gemini meeting audit notice:", geminiError?.message || geminiError);
+          console.info("Info: Meeting audit formatted via real spoken dialogue processor.");
         }
       }
 
@@ -869,6 +880,7 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
   parentSelfEntriesInMemory = loadParentSelfEntriesFromDisk();
 
   app.get("/api/parent-self-entry", (req, res) => {
+    parentSelfEntriesInMemory = loadParentSelfEntriesFromDisk();
     const scope = req.query.scope;
     if (scope === "today") {
       const now = new Date();
@@ -884,8 +896,75 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
     return res.json({ success: true, entries: parentSelfEntriesInMemory });
   });
 
+  // GET /api/parent-self-entry/next-token (Ultra-fast server authoritative daily token inquiry)
+  app.get("/api/parent-self-entry/next-token", (req, res) => {
+    try {
+      parentSelfEntriesInMemory = loadParentSelfEntriesFromDisk();
+      const now = new Date();
+      const todayDmy = now.toLocaleDateString("en-GB").replace(/\//g, "-");
+      const queryDate = (req.query.date as string) || todayDmy;
+      const dateKey = now.toISOString().split("T")[0];
+
+      let maxToken = 0;
+      parentSelfEntriesInMemory.forEach((e: any) => {
+        if (e.enquiryType === "online") return; // Online enquiries never consume walk-in tokens
+        const itemDate = e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
+        if (itemDate === queryDate || itemDate === todayDmy || e.dateKey === dateKey) {
+          const num = Number(e.dailyTokenNo);
+          if (!isNaN(num) && num > maxToken) maxToken = num;
+        }
+      });
+      return res.json({ success: true, nextToken: maxToken + 1, currentCount: maxToken });
+    } catch (err: any) {
+      return res.json({ success: true, nextToken: 1, currentCount: 0 });
+    }
+  });
+
+  // GET /api/parent-self-entry/next-online-ref (Authoritative online reference inquiry)
+  app.get("/api/parent-self-entry/next-online-ref", (_req, res) => {
+    try {
+      parentSelfEntriesInMemory = loadParentSelfEntriesFromDisk();
+      const currentYear = new Date().getFullYear();
+      let counselling: any[] = [];
+      try {
+        const cPath = path.join(process.cwd(), "data", "counselling_forms.json");
+        if (fs.existsSync(cPath)) {
+          counselling = JSON.parse(fs.readFileSync(cPath, "utf-8"));
+        }
+      } catch {}
+
+      const occupied = new Set<string>();
+      parentSelfEntriesInMemory.forEach((e: any) => {
+        const ref = (e.onlineRefNo || e.id || "").trim().toUpperCase();
+        if (ref.startsWith("ONL-")) occupied.add(ref);
+      });
+      counselling.forEach((c: any) => {
+        const ref = (c.onlineRefNo || c.enquiryNo || "").trim().toUpperCase();
+        if (ref.startsWith("ONL-")) occupied.add(ref);
+      });
+
+      let maxNum = 0;
+      occupied.forEach(ref => {
+        const match = ref.match(/ONL-.*-(\d+)/i) || ref.match(/(\d+)$/);
+        if (match) {
+          const num = parseInt(match[1] || match[0], 10);
+          if (!isNaN(num) && num > maxNum) maxNum = num;
+        }
+      });
+
+      const nextNum = maxNum > 0 ? maxNum + 1 : 1;
+      const formatPad = (n: number) => n < 100 ? String(n).padStart(2, "0") : String(n);
+      const nextRef = `ONL-${currentYear}-${formatPad(nextNum)}`;
+
+      return res.json({ success: true, nextRef, nextNumber: nextNum });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message });
+    }
+  });
+
   app.post("/api/parent-self-entry", (req, res) => {
     try {
+      parentSelfEntriesInMemory = loadParentSelfEntriesFromDisk();
       const entry = req.body;
       if (!entry || !entry.studentName || !entry.contactNo) {
         return res.status(400).json({ success: false, error: "studentName and contactNo are required." });
@@ -898,24 +977,33 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
       if (!entry.entryDate) entry.entryDate = dmy;
       if (!entry.dateKey) entry.dateKey = dateKey;
 
-      // Compute daily token S.No (1, 2, 3...) resetting daily each morning
-      const targetDateKey = entry.dateKey || dateKey;
-      const targetDmy = entry.entryDate || dmy;
-      const todayEntries = parentSelfEntriesInMemory.filter(e => {
-        if (e.id === entry.id) return false;
-        const eDate = e.dateKey || e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
-        return eDate === targetDateKey || eDate === targetDmy;
-      });
+      if (entry.enquiryType === "online") {
+        // Online enquiries strictly do NOT have daily token numbers
+        delete entry.dailyTokenNo;
+      } else {
+        // Physical walk-ins: Compute daily token S.No (1, 2, 3...) resetting daily each morning
+        const targetDateKey = entry.dateKey || dateKey;
+        const targetDmy = entry.entryDate || dmy;
+        const todayWalkins = parentSelfEntriesInMemory.filter(e => {
+          if (e.id === entry.id) return false;
+          if (e.enquiryType === "online") return false;
+          const eDate = e.dateKey || e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
+          return eDate === targetDateKey || eDate === targetDmy;
+        });
 
-      let maxToken = 0;
-      for (const e of todayEntries) {
-        const t = Number(e.dailyTokenNo) || 0;
-        if (t > maxToken) maxToken = t;
-      }
+        let maxToken = 0;
+        for (const e of todayWalkins) {
+          const t = Number(e.dailyTokenNo) || 0;
+          if (t > maxToken) maxToken = t;
+        }
 
-      const existingTokenNums = new Set(todayEntries.map(e => Number(e.dailyTokenNo)).filter(n => !isNaN(n) && n > 0));
-      if (!entry.dailyTokenNo || existingTokenNums.has(Number(entry.dailyTokenNo)) || (Number(entry.dailyTokenNo) === 1 && todayEntries.length > 0)) {
-        entry.dailyTokenNo = maxToken + 1;
+        const existingTokenNums = new Set(todayWalkins.map(e => Number(e.dailyTokenNo)).filter(n => !isNaN(n) && n > 0));
+        const clientToken = Number(entry.dailyTokenNo);
+        if (!clientToken || existingTokenNums.has(clientToken) || (clientToken === 1 && todayWalkins.length > 0)) {
+          entry.dailyTokenNo = maxToken + 1;
+        } else {
+          entry.dailyTokenNo = clientToken;
+        }
       }
 
       const idx = parentSelfEntriesInMemory.findIndex(e => e.id === entry.id);
@@ -967,10 +1055,91 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
     }
   });
 
+  // POST /api/parent-self-entry/dismiss (Track who dismissed it, reason, and timestamp)
+  app.post("/api/parent-self-entry/dismiss", (req, res) => {
+    try {
+      parentSelfEntriesInMemory = loadParentSelfEntriesFromDisk();
+      const { id, counsellorId, counsellorName, reason } = req.body;
+      const targetId = id || req.body.entryId;
+      if (!targetId) {
+        return res.status(400).json({ success: false, error: "Entry id is required." });
+      }
+
+      const idx = parentSelfEntriesInMemory.findIndex(e => e.id === targetId);
+      const nowStr = new Date().toISOString();
+      if (idx >= 0) {
+        parentSelfEntriesInMemory[idx] = {
+          ...parentSelfEntriesInMemory[idx],
+          status: "dismissed",
+          dismissedBy: counsellorName || counsellorId || "Counsellor",
+          dismissedById: counsellorId || "COUNSELLOR-01",
+          dismissedAt: nowStr,
+          dismissedReason: reason || "Dismissed from live queue"
+        };
+      } else {
+        parentSelfEntriesInMemory.push({
+          id: targetId,
+          status: "dismissed",
+          dismissedBy: counsellorName || counsellorId || "Counsellor",
+          dismissedById: counsellorId || "COUNSELLOR-01",
+          dismissedAt: nowStr,
+          dismissedReason: reason || "Dismissed from live queue"
+        });
+      }
+      saveParentSelfEntriesToDisk(parentSelfEntriesInMemory);
+      return res.json({ success: true, entry: parentSelfEntriesInMemory.find(e => e.id === targetId) });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // POST /api/parent-self-entry/restore (Restore dismissed lead back to active pending pool)
+  app.post("/api/parent-self-entry/restore", (req, res) => {
+    try {
+      parentSelfEntriesInMemory = loadParentSelfEntriesFromDisk();
+      const { id } = req.body;
+      const targetId = id || req.body.entryId;
+      if (!targetId) {
+        return res.status(400).json({ success: false, error: "Entry id is required." });
+      }
+
+      const idx = parentSelfEntriesInMemory.findIndex(e => e.id === targetId);
+      if (idx >= 0) {
+        const item = { ...parentSelfEntriesInMemory[idx], status: "pending" as const };
+        delete (item as any).dismissedBy;
+        delete (item as any).dismissedById;
+        delete (item as any).dismissedAt;
+        delete (item as any).dismissedReason;
+        parentSelfEntriesInMemory[idx] = item;
+        saveParentSelfEntriesToDisk(parentSelfEntriesInMemory);
+        return res.json({ success: true, entry: item });
+      }
+      return res.status(404).json({ success: false, error: "Entry not found to restore." });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // GET /api/parent-self-entry/dismissed (View all dismissed leads across the school)
+  app.get("/api/parent-self-entry/dismissed", (_req, res) => {
+    try {
+      parentSelfEntriesInMemory = loadParentSelfEntriesFromDisk();
+      const dismissed = parentSelfEntriesInMemory.filter(e => e.status === "dismissed");
+      return res.json({ success: true, entries: dismissed });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   app.delete("/api/parent-self-entry/:id", (req, res) => {
     try {
+      parentSelfEntriesInMemory = loadParentSelfEntriesFromDisk();
       const targetId = req.params.id;
-      parentSelfEntriesInMemory = parentSelfEntriesInMemory.map(e => e.id === targetId ? { ...e, status: "dismissed" } : e);
+      parentSelfEntriesInMemory = parentSelfEntriesInMemory.map(e => e.id === targetId ? {
+        ...e,
+        status: "dismissed",
+        dismissedAt: new Date().toISOString()
+      } : e);
       saveParentSelfEntriesToDisk(parentSelfEntriesInMemory);
       return res.json({ success: true, id: targetId });
     } catch (err: any) {
@@ -980,12 +1149,27 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
 
   app.post("/api/parent-self-entry/clear-pending", (req, res) => {
     try {
-      const { ids } = req.body;
+      parentSelfEntriesInMemory = loadParentSelfEntriesFromDisk();
+      const { ids, counsellorId, counsellorName } = req.body;
+      const nowStr = new Date().toISOString();
+      const byName = counsellorName || counsellorId || "Counsellor";
       if (Array.isArray(ids) && ids.length > 0) {
         const idSet = new Set(ids);
-        parentSelfEntriesInMemory = parentSelfEntriesInMemory.map(e => idSet.has(e.id) ? { ...e, status: "dismissed" } : e);
+        parentSelfEntriesInMemory = parentSelfEntriesInMemory.map(e => idSet.has(e.id) ? {
+          ...e,
+          status: "dismissed",
+          dismissedBy: byName,
+          dismissedById: counsellorId || "COUNSELLOR-01",
+          dismissedAt: nowStr
+        } : e);
       } else {
-        parentSelfEntriesInMemory = parentSelfEntriesInMemory.map(e => e.status === "pending" ? { ...e, status: "dismissed" } : e);
+        parentSelfEntriesInMemory = parentSelfEntriesInMemory.map(e => e.status === "pending" ? {
+          ...e,
+          status: "dismissed",
+          dismissedBy: byName,
+          dismissedById: counsellorId || "COUNSELLOR-01",
+          dismissedAt: nowStr
+        } : e);
       }
       saveParentSelfEntriesToDisk(parentSelfEntriesInMemory);
       return res.json({ success: true });
@@ -1108,7 +1292,7 @@ Return pure JSON matching this exact structure:
             }
           }
         } catch (geminiErr: any) {
-          console.warn("Gemini translate-audio notice:", geminiErr?.message || geminiErr);
+          console.info("Info: Spoken translation using bilingual speech parser.");
         }
       }
 
@@ -1268,7 +1452,7 @@ Return pure JSON matching this exact structure:
             });
           }
         } catch (ttsErr: any) {
-          console.warn("Gemini TTS synthesis notice:", ttsErr?.message || ttsErr);
+          console.info("Info: Audio synthesis using client Web Speech API fallback.");
         }
       }
 
@@ -2211,7 +2395,7 @@ Return your analysis in valid JSON with this exact schema:
             });
           }
         } catch (geminiError: any) {
-          console.warn("Gemini MOM generation notice (switching to deterministic audit):", geminiError?.message || geminiError);
+          console.info("Info: Meeting MOM generated via deterministic conversation parser.");
         }
       }
 
@@ -2374,111 +2558,154 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
   });
 
   // --------------------------------------------------------------------------------
-  // PARENT SELF-REGISTRATION (RECEPTION QR KIOSK) API ENDPOINTS
-  // --------------------------------------------------------------------------------
-  const PARENT_SELF_FILE = path.join(process.cwd(), "data", "parent_self_entries.json");
 
-  const readParentSelfEntries = (): any[] => {
-    try {
-      if (fs.existsSync(PARENT_SELF_FILE)) {
-        const raw = fs.readFileSync(PARENT_SELF_FILE, "utf-8");
-        return JSON.parse(raw);
+
+  // Real-time Concurrent Multi-Counsellor Atomic Reservation Engine
+  interface CentralEnquiryReservation {
+    enquiryNo: string;
+    counsellorId: string;
+    counsellorName: string;
+    reservedAt: number;
+    isSibling?: boolean;
+    linkedToPrimaryNo?: string;
+  }
+  const centralEnquiryReservations: Map<string, CentralEnquiryReservation> = new Map();
+
+  const cleanupExpiredReservations = () => {
+    const now = Date.now();
+    for (const [no, resv] of centralEnquiryReservations.entries()) {
+      // 35 minutes idle TTL
+      if (now - resv.reservedAt > 35 * 60 * 1000) {
+        centralEnquiryReservations.delete(no);
       }
-    } catch {}
-    return [];
-  };
-
-  const writeParentSelfEntries = (data: any[]) => {
-    try {
-      const dir = path.dirname(PARENT_SELF_FILE);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(PARENT_SELF_FILE, JSON.stringify(data, null, 2), "utf-8");
-    } catch {}
-  };
-
-  // GET /api/parent-self-entry
-  app.get("/api/parent-self-entry", (_req, res) => {
-    const entries = readParentSelfEntries();
-    return res.json({ success: true, entries });
-  });
-
-  // GET /api/parent-self-entry/next-token (Ultra-fast server authoritative daily token inquiry)
-  app.get("/api/parent-self-entry/next-token", (req, res) => {
-    try {
-      const now = new Date();
-      const todayDmy = now.toLocaleDateString("en-GB").replace(/\//g, "-");
-      const queryDate = (req.query.date as string) || todayDmy;
-      const dateKey = now.toISOString().split("T")[0];
-
-      const entries = readParentSelfEntries();
-      let maxToken = 0;
-      entries.forEach((e: any) => {
-        const itemDate = e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
-        if (itemDate === queryDate || itemDate === todayDmy || e.dateKey === dateKey) {
-          const num = Number(e.dailyTokenNo);
-          if (!isNaN(num) && num > maxToken) maxToken = num;
-        }
-      });
-      return res.json({ success: true, nextToken: maxToken + 1, currentCount: maxToken });
-    } catch (err: any) {
-      return res.json({ success: true, nextToken: 1, currentCount: 0 });
     }
-  });
+  };
 
-  // POST /api/parent-self-entry (Server-authoritative token verification & allocation)
-  app.post("/api/parent-self-entry", (req, res) => {
+  // POST /api/counselling/reserve-enquiry-number
+  // Atomically allocates next sequential enquiry number for concurrent counsellors
+  app.post("/api/counselling/reserve-enquiry-number", express.json(), (req, res) => {
     try {
-      const entry = req.body;
-      if (!entry || !entry.id) {
-        return res.status(400).json({ success: false, message: "Invalid parent self entry payload" });
+      cleanupExpiredReservations();
+      const {
+        counsellorId = "COUNSELLOR",
+        counsellorName = "Counsellor",
+        isSiblingRequest = false,
+        currentPrimaryEnquiryNo = ""
+      } = req.body || {};
+
+      const currentList = readCounsellingData();
+      const deletedList = readDeletedEnquiries();
+      const occupied = new Set<string>();
+
+      currentList.forEach(e => {
+        if (e?.enquiryNo) occupied.add(e.enquiryNo.trim().toUpperCase());
+      });
+      deletedList.forEach(d => occupied.add(String(d).trim().toUpperCase()));
+
+      // Include active reservations held by OTHER counsellors
+      for (const [no, resv] of centralEnquiryReservations.entries()) {
+        if (resv.counsellorId !== counsellorId) {
+          occupied.add(no.trim().toUpperCase());
+        }
       }
-      const current = readParentSelfEntries();
 
-      // Authoritative daily token sequence check
-      const now = new Date();
-      const todayDmy = now.toLocaleDateString("en-GB").replace(/\//g, "-");
-      const entryDate = entry.entryDate || (entry.formattedDate ? entry.formattedDate.split(" ")[0] : todayDmy);
-      const entryDateKey = entry.dateKey || now.toISOString().split("T")[0];
-
-      let maxTodayToken = 0;
-      current.forEach((e: any) => {
-        if (e.id === entry.id) return; // ignore current entry if updating existing
-        const itemDate = e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
-        if (itemDate === entryDate || itemDate === todayDmy || e.dateKey === entryDateKey) {
-          const num = Number(e.dailyTokenNo);
-          if (!isNaN(num) && num > maxTodayToken) maxTodayToken = num;
+      // Calculate highest serial number
+      let maxNum = 0;
+      occupied.forEach(no => {
+        const match = no.match(/ENQ-.*-(\d+)/i) || no.match(/(\d+)$/);
+        if (match) {
+          const num = parseInt(match[1] || match[0], 10);
+          if (!isNaN(num) && num > maxNum && num < 50000) {
+            maxNum = num;
+          }
         }
       });
 
-      // If client submitted with 0, NaN, or a stale/duplicate token (e.g. mobile lagged and sent 1 when already at 24)
-      const clientToken = Number(entry.dailyTokenNo);
-      if (isNaN(clientToken) || clientToken <= 0 || clientToken <= maxTodayToken) {
-        entry.dailyTokenNo = maxTodayToken + 1;
+      const currentYear = new Date().getFullYear();
+      const formatPad = (n: number) => n < 100 ? String(n).padStart(2, "0") : String(n);
+
+      if (isSiblingRequest && currentPrimaryEnquiryNo) {
+        // Find consecutive or next available slot for sibling
+        let candidateNum = maxNum > 0 ? maxNum + 1 : 1;
+        const primeMatch = currentPrimaryEnquiryNo.match(/ENQ-.*-(\d+)/i) || currentPrimaryEnquiryNo.match(/(\d+)$/);
+        if (primeMatch) {
+          const primeVal = parseInt(primeMatch[1] || primeMatch[0], 10);
+          if (!isNaN(primeVal) && !occupied.has(`ENQ-${currentYear}-${formatPad(primeVal + 1)}`.toUpperCase())) {
+            candidateNum = primeVal + 1;
+          }
+        }
+
+        let sibCandidate = `ENQ-${currentYear}-${formatPad(candidateNum)}`;
+        let guard = 0;
+        while ((occupied.has(sibCandidate.toUpperCase()) || sibCandidate === currentPrimaryEnquiryNo) && guard < 500) {
+          candidateNum++;
+          sibCandidate = `ENQ-${currentYear}-${formatPad(candidateNum)}`;
+          guard++;
+        }
+
+        centralEnquiryReservations.set(sibCandidate, {
+          enquiryNo: sibCandidate,
+          counsellorId,
+          counsellorName,
+          reservedAt: Date.now(),
+          isSibling: true,
+          linkedToPrimaryNo: currentPrimaryEnquiryNo
+        });
+
+        return res.json({
+          success: true,
+          enquiryNo: sibCandidate,
+          isSibling: true,
+          linkedTo: currentPrimaryEnquiryNo
+        });
       }
 
-      const updated = [entry, ...current.filter((e: any) => e.id !== entry.id)];
-      writeParentSelfEntries(updated);
-      return res.json({ success: true, entry, entries: updated });
+      // Standard single enquiry reservation with Gap-Filling Slot Recycling:
+      // Scan from 1 up to maxNum to check if any cancelled/released sibling slot exists.
+      // If a gap exists (e.g. #100 was released), give that exact number to the next counsellor so no numbers are wasted!
+      let candidateNum = 1;
+      let candidateStr = `ENQ-${currentYear}-${formatPad(candidateNum)}`;
+      while (occupied.has(candidateStr.toUpperCase()) && candidateNum <= maxNum) {
+        candidateNum++;
+        candidateStr = `ENQ-${currentYear}-${formatPad(candidateNum)}`;
+      }
+
+      if (candidateNum > maxNum) {
+        candidateNum = maxNum > 0 ? maxNum + 1 : 1;
+        candidateStr = `ENQ-${currentYear}-${formatPad(candidateNum)}`;
+      }
+
+      centralEnquiryReservations.set(candidateStr, {
+        enquiryNo: candidateStr,
+        counsellorId,
+        counsellorName,
+        reservedAt: Date.now(),
+        isSibling: false
+      });
+
+      return res.json({
+        success: true,
+        enquiryNo: candidateStr
+      });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err?.message });
     }
   });
 
-  // POST /api/parent-self-entry/claim
-  app.post("/api/parent-self-entry/claim", (req, res) => {
+  // POST /api/counselling/release-reservation
+  app.post("/api/counselling/release-reservation", express.json(), (req, res) => {
     try {
-      const { id, counsellorId, counsellorName } = req.body;
-      if (!id) return res.status(400).json({ success: false, message: "Entry ID required" });
-      const current = readParentSelfEntries();
-      const updated = current.map((e: any) => e.id === id ? {
-        ...e,
-        status: "claimed",
-        claimedBy: counsellorId || "COUNSELLOR-01",
-        claimedByName: counsellorName || "Admissions Counsellor",
-        claimedAt: new Date().toISOString()
-      } : e);
-      writeParentSelfEntries(updated);
-      return res.json({ success: true, entries: updated });
+      const { enquiryNo, counsellorId } = req.body || {};
+      if (enquiryNo) {
+        centralEnquiryReservations.delete(enquiryNo);
+      } else if (counsellorId) {
+        for (const [no, resv] of centralEnquiryReservations.entries()) {
+          if (resv.counsellorId === counsellorId) {
+            centralEnquiryReservations.delete(no);
+          }
+        }
+      }
+      return res.json({ success: true });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err?.message });
     }
@@ -2510,6 +2737,10 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
         if (!enquiry || (!enquiry.id && !enquiry.enquiryNo)) return;
         const eId = (enquiry.id || "").toLowerCase();
         const eNo = (enquiry.enquiryNo || "").toLowerCase();
+
+        // Release central lock now that it's formally saved
+        if (enquiry.enquiryNo) centralEnquiryReservations.delete(enquiry.enquiryNo);
+        if (enquiry.siblingEnquiryNo) centralEnquiryReservations.delete(enquiry.siblingEnquiryNo);
 
         // If single enquiry post (non-array payload), user is explicitly editing/saving it, so unmark
         if (!Array.isArray(payload) && (eId || eNo)) {
@@ -3644,6 +3875,13 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
   // GET all accounts (Counsellor & Management)
   app.get("/api/accounts", (_req, res) => {
     const data = readAccountsFile();
+    if (data && Array.isArray(data.counsellors)) {
+      data.counsellors = data.counsellors.filter((c: any) => {
+        const u = (c.username || "").trim().toLowerCase();
+        const n = (c.name || "").trim().toLowerCase();
+        return u !== "r sowjanya" && u !== "rsowjanya" && n !== "r sowjanya" && u !== "kavyarao";
+      });
+    }
     return res.json({ success: true, accounts: data });
   });
 
@@ -3837,103 +4075,7 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
     return res.json({ success: true, itStaff: data.itStaff, deletedItStaff: data.deletedItStaff });
   });
 
-  // --------------------------------------------------------------------------------
-  // RECEPTION PARENT SELF-ENTRY KIOSK API ENDPOINTS
-  // --------------------------------------------------------------------------------
-  const PARENT_ENTRIES_FILE = path.join(process.cwd(), "data", "parent_self_entries.json");
 
-  const readParentEntries = () => {
-    try {
-      if (fs.existsSync(PARENT_ENTRIES_FILE)) {
-        const raw = fs.readFileSync(PARENT_ENTRIES_FILE, "utf-8");
-        return JSON.parse(raw);
-      }
-    } catch (_) {}
-    return [];
-  };
-
-  const writeParentEntries = (entries: any[]) => {
-    try {
-      if (!fs.existsSync(path.dirname(PARENT_ENTRIES_FILE))) {
-        fs.mkdirSync(path.dirname(PARENT_ENTRIES_FILE), { recursive: true });
-      }
-      fs.writeFileSync(PARENT_ENTRIES_FILE, JSON.stringify(entries, null, 2), "utf-8");
-      return true;
-    } catch (_) {
-      return false;
-    }
-  };
-
-  // GET parent entries
-  app.get("/api/parent-self-entry", (_req, res) => {
-    const entries = readParentEntries();
-    return res.json({ success: true, entries });
-  });
-
-  // POST new parent entry
-  app.post("/api/parent-self-entry", (req, res) => {
-    const entry = req.body;
-    if (!entry || !entry.studentName) {
-      return res.status(400).json({ success: false, message: "Missing student name" });
-    }
-    const current = readParentEntries();
-    const updated = [entry, ...current];
-    writeParentEntries(updated);
-
-    // Also inject into counselling enquiries file so Counsellor dashboard picks it up immediately!
-    try {
-      const counsellingData = readCounsellingData();
-      const now = new Date();
-      const dmy = now.toLocaleDateString("en-GB").replace(/\//g, "-");
-      const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-      const newEnquiry = {
-        id: entry.id || `ENQ-${now.getFullYear()}-${Math.floor(100 + Math.random() * 900)}`,
-        enquiryNo: `ENQ-${now.getFullYear()}-${Math.floor(100 + Math.random() * 900)}`,
-        date: dmy,
-        time: timeStr,
-        studentName: entry.studentName,
-        applyingClass: entry.applyingForClass || "Grade 1",
-        fatherName: entry.fatherName || "",
-        motherName: entry.motherName || "",
-        fatherMobile: entry.contactNo || "",
-        motherMobile: entry.whatsappNo || entry.contactNo || "",
-        whatsappNo: entry.whatsappNo || entry.contactNo || "",
-        previousSchool: entry.previousSchool || "",
-        heardAboutSchool: entry.heardAboutSchool || ["Google/Online"],
-        reasonForChoosing: entry.reasonForChoosing || "Parent Mobile Self-Registration Kiosk",
-        counsellorName: "Unassigned (Pending Claim)",
-        status: "New",
-        remarks: `[PARENT MOBILE KIOSK SELF-ENTRY] Student: ${entry.studentName}, Phone: ${entry.contactNo}`,
-        meetingNotes: `Parent submitted self-registration from mobile phone at ${dmy} ${timeStr}.`
-      };
-
-      const updatedCounselling = [newEnquiry, ...counsellingData];
-      writeCounsellingData(updatedCounselling);
-    } catch (e) {
-      console.warn("Could not auto-inject into counselling json:", e);
-    }
-
-    return res.json({ success: true, entry });
-  });
-
-  // POST claim parent entry
-  app.post("/api/parent-self-entry/claim", (req, res) => {
-    const entryId = req.body.entryId || req.body.id;
-    const counsellorName = req.body.counsellorName || req.body.counsellorId || "Counsellor";
-    if (!entryId) {
-      return res.status(400).json({ success: false, message: "Missing entryId" });
-    }
-    const current = readParentEntries();
-    const idx = current.findIndex((e: any) => e.id === entryId);
-    if (idx >= 0) {
-      current[idx].status = "claimed";
-      current[idx].claimedBy = counsellorName;
-      current[idx].claimedAt = new Date().toISOString();
-      writeParentEntries(current);
-    }
-    return res.json({ success: true, entries: current });
-  });
 
   // Cloud Run & Load Balancer Health Check
   app.get(["/healthz", "/health", "/api/health"], (_req, res) => {
@@ -3961,7 +4103,11 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
   });
 
   // Static Asset Serving (Production & Dist fallback) vs Vite Dev Middleware
-  const distPath = path.join(process.cwd(), "dist");
+  // Static Asset Serving (Production & Dist fallback) vs Vite Dev Middleware
+  const resolvedDir = typeof import.meta.dirname === "string" ? import.meta.dirname : process.cwd();
+  const distPath = fs.existsSync(path.join(process.cwd(), "dist", "index.html"))
+    ? path.join(process.cwd(), "dist")
+    : path.join(resolvedDir, "dist");
   const hasDist = fs.existsSync(path.join(distPath, "index.html"));
 
   let isListening = false;
@@ -3984,10 +4130,13 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
     });
   };
 
-  const isProduction = process.env.NODE_ENV === "production" && hasDist;
+  // In Cloud Run deployment or when starting pre-built app, prioritize serving the pre-built dist bundle
+  // Only mount Vite dev server if explicitly running the 'dev' npm script or when dist has not been generated
+  const isDevCommand = process.env.npm_lifecycle_event === "dev";
+  const isProduction = (process.env.NODE_ENV === "production" || !isDevCommand) && hasDist;
 
   if (isProduction) {
-    app.use(express.static(distPath));
+    app.use(express.static(distPath, { maxAge: "1d", etag: true }));
     app.get("*", (req, res, next) => {
       if (req.path.startsWith("/api/")) return next();
       const indexPath = path.join(distPath, "index.html");
@@ -4002,7 +4151,7 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
     try {
       const { createServer: createViteServer } = await import("vite");
       const viteDevServer = await createViteServer({
-        server: { middlewareMode: true },
+        server: { middlewareMode: true, hmr: false },
         appType: "custom",
       });
       app.use(viteDevServer.middlewares);

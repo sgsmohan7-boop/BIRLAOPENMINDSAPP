@@ -34,7 +34,11 @@ export default defineConfig(() => {
         'framer-motion',
         'firebase/app',
         'firebase/firestore',
-        'firebase/auth'
+        'firebase/auth',
+        'recharts',
+        'jspdf',
+        'jspdf-autotable',
+        '@vis.gl/react-google-maps'
       ]
     },
     build: {
@@ -58,6 +62,7 @@ export default defineConfig(() => {
       },
     },
     resolve: {
+      dedupe: ['react', 'react-dom', 'react-dom/client'],
       alias: {
         '@': path.resolve(__dirname, '.'),
       },

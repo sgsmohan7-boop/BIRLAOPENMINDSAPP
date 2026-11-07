@@ -481,6 +481,7 @@ export async function getNextDailyTokenNo(dmy: string, dateKey: string): Promise
       const list = JSON.parse(raw);
       if (Array.isArray(list)) {
         list.forEach((e: any) => {
+          if (e.enquiryType === "online") return; // Online enquiries never consume walk-in daily tokens
           const itemDate = e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
           if (itemDate === dmy || e.dateKey === dateKey) {
             const num = Number(e.dailyTokenNo);
@@ -502,6 +503,7 @@ export async function getNextDailyTokenNo(dmy: string, dateKey: string): Promise
       if (snapshot && 'forEach' in snapshot) {
         snapshot.forEach((d) => {
           const e = d.data();
+          if (e.enquiryType === "online") return; // Online enquiries never consume walk-in daily tokens
           const itemDate = e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
           if (itemDate === dmy || e.dateKey === dateKey) {
             const num = Number(e.dailyTokenNo);
@@ -536,6 +538,7 @@ export async function getNextDailyTokenNo(dmy: string, dateKey: string): Promise
       const data: any = await res.json();
       if (data && data.success && Array.isArray(data.entries)) {
         data.entries.forEach((e: any) => {
+          if (e.enquiryType === "online") return; // Online enquiries never consume walk-in daily tokens
           const itemDate = e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
           if (itemDate === dmy || e.dateKey === dateKey) {
             const num = Number(e.dailyTokenNo);

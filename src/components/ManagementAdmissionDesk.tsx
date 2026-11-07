@@ -420,9 +420,14 @@ export default function ManagementAdmissionDesk({
                                 <span className="font-mono text-[10px] text-slate-400">{cand.enquiryNo}</span>
                               </div>
 
-                              <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
+                              <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400 flex-wrap gap-1">
                                 <span>Parent: {cand.fatherName || cand.motherName || "—"}</span>
-                                <span className="font-mono">{cand.contactNo}</span>
+                                <div className="flex items-center gap-1.5 font-mono text-[10px]">
+                                  <span className="text-cyan-600 dark:text-cyan-400 font-bold">📞 {cand.contactNo}</span>
+                                  {cand.whatsappNo && cand.whatsappNo !== cand.contactNo && (
+                                    <span className="text-emerald-600 dark:text-emerald-400 font-bold">💬 {cand.whatsappNo}</span>
+                                  )}
+                                </div>
                               </div>
 
                               <div className="flex items-center justify-between pt-1 border-t border-slate-200/40 dark:border-slate-700/40">
@@ -486,7 +491,13 @@ export default function ManagementAdmissionDesk({
                       <span>{cand.studentName}</span>
                       <span className="text-[10px] font-mono px-1.5 py-0.5 bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200 rounded">{cand.applyingForClass}</span>
                     </div>
-                    <p className="text-[11px] text-slate-500">Contact: {cand.contactNo} | Counsellor: {cand.counsellorName}</p>
+                    <p className="text-[11px] text-slate-500 flex items-center gap-1.5 flex-wrap">
+                      <span>📞 {cand.contactNo}</span>
+                      {cand.whatsappNo && cand.whatsappNo !== cand.contactNo && (
+                        <span>💬 {cand.whatsappNo}</span>
+                      )}
+                      <span>| Counsellor: {cand.counsellorName}</span>
+                    </p>
                   </div>
                 ))}
               </div>

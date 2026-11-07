@@ -38,6 +38,7 @@ export class PortalErrorBoundary extends Component<Props, State> {
 
   handleReset = () => {
     this.setState({ hasError: false, error: null, errorInfo: null });
+
     if (this.props.onReset) {
       try {
         this.props.onReset();

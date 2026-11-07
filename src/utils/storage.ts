@@ -1,4 +1,5 @@
 import { Ticket, InventoryItem, Room, EmployeeAllocation, WarrantyContract, SchoolBranch, CounsellingEnquiry, CounsellorAccount, DEFAULT_COUNSELLOR_ACCOUNTS, ITStaffAccount, DEFAULT_IT_STAFF_ACCOUNTS, ArchivedITStaffAccount } from "../types";
+import { isObsoleteOrDuplicateCounsellorAccount, normalizeCounsellorIdentity, normalizeEnquiryCounsellor, CANONICAL_COUNSELLORS, cleanAndNormalizeCounsellorAccounts } from "./counsellorNormalizer";
 
 export const DEMO_COUNSELLING: CounsellingEnquiry[] = [
   {
@@ -474,7 +475,8 @@ export const deduplicateEnquiries = (items: CounsellingEnquiry[]): CounsellingEn
 
   for (const rawItem of items) {
     if (!rawItem) continue;
-    const item = { ...rawItem };
+    const { normalized } = normalizeEnquiryCounsellor(rawItem);
+    const item = { ...normalized };
     const idKey = (item.id || "").trim().toLowerCase();
     const noKey = (item.enquiryNo || "").trim().toLowerCase();
 
@@ -723,6 +725,14 @@ export const mergeWithDefaultCounsellorAccounts = (
   const localDeleted = getDeletedCounsellorAccountIds().map(d => d.toLowerCase());
   const extraClean = (extraDeletedIds || []).map(d => String(d).toLowerCase());
   const deletedSet = new Set([...localDeleted, ...extraClean]);
+
+  // Permanently blacklist obsolete duplicate alias accounts from ever showing up
+  deletedSet.add("r sowjanya");
+  deletedSet.add("rsowjanya");
+  deletedSet.add("r.sowjanya");
+  deletedSet.add("r_sowjanya");
+  deletedSet.add("kavyarao");
+
   // Never treat core staff as deleted
   deletedSet.delete("radhika");
   deletedSet.delete("counsellor-01");
@@ -741,8 +751,31 @@ export const mergeWithDefaultCounsellorAccounts = (
 
   const addAccount = (acc: CounsellorAccount) => {
     if (!acc || !acc.username) return;
+    if (isObsoleteOrDuplicateCounsellorAccount(acc)) return;
+
     let userLower = acc.username.trim().toLowerCase();
     const idLower = (acc.id || "").trim().toLowerCase();
+    const nameLower = (acc.name || "").trim().toLowerCase();
+
+    // Deduplicate any Sowjanya variation into canonical 'sowjanya'
+    if (
+      userLower === "sowjanya" || 
+      userLower.includes("sowjanya") || 
+      nameLower.includes("sowjanya") || 
+      idLower === "counsellor-03"
+    ) {
+      userLower = "sowjanya";
+    }
+
+    // Deduplicate any Kavya variation into canonical 'kavya'
+    if (
+      userLower === "kavya" || 
+      userLower.includes("kavya") || 
+      nameLower.includes("kavya") || 
+      idLower === "counsellor-04"
+    ) {
+      userLower = "kavya";
+    }
 
     // Skip if explicitly deleted by user action
     if (deletedSet.has(idLower) || deletedSet.has(userLower)) return;
@@ -781,12 +814,12 @@ export const mergeWithDefaultCounsellorAccounts = (
       ...acc,
       id: finalId,
       username: userLower,
-      name: acc.name ? acc.name.trim() : (userLower === "radhika" ? "RADHIKA DAS V" : userLower === "sravan" ? "sravan" : userLower)
+      name: userLower === "sowjanya" ? "sowjanya" : userLower === "kavya" ? "kavya rao" : acc.name ? acc.name.trim() : (userLower === "radhika" ? "RADHIKA DAS V" : userLower === "sravan" ? "sravan" : userLower),
+      password: userLower === "sowjanya" ? (acc.password || "12345") : userLower === "kavya" ? (acc.password || "12345") : acc.password
     });
   };
 
   // 1. Process custom or dynamic items passed in FIRST (from state, local storage, server, or Firestore)
-  // This ensures user edits, status toggles (active -> inactive), and credential updates take priority!
   if (Array.isArray(items)) {
     items.forEach(addAccount);
   }
@@ -807,7 +840,7 @@ export const mergeWithDefaultCounsellorAccounts = (
   // 3. Process default counsellor accounts THIRD to populate any remaining un-edited default accounts
   DEFAULT_COUNSELLOR_ACCOUNTS.forEach(addAccount);
 
-  return result;
+  return cleanAndNormalizeCounsellorAccounts(result);
 };
 
 export const loadCounsellorAccounts = (): CounsellorAccount[] => {
@@ -817,30 +850,33 @@ export const loadCounsellorAccounts = (): CounsellorAccount[] => {
   const raw = typeof window !== "undefined" ? localStorage.getItem(KEYS.COUNSELLOR_ACCOUNTS) : null;
   if (!raw) {
     const initial = mergeWithDefaultCounsellorAccounts(DEFAULT_COUNSELLOR_ACCOUNTS);
+    const cleaned = cleanAndNormalizeCounsellorAccounts(initial);
     if (typeof window !== "undefined") {
-      try { localStorage.setItem(KEYS.COUNSELLOR_ACCOUNTS, JSON.stringify(initial)); } catch {}
+      try { localStorage.setItem(KEYS.COUNSELLOR_ACCOUNTS, JSON.stringify(cleaned)); } catch {}
     }
-    return initial;
+    return cleaned;
   }
 
   try {
     const loaded = JSON.parse(raw);
     if (!Array.isArray(loaded) || loaded.length === 0) {
       const initial = mergeWithDefaultCounsellorAccounts(DEFAULT_COUNSELLOR_ACCOUNTS);
+      const cleaned = cleanAndNormalizeCounsellorAccounts(initial);
       if (typeof window !== "undefined") {
-        try { localStorage.setItem(KEYS.COUNSELLOR_ACCOUNTS, JSON.stringify(initial)); } catch {}
+        try { localStorage.setItem(KEYS.COUNSELLOR_ACCOUNTS, JSON.stringify(cleaned)); } catch {}
       }
-      return initial;
+      return cleaned;
     }
 
-    // Always merge in default counsellor accounts so old accounts never disappear when adding a new account
+    // Always merge in default counsellor accounts and clean duplicates
     const merged = mergeWithDefaultCounsellorAccounts(loaded);
-    if (merged.length !== loaded.length && typeof window !== "undefined") {
-      try { localStorage.setItem(KEYS.COUNSELLOR_ACCOUNTS, JSON.stringify(merged)); } catch {}
+    const cleaned = cleanAndNormalizeCounsellorAccounts(merged);
+    if (typeof window !== "undefined") {
+      try { localStorage.setItem(KEYS.COUNSELLOR_ACCOUNTS, JSON.stringify(cleaned)); } catch {}
     }
-    return merged;
+    return cleaned;
   } catch {
-    return mergeWithDefaultCounsellorAccounts(DEFAULT_COUNSELLOR_ACCOUNTS);
+    return cleanAndNormalizeCounsellorAccounts(mergeWithDefaultCounsellorAccounts(DEFAULT_COUNSELLOR_ACCOUNTS));
   }
 };
 
@@ -1170,9 +1206,58 @@ export function loadParentSelfEntries(counsellorId?: string): any[] {
 }
 
 export function saveParentSelfEntries(entries: any[]): void {
-  if (typeof window === "undefined") return;
+  if (typeof window === "undefined" || !Array.isArray(entries)) return;
   try {
     localStorage.setItem("sgs_parent_self_entries", JSON.stringify(entries));
+  } catch {}
+}
+
+export function unrecordDismissedParentEntryId(id: string, counsellorId?: string): void {
+  if (typeof window === "undefined" || !id) return;
+  try {
+    const rawGlobal = localStorage.getItem("sgs_dismissed_parent_entries");
+    if (rawGlobal) {
+      const list: string[] = JSON.parse(rawGlobal);
+      localStorage.setItem("sgs_dismissed_parent_entries", JSON.stringify(list.filter(x => x !== id)));
+    }
+    if (counsellorId) {
+      const key = `sgs_dismissed_parent_entries_${counsellorId.toLowerCase()}`;
+      const rawLocal = localStorage.getItem(key);
+      if (rawLocal) {
+        const list: string[] = JSON.parse(rawLocal);
+        localStorage.setItem(key, JSON.stringify(list.filter(x => x !== id)));
+      }
+    }
+  } catch {}
+}
+
+export function saveDismissedParentEntry(entry: any): void {
+  if (typeof window === "undefined" || !entry || !entry.id) return;
+  try {
+    const raw = localStorage.getItem("sgs_archived_dismissed_entries");
+    const list: any[] = raw ? JSON.parse(raw) : [];
+    const updated = [entry, ...list.filter((e: any) => e.id !== entry.id)];
+    localStorage.setItem("sgs_archived_dismissed_entries", JSON.stringify(updated));
+  } catch {}
+}
+
+export function loadDismissedParentEntries(): any[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem("sgs_archived_dismissed_entries");
+    return raw ? JSON.parse(raw) : [];
+  } catch {}
+  return [];
+}
+
+export function removeDismissedParentEntryFromArchive(id: string): void {
+  if (typeof window === "undefined" || !id) return;
+  try {
+    const raw = localStorage.getItem("sgs_archived_dismissed_entries");
+    if (raw) {
+      const list: any[] = JSON.parse(raw);
+      localStorage.setItem("sgs_archived_dismissed_entries", JSON.stringify(list.filter(e => e.id !== id)));
+    }
   } catch {}
 }
 

@@ -57,7 +57,9 @@ import {
   Smartphone,
   Bell,
   School,
-  Zap
+  Globe,
+  Zap,
+  FolderArchive
 } from "lucide-react";
 import AudioMeetingRecorder from "./AudioMeetingRecorder";
 import ManagementAudioDesk from "./ManagementAudioDesk";
@@ -67,11 +69,14 @@ import CounsellingReportModal from "./CounsellingReportModal";
 import ParentKioskModal from "./ParentKioskModal";
 import ReceptionQueueModal from "./ReceptionQueueModal";
 import TokenListReportModal from "./TokenListReportModal";
+import DismissedLeadsModal from "./DismissedLeadsModal";
 import WhatsAppMessageModal from "./WhatsAppMessageModal";
 import { 
   CounsellingEnquiry, 
   AdmissionStatus, 
   getNextEnquiryNo, 
+  getNextOnlineEnquiryNo,
+  recordHighestOnlineEnquiryNumber,
   reserveDraftEnquiryNo,
   releaseDraftReservation,
   recordHighestEnquiryNumber,
@@ -96,12 +101,17 @@ import {
   saveParentSelfEntries,
   getDismissedParentEntryIds,
   recordDismissedParentEntryId,
+  unrecordDismissedParentEntryId,
+  saveDismissedParentEntry,
+  loadDismissedParentEntries,
+  removeDismissedParentEntryFromArchive,
   unmarkDeletedEnquiryId,
   getDeletedEnquiryIds
 } from "../utils/storage";
 import { deleteAudioRecordingBlob, formatAudioDuration } from "../utils/audioStorage";
-import { isFirebaseConfigured, syncCollection, saveDocument, deleteDocument } from "../utils/firebase";
+import { isFirebaseConfigured, syncCollection, saveDocument, deleteDocument, getNextDailyTokenNo } from "../utils/firebase";
 import { printOfficialAdmissionForm } from "../utils/printAdmissionForm";
+import { normalizeCounsellorIdentity } from "../utils/counsellorNormalizer";
 
 function deduplicateParentEntries(entries: ParentSelfEntry[]): ParentSelfEntry[] {
   const dismissedSet = new Set(getDismissedParentEntryIds());
@@ -140,7 +150,15 @@ function deduplicateParentEntries(entries: ParentSelfEntry[]): ParentSelfEntry[]
   }
 
   for (const [, dayItems] of byDate.entries()) {
-    const activeItems = dayItems.filter(i => i.status !== "dismissed");
+    // 1. Online enquiries strictly NEVER get daily tokens
+    dayItems.forEach(i => {
+      if (i.enquiryType === "online") {
+        delete i.dailyTokenNo;
+      }
+    });
+
+    // 2. Physical walk-ins: Strictly sequential daily tokens (1, 2, 3...)
+    const activeItems = dayItems.filter(i => i.status !== "dismissed" && i.enquiryType !== "online");
     
     // Sort chronologically by submittedAt so earlier submitted entries preserve their assigned tokens
     activeItems.sort((a, b) => new Date(a.submittedAt).getTime() - new Date(b.submittedAt).getTime());
@@ -252,6 +270,7 @@ export default function CounsellingPortal({
   const [activeView, setActiveView] = useState<"list" | "form" | "print" | "accounts" | "audio-desk">("list");
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState<string>("ALL");
+  const [filterChannel, setFilterChannel] = useState<"ALL" | "WALKIN" | "ONLINE">("ALL");
   const [filterClass, setFilterClass] = useState<string>("ALL");
   const [filterAuditStatus, setFilterAuditStatus] = useState<string>("ALL");
   const [adminFilterCounsellor, setAdminFilterCounsellor] = useState<string>("ALL");
@@ -286,15 +305,83 @@ export default function CounsellingPortal({
   const [metricAdminCounsellor, setMetricAdminCounsellor] = useState<string>("ALL");
   const [selectedDateChip, setSelectedDateChip] = useState<string | null>(null);
 
-  // Safe enquiries source with deleted IDs filtered out
+  // Safe enquiries source with deleted IDs filtered out & linked sibling audio hydration
   const safeEnquiries = useMemo(() => {
     const list = Array.isArray(enquiries) ? enquiries : [];
     const deletedSet = new Set(getDeletedEnquiryIds().map(x => x.toLowerCase()));
-    return list.filter(e => {
+    const filtered = list.filter(e => {
       if (!e) return false;
       const eId = (e.id || "").toLowerCase();
       const eNo = (e.enquiryNo || "").toLowerCase();
       return (!eId || !deletedSet.has(eId)) && (!eNo || !deletedSet.has(eNo));
+    });
+
+    // Audio map by enquiry number & ID for fast linked sibling resolution
+    const audioMap = new Map<string, any>();
+    filtered.forEach(e => {
+      if (e.audioRecording && (
+        e.audioRecording.audioData || 
+        e.audioRecording.storageKey || 
+        e.audioRecording.driveFileUrl || 
+        e.audioRecording.driveFileId || 
+        e.audioRecording.audioUrl || 
+        e.audioRecording.fileName || 
+        (e.audioRecording.durationSeconds && e.audioRecording.durationSeconds > 0) ||
+        e.audioRecording.meetingTextSummary
+      )) {
+        if (e.enquiryNo) audioMap.set(e.enquiryNo.trim().toLowerCase(), e.audioRecording);
+        if (e.id) audioMap.set(e.id.trim().toLowerCase(), e.audioRecording);
+      }
+    });
+
+    // Ensure linked sibling admissions share the parent meeting audio recording seamlessly
+    return filtered.map(e => {
+      const hasDirectAudio = Boolean(
+        e.audioRecording && (
+          e.audioRecording.audioData || 
+          e.audioRecording.storageKey || 
+          e.audioRecording.driveFileUrl || 
+          e.audioRecording.driveFileId || 
+          e.audioRecording.audioUrl || 
+          e.audioRecording.fileName || 
+          (e.audioRecording.durationSeconds && e.audioRecording.durationSeconds > 0) ||
+          e.audioRecording.meetingTextSummary
+        )
+      );
+
+      if (hasDirectAudio) return e;
+
+      // Check linked sibling enquiry
+      const sibKey = (e.siblingEnquiryNo || "").trim().toLowerCase();
+      let sharedAudio = sibKey ? audioMap.get(sibKey) : null;
+
+      if (!sharedAudio && (e.isSibling || e.siblingStudentName)) {
+        const linkedOther = filtered.find(o =>
+          o !== e && (
+            (o.siblingEnquiryNo && o.siblingEnquiryNo.trim().toLowerCase() === (e.enquiryNo || "").trim().toLowerCase()) ||
+            (o.contactNo && o.contactNo === e.contactNo && o.fatherName === e.fatherName && o.audioRecording)
+          )
+        );
+        if (linkedOther?.audioRecording) {
+          sharedAudio = linkedOther.audioRecording;
+        }
+      }
+
+      if (sharedAudio) {
+        return {
+          ...e,
+          audioRecording: {
+            ...sharedAudio,
+            id: `${sharedAudio.id || e.id || e.enquiryNo}-SIB`,
+            enquiryNo: e.enquiryNo || e.id,
+            studentName: e.studentName,
+            isJointSiblingSession: true,
+            jointSiblingNames: sharedAudio.jointSiblingNames || `${sharedAudio.studentName || 'Child 1'} & ${e.studentName}`
+          }
+        };
+      }
+
+      return e;
     });
   }, [enquiries]);
 
@@ -359,8 +446,9 @@ export default function CounsellingPortal({
       }
     }
 
-    // Periodic fallback server pull (10s)
+    // Periodic fallback server pull (30s, active tabs only)
     const fetchServer = async () => {
+      if (typeof document !== "undefined" && document.hidden) return;
       try {
         const res = await fetch("/api/accounts");
         if (res.ok) {
@@ -375,7 +463,7 @@ export default function CounsellingPortal({
       } catch {}
     };
     fetchServer();
-    const interval = setInterval(fetchServer, 10000);
+    const interval = setInterval(fetchServer, 30000);
 
     return () => {
       clearInterval(interval);
@@ -508,6 +596,43 @@ export default function CounsellingPortal({
     }
   });
 
+  // Online Leads Pool Controls: Minimize (Collapse), Maximize (Expand Grid), and Dismissed Archive
+  const [isOnlinePoolCollapsed, setIsOnlinePoolCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("counselling_online_pool_collapsed") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const [isOnlinePoolMaximized, setIsOnlinePoolMaximized] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("counselling_online_pool_maximized") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const [isDismissedLeadsModalOpen, setIsDismissedLeadsModalOpen] = useState<boolean>(false);
+
+  const toggleOnlinePoolCollapsed = () => {
+    setIsOnlinePoolCollapsed(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem("counselling_online_pool_collapsed", String(next));
+      } catch {}
+      return next;
+    });
+  };
+
+  const toggleOnlinePoolMaximized = () => {
+    setIsOnlinePoolMaximized(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem("counselling_online_pool_maximized", String(next));
+      } catch {}
+      return next;
+    });
+  };
+
   // Active Draft form state for claimed parent lead recovery
   const [activeDraft, setActiveDraft] = useState<any>(() => {
     try {
@@ -612,6 +737,7 @@ export default function CounsellingPortal({
     let unsubscribeFirestore: (() => void) | undefined;
 
     const fetchServerEntries = async () => {
+      if (typeof document !== "undefined" && document.hidden) return;
       try {
         const res = await fetch("/api/parent-self-entry");
         if (res.ok) {
@@ -648,8 +774,8 @@ export default function CounsellingPortal({
       }
     }
 
-    // Relaxed background check (15s) instead of tight 2.5s loop
-    const interval = setInterval(fetchServerEntries, 15000);
+    // Relaxed background check (30s)
+    const interval = setInterval(fetchServerEntries, 30000);
 
     const handleRealtimeEntry = () => {
       fetchServerEntries();
@@ -665,11 +791,12 @@ export default function CounsellingPortal({
     };
   }, []);
 
+  // 1. Reception Walk-in Queue (Strictly In-Person Visits with Daily Tokens)
   const pendingParentEntries = useMemo(() => {
     const counsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR";
     const dismissedSet = new Set(getDismissedParentEntryIds(counsellorId));
     return (parentSelfEntries || [])
-      .filter(e => e.status === "pending" && !dismissedSet.has(e.id))
+      .filter(e => e.status === "pending" && e.enquiryType !== "online" && !dismissedSet.has(e.id))
       .sort((a, b) => {
         const aDate = a.dateKey || a.entryDate || (a.formattedDate ? a.formattedDate.split(" ")[0] : "");
         const bDate = b.dateKey || b.entryDate || (b.formattedDate ? b.formattedDate.split(" ")[0] : "");
@@ -678,6 +805,41 @@ export default function CounsellingPortal({
         }
         return new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime();
       });
+  }, [parentSelfEntries, activeCounsellor]);
+
+  // 2. Online Leads Pool (Remote / Website / WhatsApp QR Enquiries with ONL-YYYY-XX numbers)
+  const pendingOnlineEntries = useMemo(() => {
+    const counsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR";
+    const dismissedSet = new Set(getDismissedParentEntryIds(counsellorId));
+    return (parentSelfEntries || [])
+      .filter(e => e.status === "pending" && e.enquiryType === "online" && !dismissedSet.has(e.id))
+      .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
+  }, [parentSelfEntries, activeCounsellor]);
+
+  // 3. Dismissed Leads & Tokens Archive (Preserves all dismissed entries across counsellors)
+  const dismissedParentEntries = useMemo(() => {
+    const counsellorId = activeCounsellor ? activeCounsellor.id : undefined;
+    const dismissedIds = new Set(getDismissedParentEntryIds(counsellorId));
+    const archivedFromDisk = loadDismissedParentEntries();
+    const map = new Map<string, ParentSelfEntry>();
+
+    // Seed from archived
+    archivedFromDisk.forEach(e => {
+      if (e && e.id) map.set(e.id, { ...e, status: "dismissed" });
+    });
+
+    // Seed from active parentSelfEntries with dismissed status or in dismissedIds
+    (parentSelfEntries || []).forEach(e => {
+      if (e && e.id && (e.status === "dismissed" || dismissedIds.has(e.id))) {
+        map.set(e.id, { ...e, status: "dismissed" });
+      }
+    });
+
+    return Array.from(map.values()).sort((a, b) => {
+      const timeA = a.dismissedAt ? new Date(a.dismissedAt).getTime() : new Date(a.submittedAt).getTime();
+      const timeB = b.dismissedAt ? new Date(b.dismissedAt).getTime() : new Date(b.submittedAt).getTime();
+      return timeB - timeA;
+    });
   }, [parentSelfEntries, activeCounsellor]);
 
   // Automatic Sibling Family Detection in Reception Lounge
@@ -772,19 +934,128 @@ export default function CounsellingPortal({
 
   const handleDismissParentEntry = async (entryId: string) => {
     const counsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR";
+    const counsellorName = activeCounsellor ? activeCounsellor.name : "Admissions Desk";
     recordDismissedParentEntryId(entryId, counsellorId);
 
-    // 1. Remove permanently from React state & LocalStorage
+    const nowStr = new Date().toISOString();
+    const target = parentSelfEntries.find(e => e.id === entryId);
+    const dismissedItem = target ? {
+      ...target,
+      status: "dismissed" as const,
+      dismissedBy: counsellorName,
+      dismissedById: counsellorId,
+      dismissedAt: nowStr,
+      dismissedReason: "Dismissed by counsellor"
+    } : {
+      id: entryId,
+      status: "dismissed" as const,
+      dismissedBy: counsellorName,
+      dismissedById: counsellorId,
+      dismissedAt: nowStr
+    };
+
+    saveDismissedParentEntry(dismissedItem);
+
+    // 1. Update React state & LocalStorage marking status as dismissed (PRESERVED!)
+    const updated = parentSelfEntries.map(e => e.id === entryId ? {
+      ...e,
+      status: "dismissed" as const,
+      dismissedBy: counsellorName,
+      dismissedById: counsellorId,
+      dismissedAt: nowStr
+    } : e);
+    setParentSelfEntries(updated);
+    saveParentSelfEntries(updated);
+
+    // 2. Update Firestore with status: "dismissed" (PRESERVES DATA FOR ALL COUNSELLORS & AUDIT!)
+    try {
+      if (isFirebaseConfigured()) {
+        await saveDocument("parent_self_entries", entryId, {
+          status: "dismissed",
+          dismissedBy: counsellorName,
+          dismissedById: counsellorId,
+          dismissedAt: nowStr
+        });
+      }
+    } catch {}
+
+    // 3. Post to Server to preserve in data/parent_self_entries.json
+    try {
+      await fetch("/api/parent-self-entry/dismiss", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: entryId,
+          counsellorId,
+          counsellorName
+        })
+      });
+    } catch {}
+
+    setDeleteToast("✓ Lead archived to Dismissed Archive. You can view or restore it anytime.");
+    setTimeout(() => setDeleteToast(null), 3500);
+  };
+
+  const handleRestoreDismissedEntry = async (entry: ParentSelfEntry) => {
+    const counsellorId = activeCounsellor ? activeCounsellor.id : undefined;
+    unrecordDismissedParentEntryId(entry.id, counsellorId);
+    removeDismissedParentEntryFromArchive(entry.id);
+
+    const updated = parentSelfEntries.map(e => e.id === entry.id ? {
+      ...e,
+      status: "pending" as const,
+      dismissedBy: undefined,
+      dismissedById: undefined,
+      dismissedAt: undefined,
+      dismissedReason: undefined
+    } : e);
+    setParentSelfEntries(updated);
+    saveParentSelfEntries(updated);
+
+    try {
+      if (isFirebaseConfigured()) {
+        await saveDocument("parent_self_entries", entry.id, {
+          status: "pending",
+          dismissedBy: null,
+          dismissedById: null,
+          dismissedAt: null,
+          dismissedReason: null
+        });
+      }
+    } catch {}
+
+    try {
+      await fetch("/api/parent-self-entry/restore", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: entry.id })
+      });
+    } catch {}
+
+    setDeleteToast(`✓ Restored ${entry.studentName} back to active pool!`);
+    setTimeout(() => setDeleteToast(null), 3500);
+  };
+
+  const handlePermanentDeleteEntry = async (entryId: string) => {
+    const counsellorId = activeCounsellor ? activeCounsellor.id : undefined;
+    recordDismissedParentEntryId(entryId, counsellorId);
+    removeDismissedParentEntryFromArchive(entryId);
+
     const updated = parentSelfEntries.filter(e => e.id !== entryId);
     setParentSelfEntries(updated);
     saveParentSelfEntries(updated);
 
-    // 2. Permanently delete from Firestore database
     try {
-      await deleteDocument("parent_self_entries", entryId);
+      if (isFirebaseConfigured()) {
+        await deleteDocument("parent_self_entries", entryId);
+      }
     } catch {}
 
-    setDeleteToast("✓ Test token / Parent entry deleted permanently.");
+    try {
+      await fetch(`/api/parent-self-entry/${entryId}`, { method: "DELETE" });
+    } catch {}
+
+    setDeleteToast("✓ Lead permanently deleted from database.");
     setTimeout(() => setDeleteToast(null), 3000);
   };
 
@@ -870,11 +1141,17 @@ export default function CounsellingPortal({
       });
     } catch {}
 
-    // Generate clean Enquiry ID and auto-fill form
-    const draftNo = getNextEnquiryNo(safeEnquiries);
+    // Generate clean Enquiry ID and auto-fill form (preserving ONL- for online, ENQ- for walkin)
+    const isOnline = entry.enquiryType === "online";
+    const draftNo = isOnline 
+      ? (entry.onlineRefNo || entry.id || getNextOnlineEnquiryNo(safeEnquiries))
+      : getNextEnquiryNo(safeEnquiries);
+
     const newClaimedData: CounsellingEnquiry = {
       id: draftNo,
       enquiryNo: draftNo,
+      enquiryType: isOnline ? "online" : "walkin",
+      onlineRefNo: isOnline ? draftNo : undefined,
       date: new Date().toLocaleDateString("en-GB").replace(/\//g, "-"),
       studentName: entry.studentName,
       applyingForClass: entry.applyingForClass || "Grade 1",
@@ -889,7 +1166,7 @@ export default function CounsellingPortal({
       previousClass: entry.previousClass || "",
       residentialAddress: entry.residentialAddress || "",
       heardAboutSchool: entry.heardAboutSchool && entry.heardAboutSchool.length > 0 ? entry.heardAboutSchool : [],
-      reasonForChoosing: entry.reasonForChoosing || "",
+      reasonForChoosing: entry.reasonForChoosing || (isOnline ? "Online Enquiry (Web / Social Media QR)" : "Campus Reception Walk-in"),
       preferredContact: entry.preferredContact || "Call",
       bestTimeToContact: "",
       academicPerformance: "",
@@ -901,7 +1178,9 @@ export default function CounsellingPortal({
       specialLearningSupport: entry.specialLearningSupport || false,
       specialLearningDetails: "",
       pointsDiscussed: "",
-      counsellorObservations: "",
+      counsellorObservations: isOnline 
+        ? `[ONLINE LEAD CLAIMED]: Parent submitted enquiry online (${draftNo}). Counsellor initiated telephonic counselling.`
+        : "",
       explainedSchoolFacilities: false,
       explainedAcademicProgramme: false,
       explainedFeeStructure: false,
@@ -917,18 +1196,199 @@ export default function CounsellingPortal({
       updatedAt: new Date().toLocaleDateString()
     };
 
-    setFormData(newClaimedData);
+    if (entry.hasSibling && entry.siblingDetails) {
+      // Single QR entry contains both siblings! Auto-populate Child 1 & Child 2 side-by-side
+      let draftNo2 = "";
+      if (isOnline) {
+        draftNo2 = entry.siblingDetails.onlineRefNo || "";
+        if (!draftNo2) {
+          const match = draftNo.match(/ONL-.*-(\d+)/i) || draftNo.match(/(\d+)$/);
+          const startNum = match ? parseInt(match[1] || match[0], 10) : 1;
+          const formatPad = (n: number) => n < 100 ? String(n).padStart(2, "0") : String(n);
+          draftNo2 = `ONL-${new Date().getFullYear()}-${formatPad(startNum + 1)}`;
+        }
+      } else {
+        const draftMatch = draftNo.match(/ENQ-.*-(\d+)/i) || draftNo.match(/(\d+)$/);
+        const startNum = draftMatch ? parseInt(draftMatch[1] || draftMatch[0], 10) : 1;
+        draftNo2 = `ENQ-${new Date().getFullYear()}-${String(startNum + 1).padStart(2, "0")}`;
+      }
 
-    const draftObj = { formData: newClaimedData, entry, claimedAt: new Date().toISOString() };
-    try { localStorage.setItem("bomis_counsellor_active_draft", JSON.stringify(draftObj)); } catch {}
-    setActiveDraft(draftObj);
+      const sibClaimedData: CounsellingEnquiry = {
+        ...newClaimedData,
+        id: draftNo2,
+        enquiryNo: draftNo2,
+        enquiryType: isOnline ? "online" : "walkin",
+        onlineRefNo: isOnline ? draftNo2 : undefined,
+        studentName: entry.siblingDetails.studentName,
+        applyingForClass: entry.siblingDetails.applyingForClass || "PP1 (LKG)",
+        dateOfBirth: entry.siblingDetails.dateOfBirth || "",
+        gender: (entry.siblingDetails.gender === "Female" ? "Female" : "Male"),
+        previousSchool: entry.siblingDetails.previousSchool || entry.previousSchool || "",
+        isSibling: true,
+        siblingEnquiryNo: draftNo,
+        siblingStudentName: entry.studentName,
+        siblingClass: entry.applyingForClass
+      };
 
-    setSelectedEnquiry(null);
+      newClaimedData.isSibling = true;
+      newClaimedData.siblingEnquiryNo = draftNo2;
+      newClaimedData.siblingStudentName = entry.siblingDetails.studentName;
+      newClaimedData.siblingClass = entry.siblingDetails.applyingForClass;
+
+      setFormData(newClaimedData);
+      setSiblingFormData(sibClaimedData);
+      setIsJointSiblingMode(true);
+      setLinkedSiblingTokens([entry]);
+
+      const draftObj = { formData: newClaimedData, siblingFormData: sibClaimedData, entry, isJointSibling: true, claimedAt: new Date().toISOString() };
+      try { localStorage.setItem("bomis_counsellor_active_draft", JSON.stringify(draftObj)); } catch {}
+      setActiveDraft(draftObj);
+
+      setSelectedEnquiry(null);
+      setActiveView("form");
+      setDeleteToast(`👨‍👩‍👧‍👦 Claimed Sibling ${isOnline ? "Online Lead" : "Walk-in"} for ${entry.studentName} & ${entry.siblingDetails.studentName}!`);
+      setTimeout(() => setDeleteToast(null), 4000);
+    } else {
+      setFormData(newClaimedData);
+      setSiblingFormData(null);
+      setIsJointSiblingMode(false);
+      setLinkedSiblingTokens([]);
+
+      const draftObj = { formData: newClaimedData, entry, claimedAt: new Date().toISOString() };
+      try { localStorage.setItem("bomis_counsellor_active_draft", JSON.stringify(draftObj)); } catch {}
+      setActiveDraft(draftObj);
+
+      setSelectedEnquiry(null);
+      setActiveView("form");
+      setDeleteToast(`✓ Claimed ${isOnline ? `Online Lead (#${draftNo})` : `Walk-in (${draftNo})`} for ${entry.studentName}! Form opened.`);
+      setTimeout(() => setDeleteToast(null), 4000);
+    }
+  };
+
+  const handleConvertOnlineToWalkin = async (entry: ParentSelfEntry) => {
+    const now = new Date();
+    const dmy = now.toLocaleDateString("en-GB").replace(/\//g, "-");
+    const dateKey = now.toISOString().split("T")[0];
+    let nextToken = 1;
+    try {
+      nextToken = await getNextDailyTokenNo(dmy, dateKey);
+    } catch {
+      nextToken = 1;
+    }
+
+    const updatedEntry: ParentSelfEntry = {
+      ...entry,
+      enquiryType: "walkin",
+      dailyTokenNo: nextToken,
+      entryDate: dmy,
+      dateKey,
+      reasonForChoosing: `${entry.reasonForChoosing || "Online Lead"} (Visited Campus in Person)`
+    };
+
+    const updated = parentSelfEntries.map(e => e.id === entry.id ? updatedEntry : e);
+    setParentSelfEntries(updated);
+    saveParentSelfEntries(updated);
+
+    if (isFirebaseConfigured()) {
+      try {
+        await saveDocument("parent_self_entries", entry.id, updatedEntry);
+      } catch {}
+    }
+
+    fetch("/api/parent-self-entry", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updatedEntry)
+    }).catch(() => {});
+
+    setDeleteToast(`🏛️ Converted ${entry.studentName} to Campus Walk-in! Assigned Queue Token #${nextToken}.`);
+    setTimeout(() => setDeleteToast(null), 4000);
+  };
+
+  const handleEnableSiblingMode = async () => {
+    const currentYear = new Date().getFullYear();
+    const curMatch = formData.enquiryNo.match(/ENQ-.*-(\d+)/i) || formData.enquiryNo.match(/(\d+)$/);
+    const startNum = curMatch ? parseInt(curMatch[1] || curMatch[0], 10) : 1;
+    let sibNo = `ENQ-${currentYear}-${String(startNum + 1).padStart(2, "0")}`;
+
+    const defaultCounsellor = activeCounsellor || localAccounts[0];
+    try {
+      const res = await fetch("/api/counselling/reserve-enquiry-number", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          counsellorId: defaultCounsellor?.id || "COUNSELLOR-01",
+          counsellorName: defaultCounsellor?.name || "Admissions Counsellor",
+          isSiblingRequest: true,
+          currentPrimaryEnquiryNo: formData.enquiryNo
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.enquiryNo) {
+          sibNo = data.enquiryNo;
+        }
+      }
+    } catch {}
+
+    const sibData: CounsellingEnquiry = {
+      ...formData,
+      id: sibNo,
+      enquiryNo: sibNo,
+      studentName: "",
+      applyingForClass: "PP1 (LKG)",
+      dateOfBirth: "",
+      gender: "Female",
+      previousSchool: formData.previousSchool || "",
+      previousClass: "",
+      studentInterests: "",
+      academicPerformance: "",
+      strengths: "",
+      areasNeedingSupport: "",
+      admissionStatus: formData.admissionStatus || "Interested",
+      isSibling: true,
+      siblingEnquiryNo: formData.enquiryNo,
+      siblingStudentName: formData.studentName || "Child 1",
+      siblingClass: formData.applyingForClass
+    };
+
+    setFormData(prev => ({
+      ...prev,
+      isSibling: true,
+      siblingEnquiryNo: sibNo,
+      siblingStudentName: "Child 2",
+      siblingClass: "PP1 (LKG)"
+    }));
+    setSiblingFormData(sibData);
+    setIsJointSiblingMode(true);
+    setDeleteToast("👨‍👩‍👧‍👦 Sibling Admission Mode enabled! Extra columns for Child 2 are now ready.");
+    setTimeout(() => setDeleteToast(null), 3500);
+  };
+
+  const handleDisableSiblingMode = () => {
+    const sibNo = siblingFormData?.enquiryNo;
+    if (sibNo) {
+      try {
+        fetch("/api/counselling/release-reservation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enquiryNo: sibNo })
+        }).catch(() => {});
+      } catch {}
+    }
     setIsJointSiblingMode(false);
     setSiblingFormData(null);
-    setActiveView("form");
-    setDeleteToast(`✓ Claimed ${entry.studentName}'s enquiry! Form auto-populated successfully.`);
-    setTimeout(() => setDeleteToast(null), 4000);
+    setLinkedSiblingTokens([]);
+    setFormData(prev => ({
+      ...prev,
+      isSibling: false,
+      siblingEnquiryNo: undefined,
+      siblingStudentName: undefined,
+      siblingClass: undefined,
+      jointSiblingData: undefined
+    }));
+    setDeleteToast("✓ Switched to Single Student Form mode (Child 1 only). All details preserved.");
+    setTimeout(() => setDeleteToast(null), 3500);
   };
 
   const handleStartJointSiblingCounselling = async (entry1: ParentSelfEntry, entry2: ParentSelfEntry) => {
@@ -1510,34 +1970,19 @@ export default function CounsellingPortal({
   // ISOLATION: Each Counsellor sees ONLY their own data ("averi data vallaki kanipinchali")
   const counsellorScopeEnquiries = useMemo(() => {
     if (userRole === "Counsellor" && activeCounsellor) {
+      const myNorm = normalizeCounsellorIdentity(activeCounsellor.name, activeCounsellor.id);
       const filtered = safeEnquiries.filter(e => {
-        const normC = (e.counsellorId || "").trim().toLowerCase().replace("-0", "-");
-        const normA = (activeCounsellor.id || "").trim().toLowerCase().replace("-0", "-");
-        const idMatch = Boolean(
-          e.counsellorId && activeCounsellor.id && 
-          (e.counsellorId.trim().toLowerCase() === activeCounsellor.id.trim().toLowerCase() || normC === normA)
-        );
-        const cName = (e.counsellorName || "").trim().toLowerCase();
-        const aName = (activeCounsellor.name || "").trim().toLowerCase();
-        const uName = (activeCounsellor.username || "").trim().toLowerCase();
-        const nameMatch = Boolean(
-          cName.length > 0 && aName.length > 0 && 
-          (cName === aName || cName.includes(aName) || aName.includes(cName))
-        );
-        const usernameMatch = Boolean(
-          uName.length > 0 && (cName === uName || cName.includes(uName) || uName.includes(cName))
-        );
-        return idMatch || nameMatch || usernameMatch;
+        const eNorm = normalizeCounsellorIdentity(e.counsellorName, e.counsellorId);
+        return eNorm.id === myNorm.id;
       });
       return filtered;
     }
     // If Admin/Super Admin/Management, respect the admin filter dropdown
     if (adminFilterCounsellor !== "ALL") {
+      const targetNorm = normalizeCounsellorIdentity(adminFilterCounsellor);
       const filtered = safeEnquiries.filter(e => {
-        return (
-          e.counsellorId === adminFilterCounsellor || 
-          e.counsellorName?.toLowerCase().includes(adminFilterCounsellor.toLowerCase())
-        );
+        const eNorm = normalizeCounsellorIdentity(e.counsellorName, e.counsellorId);
+        return eNorm.id === targetNorm.id;
       });
       return filtered;
     }
@@ -1612,24 +2057,28 @@ export default function CounsellingPortal({
 
   const [formData, setFormData] = useState<CounsellingEnquiry>(initialFormState);
 
-  // Keep draft form enquiry number in sync with latest database count until user starts entering student name
-  React.useEffect(() => {
-    if (activeView === "form" && !selectedEnquiry && (!formData.studentName || !formData.studentName.trim())) {
-      const defaultCounsellor = activeCounsellor || localAccounts[0];
-      const freshNo = getNextEnquiryNo(safeEnquiries, defaultCounsellor?.id);
-      if (formData.enquiryNo !== freshNo) {
-        setFormData(prev => ({
-          ...prev,
-          id: freshNo,
-          enquiryNo: freshNo
-        }));
-      }
-    }
-  }, [safeEnquiries, activeView, selectedEnquiry, activeCounsellor, localAccounts]);
-
-  const startNewEnquiry = () => {
+  const startNewEnquiry = async () => {
     const defaultCounsellor = activeCounsellor || localAccounts[0];
-    const nextNo = getNextEnquiryNo(safeEnquiries, defaultCounsellor?.id);
+    let nextNo = getNextEnquiryNo(safeEnquiries, defaultCounsellor?.id);
+
+    try {
+      const res = await fetch("/api/counselling/reserve-enquiry-number", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          counsellorId: defaultCounsellor?.id || "COUNSELLOR-01",
+          counsellorName: defaultCounsellor?.name || "Admissions Counsellor",
+          isSiblingRequest: false
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.enquiryNo) {
+          nextNo = data.enquiryNo;
+        }
+      }
+    } catch {}
+
     if (defaultCounsellor?.id) {
       reserveDraftEnquiryNo(defaultCounsellor.id, nextNo, defaultCounsellor.name);
     }
@@ -1649,6 +2098,24 @@ export default function CounsellingPortal({
     const defaultCounsellor = activeCounsellor || localAccounts[0];
     if (defaultCounsellor?.id) {
       releaseDraftReservation(defaultCounsellor.id);
+    }
+    if (formData.enquiryNo) {
+      try {
+        fetch("/api/counselling/release-reservation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enquiryNo: formData.enquiryNo, counsellorId: defaultCounsellor?.id })
+        }).catch(() => {});
+      } catch {}
+    }
+    if (siblingFormData?.enquiryNo) {
+      try {
+        fetch("/api/counselling/release-reservation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enquiryNo: siblingFormData.enquiryNo })
+        }).catch(() => {});
+      } catch {}
     }
     setSelectedEnquiry(null);
     setActiveView("list");
@@ -1685,6 +2152,11 @@ export default function CounsellingPortal({
       setTimeout(() => setDeleteToast(null), 3500);
       return;
     }
+    if (isJointSiblingMode && siblingFormData && !siblingFormData.studentName.trim()) {
+      setDeleteToast("⚠️ Please enter Sibling (Child 2) Student Name before saving.");
+      setTimeout(() => setDeleteToast(null), 3500);
+      return;
+    }
     if (!formData.fatherName || !formData.fatherName.trim()) {
       setDeleteToast("⚠️ Please enter Father's Name (mandatory field *).");
       setTimeout(() => setDeleteToast(null), 3500);
@@ -1704,6 +2176,9 @@ export default function CounsellingPortal({
       setDeleteToast("⚠️ Please enter Previous School & Board (mandatory field *).");
       setTimeout(() => setDeleteToast(null), 3500);
       return;
+    }
+    if (isJointSiblingMode && siblingFormData && (!siblingFormData.previousSchool || !siblingFormData.previousSchool.trim())) {
+      siblingFormData.previousSchool = formData.previousSchool;
     }
     if (!formData.contactNo.trim()) {
       formData.contactNo = "9876543210";
@@ -1814,10 +2289,18 @@ export default function CounsellingPortal({
       const jointNames = `${updated.studentName} (${updated.applyingForClass}) & ${siblingFormData.studentName} (${siblingFormData.applyingForClass})`;
       const jointEnqs = [updated.enquiryNo, sibCandidateNo];
 
-      if (updated.audioRecording) {
-        updated.audioRecording.isJointSiblingSession = true;
-        updated.audioRecording.jointSiblingEnquiries = jointEnqs;
-        updated.audioRecording.jointSiblingNames = jointNames;
+      // Sibling admissions share a single joint meeting audio recording
+      const sharedAudio = updated.audioRecording || siblingFormData.audioRecording || formData.audioRecording;
+
+      if (sharedAudio) {
+        updated.audioRecording = {
+          ...sharedAudio,
+          enquiryNo: updated.enquiryNo,
+          studentName: updated.studentName,
+          isJointSiblingSession: true,
+          jointSiblingEnquiries: jointEnqs,
+          jointSiblingNames: jointNames
+        };
       }
 
       const sibUpdated: CounsellingEnquiry = {
@@ -1826,13 +2309,37 @@ export default function CounsellingPortal({
         enquiryNo: sibCandidateNo,
         counsellorId: assignedCounsellorId,
         counsellorName: assignedCounsellorName,
+        date: updated.date,
+        academicYear: updated.academicYear,
+        fatherName: updated.fatherName,
+        motherName: updated.motherName,
+        contactNo: updated.contactNo,
+        whatsappNo: updated.whatsappNo,
+        residentialAddress: updated.residentialAddress,
+        heardAboutSchool: updated.heardAboutSchool,
+        reasonForChoosing: updated.reasonForChoosing,
+        preferredContact: updated.preferredContact,
+        bestTimeToContact: updated.bestTimeToContact,
+        pointsDiscussed: updated.pointsDiscussed,
+        counsellorObservations: updated.counsellorObservations,
+        explainedSchoolFacilities: updated.explainedSchoolFacilities,
+        explainedAcademicProgramme: updated.explainedAcademicProgramme,
+        explainedFeeStructure: updated.explainedFeeStructure,
+        explainedTransportDetails: updated.explainedTransportDetails,
+        explainedSchoolRules: updated.explainedSchoolRules,
+        explainedActivitiesSports: updated.explainedActivitiesSports,
+        transportRequired: siblingFormData.transportRequired !== undefined ? siblingFormData.transportRequired : updated.transportRequired,
+        admissionStatus: siblingFormData.admissionStatus || updated.admissionStatus,
+        followUpDate: (applyFollowUpToSibling || !siblingFormData.followUpDate) ? updated.followUpDate : siblingFormData.followUpDate,
+        officeRemarks: updated.officeRemarks,
+        parentSignatureRecorded: updated.parentSignatureRecorded,
         isSibling: true,
         siblingEnquiryNo: updated.enquiryNo,
         siblingStudentName: updated.studentName,
         siblingClass: updated.applyingForClass,
-        audioRecording: updated.audioRecording ? {
-          ...updated.audioRecording,
-          id: `${updated.audioRecording.id}-SIB`,
+        audioRecording: sharedAudio ? {
+          ...sharedAudio,
+          id: `${sharedAudio.id || sibCandidateNo}-SIB`,
           enquiryNo: sibCandidateNo,
           studentName: siblingFormData.studentName,
           isJointSiblingSession: true,
@@ -1989,9 +2496,13 @@ export default function CounsellingPortal({
         (filterAuditStatus === "NEEDS_ACTION" && item.audioRecording?.reviewStatus === "Follow-up Required" && !item.audioRecording?.counsellorActionTaken) ||
         (filterAuditStatus === "PENDING" && item.audioRecording && (!item.audioRecording.reviewStatus || item.audioRecording.reviewStatus === "Pending"));
 
-      return matchQuery && matchStatus && matchClass && matchAudit;
+      const matchChannel = filterChannel === "ALL" || 
+        (filterChannel === "ONLINE" && (item.enquiryType === "online" || item.enquiryNo?.startsWith("ONL-"))) ||
+        (filterChannel === "WALKIN" && item.enquiryType !== "online" && !item.enquiryNo?.startsWith("ONL-"));
+
+      return matchQuery && matchStatus && matchClass && matchAudit && matchChannel;
     });
-  }, [counsellorScopeEnquiries, searchQuery, filterStatus, filterClass, filterAuditStatus]);
+  }, [counsellorScopeEnquiries, searchQuery, filterStatus, filterChannel, filterClass, filterAuditStatus]);
 
   // Statistics for active scope
   const stats = useMemo(() => {
@@ -3570,6 +4081,20 @@ Warm regards,
 
               <button
                 type="button"
+                onClick={() => setIsDismissedLeadsModalOpen(true)}
+                className={`px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer shadow-xs active:scale-95 flex items-center gap-1 border ${
+                  pendingParentEntries.length > 0
+                    ? "bg-white/20 hover:bg-white/30 text-white border-white/30"
+                    : "bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700"
+                }`}
+                title={`View Dismissed Leads Archive (${dismissedParentEntries.length} archived)`}
+              >
+                <FolderArchive size={13} className={pendingParentEntries.length > 0 ? "text-amber-200" : "text-amber-500"} />
+                <span>🗄️ Dismissed ({dismissedParentEntries.length})</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => {
                   setParentKioskDefaultMode("print_qr");
                   setIsParentKioskModalOpen(true);
@@ -3728,6 +4253,15 @@ Warm regards,
                               </div>
 
                               {/* Sibling detection badge */}
+                              {entry.hasSibling && entry.siblingDetails && (
+                                <div className="mt-1.5 flex items-center gap-1.5">
+                                  <span className="px-2.5 py-1 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 text-white text-[11px] font-black flex items-center gap-1.5 shadow-sm">
+                                    <span>👨‍👩‍👧‍👦</span>
+                                    <span>Sibling Registered: <strong>{entry.siblingDetails.studentName}</strong> (Class {entry.siblingDetails.applyingForClass})</span>
+                                  </span>
+                                </div>
+                              )}
+
                               {(() => {
                                 const cleanCurPhone = (entry.contactNo || "").replace(/\D/g, "");
                                 const waitingSibling = pendingParentEntries.find(p => p.id !== entry.id && (
@@ -3735,7 +4269,7 @@ Warm regards,
                                   (entry.linkedSiblingEntryId && p.id === entry.linkedSiblingEntryId) ||
                                   (p.linkedSiblingEntryId && p.linkedSiblingEntryId === entry.id)
                                 ));
-                                if (!waitingSibling) return null;
+                                if (!waitingSibling || (entry.hasSibling && entry.siblingDetails)) return null;
                                 return (
                                   <div className="mt-1.5 flex items-center gap-1.5">
                                     <span className="px-2 py-0.5 rounded-md bg-purple-500/30 border border-purple-400/50 text-purple-200 text-[10px] font-bold flex items-center gap-1">
@@ -3791,7 +4325,7 @@ Warm regards,
                               (entry.linkedSiblingEntryId && p.id === entry.linkedSiblingEntryId) ||
                               (p.linkedSiblingEntryId && p.linkedSiblingEntryId === entry.id)
                             ));
-                            if (waitingSibling) {
+                            if (waitingSibling && (!entry.hasSibling || !entry.siblingDetails)) {
                               return (
                                 <button
                                   type="button"
@@ -3810,11 +4344,19 @@ Warm regards,
                           <button
                             type="button"
                             onClick={() => handleClaimAndAutoFill(entry)}
-                            className="flex-1 py-2.5 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 active:scale-95 text-white rounded-xl text-xs font-black shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ring-2 ring-emerald-300/40"
-                            title={`Claim Token #${entry.dailyTokenNo || 1} exclusively: auto-fills all fields into your admission form`}
+                            className={`flex-1 py-2.5 active:scale-95 text-white rounded-xl text-xs font-black shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                              entry.hasSibling && entry.siblingDetails
+                                ? "bg-gradient-to-r from-purple-600 via-indigo-600 to-emerald-600 hover:from-purple-700 hover:to-emerald-700 ring-2 ring-purple-300/40"
+                                : "bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 ring-2 ring-emerald-300/40"
+                            }`}
+                            title={entry.hasSibling && entry.siblingDetails ? `Claim Sibling Token #${entry.dailyTokenNo || 1}: opens unified 2-column form for ${entry.studentName} & ${entry.siblingDetails.studentName}` : `Claim Token #${entry.dailyTokenNo || 1} exclusively: auto-fills all fields into your admission form`}
                           >
                             <CheckCircle2 size={16} />
-                            <span>⚡ Claim Token #{entry.dailyTokenNo || 1}</span>
+                            <span>
+                              {entry.hasSibling && entry.siblingDetails
+                                ? `👨‍👩‍👧‍👦 Claim Sibling Token #${entry.dailyTokenNo || 1} (Both Children)`
+                                : `⚡ Claim Token #${entry.dailyTokenNo || 1}`}
+                            </span>
                           </button>
                           <button
                             type="button"
@@ -3866,6 +4408,292 @@ Warm regards,
           )}
         </div>
       )}
+
+      {/* 🌐 DEDICATED ONLINE ENQUIRIES CLAIM POOL (Web / QR Leads - ONL Series) */}
+      <div className={`p-4.5 rounded-2xl shadow-md transition-all border-2 ${
+        pendingOnlineEntries.length > 0
+          ? "bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-700 text-white border-emerald-400 ring-4 ring-emerald-400/20"
+          : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-100"
+      }`}>
+        {/* Header Bar */}
+        <div className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+          isOnlinePoolCollapsed ? "" : "mb-3 pb-3 border-b border-black/10 dark:border-white/10"
+        }`}>
+          <div className="flex items-center gap-3">
+            <span className={`p-2.5 rounded-xl shrink-0 ${
+              pendingOnlineEntries.length > 0
+                ? "bg-white/20 text-white animate-pulse"
+                : "bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400"
+            }`}>
+              <Globe size={22} />
+            </span>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className={`text-sm font-black tracking-wide ${
+                  pendingOnlineEntries.length > 0 ? "text-white" : "text-slate-900 dark:text-white"
+                }`}>
+                  🌐 ONLINE ENQUIRY LEADS POOL (Website &amp; Social QR)
+                </h3>
+                {pendingOnlineEntries.length > 0 ? (
+                  <span className="px-2.5 py-0.5 bg-white text-emerald-950 rounded-full text-xs font-black animate-pulse shadow-sm">
+                    ⚡ {pendingOnlineEntries.length} Online Lead(s) Waiting for Call
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 rounded-full text-xs font-bold border border-emerald-300 dark:border-emerald-800">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
+                    <span>0 Pending Online Leads (Pool Clear)</span>
+                  </span>
+                )}
+              </div>
+              <p className={`text-xs mt-0.5 ${
+                pendingOnlineEntries.length > 0 ? "text-emerald-100 font-medium" : "text-slate-500 dark:text-slate-400"
+              }`}>
+                {pendingOnlineEntries.length > 0
+                  ? isOnlinePoolCollapsed
+                    ? "Online leads pool is minimized. Click 'Expand' to view and claim waiting leads."
+                    : "Parents filled form online from home. Distinct ONL numbers prevent mixing with Walk-ins. Click '⚡ Claim & Form' to contact parent."
+                  : "Leads submitted via online website links or social media QR codes appear here with distinct ONL-YYYY-XX numbers."}
+              </p>
+            </div>
+          </div>
+
+          {/* Action buttons */}
+          <div className="flex items-center gap-2 shrink-0 flex-wrap">
+            {/* Dismissed Archive Button */}
+            <button
+              type="button"
+              onClick={() => setIsDismissedLeadsModalOpen(true)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer shadow-xs active:scale-95 flex items-center gap-1.5 border ${
+                pendingOnlineEntries.length > 0
+                  ? "bg-white/20 hover:bg-white/30 text-white border-white/30"
+                  : "bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700"
+              }`}
+              title={`View Dismissed Leads & Tokens Archive (${dismissedParentEntries.length} archived)`}
+            >
+              <FolderArchive size={14} className={pendingOnlineEntries.length > 0 ? "text-amber-200" : "text-amber-500"} />
+              <span>🗄️ Dismissed Archive ({dismissedParentEntries.length})</span>
+            </button>
+
+            {/* Clear All Online Leads (Safely moves to Dismissed Archive) */}
+            {pendingOnlineEntries.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (confirm(`Move all ${pendingOnlineEntries.length} online leads to the Dismissed Leads Archive?`)) {
+                    const counsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR";
+                    const counsellorName = activeCounsellor ? activeCounsellor.name : "Admissions Desk";
+                    const nowStr = new Date().toISOString();
+                    const ids = pendingOnlineEntries.map(e => e.id);
+                    const idSet = new Set(ids);
+
+                    // Update parentSelfEntries in state & LocalStorage
+                    const updated = parentSelfEntries.map(e => idSet.has(e.id) ? {
+                      ...e,
+                      status: "dismissed" as const,
+                      dismissedBy: counsellorName,
+                      dismissedById: counsellorId,
+                      dismissedAt: nowStr
+                    } : e);
+                    setParentSelfEntries(updated);
+                    saveParentSelfEntries(updated);
+
+                    // Save each to archived storage
+                    pendingOnlineEntries.forEach(e => {
+                      recordDismissedParentEntryId(e.id, counsellorId);
+                      saveDismissedParentEntry({
+                        ...e,
+                        status: "dismissed",
+                        dismissedBy: counsellorName,
+                        dismissedById: counsellorId,
+                        dismissedAt: nowStr
+                      });
+                      if (isFirebaseConfigured()) {
+                        saveDocument("parent_self_entries", e.id, {
+                          status: "dismissed",
+                          dismissedBy: counsellorName,
+                          dismissedById: counsellorId,
+                          dismissedAt: nowStr
+                        }).catch(() => {});
+                      }
+                    });
+
+                    // Notify server
+                    fetch("/api/parent-self-entry/clear-pending", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ ids, counsellorId, counsellorName })
+                    }).catch(() => {});
+
+                    setDeleteToast(`✓ Archived ${pendingOnlineEntries.length} online lead(s) to Dismissed Archive.`);
+                    setTimeout(() => setDeleteToast(null), 3500);
+                  }
+                }}
+                className="px-2.5 py-1.5 bg-black/20 hover:bg-red-600/80 text-white rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer border border-white/30 flex items-center gap-1 active:scale-95"
+                title="Archive all waiting online leads"
+              >
+                <Trash2 size={13} />
+                <span>Clear ({pendingOnlineEntries.length})</span>
+              </button>
+            )}
+
+            {/* Maximize / Compact Scroll Toggle (when entries > 3 and not collapsed) */}
+            {!isOnlinePoolCollapsed && pendingOnlineEntries.length > 3 && (
+              <button
+                type="button"
+                onClick={toggleOnlinePoolMaximized}
+                className="px-2.5 py-1.5 bg-white/20 hover:bg-white/30 text-white border border-white/30 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer active:scale-95 flex items-center gap-1"
+                title={isOnlinePoolMaximized ? "Switch to compact scroll view" : "Expand to full grid"}
+              >
+                {isOnlinePoolMaximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                <span>{isOnlinePoolMaximized ? "Compact View" : "Expand Grid"}</span>
+              </button>
+            )}
+
+            {/* Minimize / Collapse Toggle Button */}
+            <button
+              type="button"
+              onClick={toggleOnlinePoolCollapsed}
+              className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all shrink-0 cursor-pointer shadow-xs active:scale-95 flex items-center gap-1.5 border ${
+                pendingOnlineEntries.length > 0
+                  ? "bg-white/25 hover:bg-white/40 text-white border-white/40"
+                  : "bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-300 dark:border-slate-700"
+              }`}
+              title={isOnlinePoolCollapsed ? "Expand online leads pool" : "Minimize / Collapse online leads pool"}
+            >
+              {isOnlinePoolCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+              <span>{isOnlinePoolCollapsed ? `Expand (${pendingOnlineEntries.length})` : "Minimize"}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Cards or Empty State: Only shown when NOT collapsed */}
+        {!isOnlinePoolCollapsed && (
+          pendingOnlineEntries.length > 0 ? (
+            <div className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5 ${
+              isOnlinePoolMaximized ? "" : "max-h-[420px] overflow-y-auto pr-1"
+            }`}>
+              {pendingOnlineEntries.map(entry => {
+                const cleanPhone = (entry.contactNo || "").replace(/\D/g, "");
+                return (
+                  <div
+                    key={entry.id}
+                    className="p-4 rounded-xl bg-slate-900/95 border border-emerald-400/40 text-white shadow-lg flex flex-col justify-between gap-3 relative overflow-hidden"
+                  >
+                    <div className="space-y-2">
+                      {/* Top Row: ONL Ref & Date */}
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono text-xs font-black px-2.5 py-1 rounded-lg bg-emerald-500 text-slate-950 border border-emerald-300 shadow-xs flex items-center gap-1.5">
+                          <Globe size={13} />
+                          <span>#{entry.onlineRefNo || entry.id}</span>
+                        </span>
+                        <span className="text-[10px] text-slate-300 font-semibold flex items-center gap-1">
+                          <Clock size={11} className="text-emerald-400" />
+                          <span>{entry.formattedDate || entry.entryDate || "Online Lead"}</span>
+                        </span>
+                      </div>
+
+                      {/* Student Info */}
+                      <div>
+                        <h4 className="text-sm font-black text-white flex items-center gap-2">
+                          <span>{entry.studentName}</span>
+                          <span className="px-2 py-0.5 rounded-md bg-emerald-950 text-emerald-300 text-[10px] font-black border border-emerald-700">
+                            {entry.applyingForClass}
+                          </span>
+                        </h4>
+                        <p className="text-xs text-slate-300 mt-1">
+                          Parent: <strong className="text-white">{entry.fatherName || entry.motherName || "Parent"}</strong>
+                          {entry.contactNo && (
+                            <span className="font-mono ml-2 text-emerald-300 font-bold">
+                              📞 {entry.contactNo}
+                            </span>
+                          )}
+                        </p>
+                        {entry.residentialAddress && (
+                          <p className="text-[11px] text-slate-400 mt-0.5 truncate">
+                            📍 {entry.residentialAddress}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Sibling info */}
+                      {entry.hasSibling && entry.siblingDetails && (
+                        <div className="p-2 rounded-lg bg-purple-950/60 border border-purple-800 text-[11px] text-purple-200">
+                          👨‍👩‍👧‍👦 Sibling: <strong>{entry.siblingDetails.studentName}</strong> ({entry.siblingDetails.applyingForClass})
+                          {entry.siblingDetails.onlineRefNo && (
+                            <span className="font-mono ml-1 text-purple-300 font-bold">#{entry.siblingDetails.onlineRefNo}</span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Actions Bar */}
+                    <div className="pt-2 border-t border-slate-800 flex flex-wrap items-center justify-between gap-1.5">
+                      <div className="flex items-center gap-1.5">
+                        <a
+                          href={`tel:${cleanPhone}`}
+                          className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-black transition-all flex items-center gap-1 cursor-pointer"
+                          title={`Call +91 ${entry.contactNo}`}
+                        >
+                          <Phone size={12} />
+                          <span>Call</span>
+                        </a>
+                        {cleanPhone && (
+                          <a
+                            href={`https://wa.me/91${cleanPhone}?text=Dear%20Parent,%20Greetings%20from%20Birla%20Open%20Minds%20International%20School.%20Regarding%20your%20online%20admission%20enquiry%20for%20${encodeURIComponent(entry.studentName)}%20(${entry.onlineRefNo || entry.id}).`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="px-2.5 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-black transition-all flex items-center gap-1 cursor-pointer"
+                          >
+                            <MessageSquare size={12} />
+                            <span>WhatsApp</span>
+                          </a>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleConvertOnlineToWalkin(entry)}
+                          className="px-2 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 cursor-pointer"
+                          title="Convert online lead to campus walk-in queue"
+                        >
+                          <span>🏫 To Walk-in</span>
+                        </button>
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleClaimAndAutoFill(entry)}
+                          className="px-3 py-1.5 bg-gradient-to-r from-emerald-400 to-teal-400 hover:from-emerald-500 hover:to-teal-500 text-slate-950 font-black rounded-lg text-xs transition-all flex items-center gap-1 cursor-pointer active:scale-95 shadow-md"
+                          title="Claim this lead and open admission form"
+                        >
+                          <Zap size={13} className="text-slate-950 fill-slate-950" />
+                          <span>Claim &amp; Form</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDismissParentEntry(entry.id)}
+                          className="p-1.5 text-slate-400 hover:text-red-400 rounded-lg transition-colors cursor-pointer"
+                          title="Dismiss lead to Dismissed Archive"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="flex items-center justify-between p-3 bg-emerald-50/50 dark:bg-slate-800/40 rounded-xl border border-dashed border-emerald-300 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-300">
+              <div className="flex items-center gap-2.5">
+                <span className="p-1.5 bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 rounded-lg">
+                  <Globe size={16} />
+                </span>
+                <span>All online enquiries are attended to! Online leads submitted via website or social media QR codes will chime and land here in real time.</span>
+              </div>
+            </div>
+          )
+        )}
+      </div>
 
       {/* KPI Stats Strip - Interactive 5 Metric Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
@@ -4475,8 +5303,12 @@ Warm regards,
 
                               {/* Enquiry ID */}
                               <td className="px-4 py-3 whitespace-nowrap">
-                                <span className="font-mono font-bold px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[11px]">
-                                  {item.enquiryNo}
+                                <span className={`font-mono font-bold px-2 py-0.5 rounded-md text-[11px] border ${
+                                  item.enquiryNo?.startsWith("ONL-") || item.enquiryType === "online"
+                                    ? "bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800"
+                                    : "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700"
+                                }`}>
+                                  {item.enquiryNo?.startsWith("ONL-") ? "🌐 " : ""}{item.enquiryNo}
                                 </span>
                               </td>
 
@@ -4703,6 +5535,19 @@ Warm regards,
                     <Bell size={13} className={pendingParentEntries.length > 0 ? "text-amber-600 animate-bounce" : "text-slate-500"} />
                     <span>Reception Lounge: {pendingParentEntries.length} Waiting</span>
                   </button>
+                  {pendingOnlineEntries.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFilterChannel("ONLINE");
+                      }}
+                      className="px-3 py-1.5 rounded-xl text-xs font-bold border flex items-center gap-1.5 cursor-pointer transition-all bg-emerald-100 dark:bg-emerald-950/80 text-emerald-900 dark:text-emerald-200 border-emerald-400 animate-pulse shadow-sm"
+                      title="View Pending Online Leads"
+                    >
+                      <Globe size={13} className="text-emerald-600" />
+                      <span>Online Leads: {pendingOnlineEntries.length} New</span>
+                    </button>
+                  )}
                   <div className={`px-3 py-1.5 rounded-xl text-xs font-bold border flex items-center gap-1.5 ${
                     allowCounsellorMultiDelete
                       ? "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800"
@@ -4714,6 +5559,17 @@ Warm regards,
                 </div>
               )}
 
+              {/* Channel Filter: All Channels vs Walk-in vs Online */}
+              <select
+                value={filterChannel}
+                onChange={(e) => setFilterChannel(e.target.value as any)}
+                className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 shrink-0"
+                title="Filter by Walk-in or Online Enquiry"
+              >
+                <option value="ALL">🌐 All Channels</option>
+                <option value="WALKIN">🏫 Campus Walk-in (ENQ)</option>
+                <option value="ONLINE">🌐 Online Enquiry (ONL)</option>
+              </select>
 
               <select
                 value={filterStatus}
@@ -4885,9 +5741,24 @@ Warm regards,
                         </td>
 
                         <td className="px-4 py-3.5 align-top">
-                          <span className="font-mono font-bold text-orange-600 dark:text-orange-400">
-                            {enquiry.enquiryNo}
-                          </span>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className={`font-mono font-bold ${
+                              enquiry.enquiryNo?.startsWith("ONL-") || enquiry.enquiryType === "online"
+                                ? "text-emerald-600 dark:text-emerald-400 font-black"
+                                : "text-orange-600 dark:text-orange-400"
+                            }`}>
+                              {enquiry.enquiryNo}
+                            </span>
+                            {enquiry.enquiryNo?.startsWith("ONL-") || enquiry.enquiryType === "online" ? (
+                              <span className="px-1.5 py-0.2 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 text-[9px] font-black uppercase border border-emerald-300 dark:border-emerald-800">
+                                🌐 Online
+                              </span>
+                            ) : (
+                              <span className="px-1.5 py-0.2 rounded bg-orange-100 dark:bg-orange-950 text-orange-800 dark:text-orange-300 text-[9px] font-black uppercase border border-orange-300 dark:border-orange-800">
+                                🏫 Walk-in
+                              </span>
+                            )}
+                          </div>
                           <div className="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5">
                             <Calendar size={11} /> {enquiry.date}
                           </div>
@@ -4936,23 +5807,33 @@ Warm regards,
                           <p className="font-semibold text-slate-800 dark:text-slate-200">
                             {enquiry.fatherName || enquiry.motherName || "Parent"}
                           </p>
-                          <div className="flex items-center gap-2 mt-1">
-                            <a
-                              href={`tel:${enquiry.contactNo}`}
-                              className="inline-flex items-center gap-1 text-[11px] text-blue-600 dark:text-blue-400 font-semibold hover:underline"
-                            >
-                              <Phone size={11} /> {enquiry.contactNo}
-                            </a>
-                            {enquiry.whatsappNo && (
+                          <div className="space-y-0.5 mt-1">
+                            <div className="flex items-center gap-1.5">
                               <a
-                                href={`https://wa.me/91${enquiry.whatsappNo.replace(/[^0-9]/g, "")}?text=Dear%20Parent,%20Greetings%20from%20Birla%20Open%20Minds%20International%20School.%20Regarding%20admission%20enquiry%20for%20${encodeURIComponent(enquiry.studentName)}.`}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="inline-flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400 font-bold hover:underline"
-                                title="Chat on WhatsApp"
+                                href={`tel:${enquiry.contactNo}`}
+                                className="inline-flex items-center gap-1 text-[11px] text-blue-600 dark:text-blue-400 font-bold font-mono hover:underline"
+                                title="Call Primary Phone"
                               >
-                                <MessageSquare size={11} /> WhatsApp
+                                <Phone size={11} /> {enquiry.contactNo}
                               </a>
+                            </div>
+                            {(enquiry.whatsappNo || enquiry.contactNo) && (
+                              <div className="flex items-center gap-1.5">
+                                <a
+                                  href={`https://wa.me/91${(enquiry.whatsappNo || enquiry.contactNo || "").replace(/[^0-9]/g, "")}?text=Dear%20Parent,%20Greetings%20from%20Birla%20Open%20Minds%20International%20School.%20Regarding%20admission%20enquiry%20for%20${encodeURIComponent(enquiry.studentName)}.`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="inline-flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400 font-bold font-mono hover:underline"
+                                  title="Chat on WhatsApp"
+                                >
+                                  <MessageSquare size={11} /> {enquiry.whatsappNo || enquiry.contactNo}
+                                  {enquiry.whatsappNo && enquiry.whatsappNo !== enquiry.contactNo ? (
+                                    <span className="text-[9px] px-1 py-0.2 bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 rounded font-sans font-bold">
+                                      WA
+                                    </span>
+                                  ) : null}
+                                </a>
+                              </div>
                             )}
                           </div>
                         </td>
@@ -5200,17 +6081,10 @@ Warm regards,
           {/* Counsellor Accounts Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {localAccounts.map((acc, idx) => {
+              const accNorm = normalizeCounsellorIdentity(acc.name, acc.id);
               const counsellorEnquiries = safeEnquiries.filter(e => {
-                const normE = (e.counsellorId || "").trim().toLowerCase().replace("-0", "-");
-                const normA = (acc.id || "").trim().toLowerCase().replace("-0", "-");
-                return (
-                  e.counsellorId === acc.id || 
-                  normE === normA ||
-                  (e.counsellorName && acc.name && (
-                    e.counsellorName.toLowerCase().includes(acc.name.toLowerCase()) ||
-                    acc.name.toLowerCase().includes(e.counsellorName.toLowerCase())
-                  ))
-                );
+                const eNorm = normalizeCounsellorIdentity(e.counsellorName, e.counsellorId);
+                return eNorm.id === accNorm.id;
               });
               const isRevealed = revealedPasswords[acc.id] || false;
               const isCopied = copiedAccountId === acc.id;
@@ -5374,19 +6248,53 @@ Warm regards,
               <span className="text-[11px] font-black text-orange-600 dark:text-orange-400 tracking-widest uppercase">
                 BIRLA OPENMINDS INTERNATIONAL SCHOOL
               </span>
-              <h2 className="text-xl font-black text-slate-900 dark:text-white uppercase tracking-tight">
-                NEW ADMISSION – PARENT COUNSELLING FORM
+              <h2 className="text-xl font-black text-slate-900 dark:text-white uppercase tracking-tight flex items-center gap-2 flex-wrap justify-center md:justify-start">
+                <span>NEW ADMISSION – PARENT COUNSELLING FORM</span>
+                {isJointSiblingMode && siblingFormData && (
+                  <span className="text-xs px-2.5 py-0.5 rounded-full bg-purple-100 dark:bg-purple-950/80 text-purple-700 dark:text-purple-300 border border-purple-300 dark:border-purple-700 font-extrabold uppercase">
+                    👨‍👩‍👧‍👦 2-in-1 Sibling Mode
+                  </span>
+                )}
               </h2>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 flex-wrap justify-center md:justify-end">
               <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 px-4 py-2 rounded-xl text-xs flex items-center gap-2">
-                <span className="text-slate-400 font-medium">Enquiry No: </span>
+                <span className="text-slate-400 font-medium">Enquiry: </span>
                 <span className="font-mono font-bold text-orange-600 dark:text-orange-400">{formData.enquiryNo}</span>
+                {isJointSiblingMode && siblingFormData && (
+                  <>
+                    <span className="text-slate-400 font-bold">&amp;</span>
+                    <span className="font-mono font-bold text-purple-600 dark:text-purple-400">{siblingFormData.enquiryNo}</span>
+                  </>
+                )}
                 <span className="text-[10px] bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-bold px-2 py-0.5 rounded border border-emerald-200 dark:border-emerald-800">
                   🔒 Reserved Slot
                 </span>
               </div>
+
+              {!isJointSiblingMode ? (
+                <button
+                  type="button"
+                  onClick={handleEnableSiblingMode}
+                  className="px-3.5 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white rounded-xl text-xs font-bold shadow transition-all cursor-pointer flex items-center gap-1.5"
+                  title="Switch to Unified 2-in-1 Dual Sibling Form for 2 children"
+                >
+                  <span>👨‍👩‍👧‍👦</span>
+                  <span>+ Sibling Admission</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleDisableSiblingMode}
+                  className="px-3.5 py-2 bg-purple-100 hover:bg-purple-200 dark:bg-purple-950/80 dark:hover:bg-purple-900 text-purple-900 dark:text-purple-200 border border-purple-300 dark:border-purple-700 rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
+                  title="Switch back to single student enquiry form"
+                >
+                  <span className="text-purple-600 dark:text-purple-400 font-black">✕</span>
+                  <span>Switch to Single Student</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={handleCancelForm}
@@ -5398,926 +6306,1764 @@ Warm regards,
                 type="submit"
                 className="px-5 py-2.5 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white rounded-xl text-xs font-black shadow-md transition-all cursor-pointer"
               >
-                💾 Save Counselling Record
+                {isJointSiblingMode && siblingFormData ? "💾 Save Both Sibling Records" : "💾 Save Counselling Record"}
               </button>
             </div>
           </div>
 
           <div className="p-6 space-y-8">
-            {/* JOINT SIBLING SESSION BANNER & DUAL-CHILD TABS */}
-            {isJointSiblingMode && siblingFormData && (
-              <div className="p-4 bg-gradient-to-r from-purple-950 via-indigo-950 to-slate-900 border-2 border-purple-400 rounded-2xl shadow-xl text-white space-y-3.5">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-purple-500/20 border border-purple-400/40 flex items-center justify-center text-xl shrink-0">
-                      👨‍👩‍👧‍👦
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-purple-400 text-slate-950">
-                          Joint Sibling Session Active
-                        </span>
-                        <span className="text-xs text-purple-200 font-bold">
-                          Tokens #{linkedSiblingTokens[0]?.dailyTokenNo || formData.siblingTokenNo || 1} &amp; #{linkedSiblingTokens[1]?.dailyTokenNo || siblingFormData.siblingTokenNo || 2}
-                        </span>
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 font-bold">
-                          🎙️ 1 Shared Meeting Audio
-                        </span>
+            {/* SIBLING MODE VS STANDARD SINGLE STUDENT MODE */}
+            {isJointSiblingMode && siblingFormData ? (
+              /* ============================================================== */
+              /* 👨‍👩‍👧‍👦 SIBLING ADMISSION: 2-IN-1 UNIFIED DUAL-COLUMN FORM         */
+              /* ============================================================== */
+              <div className="space-y-8">
+                {/* TOP SIBLING BANNER */}
+                <div className="p-4 bg-gradient-to-r from-purple-950 via-indigo-950 to-slate-900 border-2 border-purple-400 rounded-2xl shadow-xl text-white space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-11 h-11 rounded-xl bg-purple-500/20 border border-purple-400/40 flex items-center justify-center text-2xl shrink-0">
+                        👨‍👩‍👧‍👦
                       </div>
-                      <p className="text-xs text-purple-200 mt-1">
-                        Fill child-specific grades &amp; DOBs using the tabs below. Family contacts and audio are shared automatically!
-                      </p>
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="px-2.5 py-0.5 rounded text-[11px] font-black uppercase tracking-wider bg-purple-400 text-slate-950">
+                            Unified Sibling Admission Active
+                          </span>
+                          <span className="text-xs text-purple-200 font-bold">
+                            Child 1: #{formData.enquiryNo} &bull; Child 2: #{siblingFormData.enquiryNo}
+                          </span>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 font-bold">
+                            🎙️ 1 Shared Meeting Audio
+                          </span>
+                        </div>
+                        <p className="text-xs text-purple-200 mt-1">
+                          Family contacts are entered once below. Student academic details are displayed in 2 side-by-side columns. 1-Click saves both sibling admissions!
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (confirm("Switch off Joint Sibling Mode? You will only save Child 1.")) {
-                        setIsJointSiblingMode(false);
-                      }
-                    }}
-                    className="text-[11px] text-purple-300 hover:text-white underline self-start sm:self-auto cursor-pointer"
-                  >
-                    Cancel Joint Mode
-                  </button>
-                </div>
-
-                {/* Dual Child Switcher Tabs */}
-                <div className="grid grid-cols-2 gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => setSiblingActiveTab("child1")}
-                    className={`px-4 py-3 rounded-xl font-black text-xs transition-all flex items-center justify-center gap-2 cursor-pointer border ${
-                      siblingActiveTab === "child1"
-                        ? "bg-white text-slate-950 border-white shadow-xl scale-[1.01]"
-                        : "bg-purple-950/70 hover:bg-purple-900 text-purple-200 border-purple-400/30"
-                    }`}
-                  >
-                    <span className="text-base">👦</span>
-                    <div className="text-left">
-                      <div className="text-[10px] uppercase font-bold opacity-75">CHILD 1 (ENQ #{formData.enquiryNo})</div>
-                      <div className="text-xs font-black truncate max-w-[160px]">{formData.studentName || "First Child"} ({formData.applyingForClass})</div>
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setSiblingActiveTab("child2")}
-                    className={`px-4 py-3 rounded-xl font-black text-xs transition-all flex items-center justify-center gap-2 cursor-pointer border ${
-                      siblingActiveTab === "child2"
-                        ? "bg-white text-slate-950 border-white shadow-xl scale-[1.01]"
-                        : "bg-purple-950/70 hover:bg-purple-900 text-purple-200 border-purple-400/30"
-                    }`}
-                  >
-                    <span className="text-base">👧</span>
-                    <div className="text-left">
-                      <div className="text-[10px] uppercase font-bold opacity-75">CHILD 2 (ENQ #{siblingFormData.enquiryNo})</div>
-                      <div className="text-xs font-black truncate max-w-[160px]">{siblingFormData.studentName || "Second Child"} ({siblingFormData.applyingForClass})</div>
-                    </div>
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* SECTION 1: STUDENT & PARENT DETAILS */}
-            <div className="space-y-4">
-              <div className="flex items-center justify-between border-b-2 border-orange-500 pb-1.5 flex-wrap gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="w-6 h-6 rounded-full bg-orange-600 text-white flex items-center justify-center font-bold text-xs">1</span>
-                  <h3 className="text-sm font-black uppercase text-slate-900 dark:text-white tracking-wider">
-                    STUDENT &amp; PARENT DETAILS
-                  </h3>
-                </div>
-                {isJointSiblingMode && siblingFormData && (
-                  <span className="text-xs font-bold text-purple-600 dark:text-purple-400 font-mono">
-                    Currently Editing: {siblingActiveTab === "child1" ? `Child 1 (${formData.studentName || "First"})` : `Child 2 (${siblingFormData.studentName || "Second"})`}
-                  </span>
-                )}
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Date</label>
-                  <input
-                    type="text"
-                    value={formData.date}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setFormData(prev => ({ ...prev, date: val }));
-                      if (isJointSiblingMode && siblingFormData) {
-                        setSiblingFormData(prev => prev ? ({ ...prev, date: val }) : null);
-                      }
-                    }}
-                    placeholder="DD-MM-YYYY"
-                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Enquiry No. {isJointSiblingMode && (siblingActiveTab === "child1" ? "(Child 1)" : "(Child 2)")}
-                  </label>
-                  <input
-                    type="text"
-                    value={isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData ? siblingFormData.enquiryNo : formData.enquiryNo}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      if (isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData) {
-                        setSiblingFormData(prev => prev ? ({ ...prev, enquiryNo: val, id: val }) : null);
-                      } else {
-                        setFormData(prev => ({ ...prev, enquiryNo: val, id: val }));
-                      }
-                    }}
-                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-mono font-bold text-orange-600 dark:text-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Student Name {isJointSiblingMode && (siblingActiveTab === "child1" ? "(Child 1)" : "(Child 2)")} <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData ? siblingFormData.studentName : formData.studentName}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      if (isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData) {
-                        setSiblingFormData(prev => prev ? ({ ...prev, studentName: val }) : null);
-                      } else {
-                        setFormData(prev => ({ ...prev, studentName: val }));
-                      }
-                    }}
-                    placeholder="Enter Student Full Name"
-                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Applying for Class {isJointSiblingMode && (siblingActiveTab === "child1" ? "(Child 1)" : "(Child 2)")} <span className="text-red-500">*</span>
-                  </label>
-                  <select
-                    value={isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData ? siblingFormData.applyingForClass : formData.applyingForClass}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      if (isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData) {
-                        setSiblingFormData(prev => prev ? ({ ...prev, applyingForClass: val }) : null);
-                      } else {
-                        setFormData(prev => ({ ...prev, applyingForClass: val }));
-                      }
-                    }}
-                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  >
-                    {CLASS_OPTIONS.map(c => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Academic Year <span className="text-red-500">*</span>
-                  </label>
-                  <select
-                    value={formData.academicYear || "2026-2027"}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setFormData(prev => ({ ...prev, academicYear: val }));
-                      if (isJointSiblingMode && siblingFormData) {
-                        setSiblingFormData(prev => prev ? ({ ...prev, academicYear: val }) : null);
-                      }
-                    }}
-                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-bold text-orange-600 dark:text-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-500 cursor-pointer"
-                  >
-                    <option value="2026-2027">2026-2027 (Current Academic Year)</option>
-                    <option value="2027-2028">2027-2028 (Next Year Advance)</option>
-                    <option value="2028-2029">2028-2029 (Future Advance)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Date of Birth {isJointSiblingMode && (siblingActiveTab === "child1" ? "(Child 1)" : "(Child 2)")}
-                  </label>
-                  <input
-                    type="text"
-                    value={isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData ? (siblingFormData.dateOfBirth || "") : formData.dateOfBirth}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      if (isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData) {
-                        setSiblingFormData(prev => prev ? ({ ...prev, dateOfBirth: val }) : null);
-                      } else {
-                        setFormData(prev => ({ ...prev, dateOfBirth: val }));
-                      }
-                    }}
-                    placeholder="DD-MM-YYYY"
-                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Gender {isJointSiblingMode && (siblingActiveTab === "child1" ? "(Child 1)" : "(Child 2)")}
-                  </label>
-                  <div className="flex items-center gap-6 mt-2">
-                    <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-slate-700 dark:text-slate-300">
-                      <input
-                        type="radio"
-                        name="student_gender"
-                        value="Male"
-                        checked={(isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData ? siblingFormData.gender : formData.gender) === "Male"}
-                        onChange={() => {
-                          if (isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData) {
-                            setSiblingFormData(prev => prev ? ({ ...prev, gender: "Male" }) : null);
-                          } else {
-                            setFormData(prev => ({ ...prev, gender: "Male" }));
-                          }
-                        }}
-                        className="text-orange-600 focus:ring-orange-500"
-                      />
-                      <span>Male</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-slate-700 dark:text-slate-300">
-                      <input
-                        type="radio"
-                        name="student_gender"
-                        value="Female"
-                        checked={(isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData ? siblingFormData.gender : formData.gender) === "Female"}
-                        onChange={() => {
-                          if (isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData) {
-                            setSiblingFormData(prev => prev ? ({ ...prev, gender: "Female" }) : null);
-                          } else {
-                            setFormData(prev => ({ ...prev, gender: "Female" }));
-                          }
-                        }}
-                        className="text-orange-600 focus:ring-orange-500"
-                      />
-                      <span>Female</span>
-                    </label>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Father's Name <span className="text-red-500 font-black">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={formData.fatherName}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setFormData(prev => ({ ...prev, fatherName: val }));
-                      if (isJointSiblingMode && siblingFormData) {
-                        setSiblingFormData(prev => prev ? ({ ...prev, fatherName: val }) : null);
-                      }
-                    }}
-                    placeholder="Father Name"
-                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Mother's Name <span className="text-red-500 font-black">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={formData.motherName}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setFormData(prev => ({ ...prev, motherName: val }));
-                      if (isJointSiblingMode && siblingFormData) {
-                        setSiblingFormData(prev => prev ? ({ ...prev, motherName: val }) : null);
-                      }
-                    }}
-                    placeholder="Mother Name"
-                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Contact No. <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="tel"
-                    value={formData.contactNo}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setFormData(prev => ({ ...prev, contactNo: val }));
-                      if (isJointSiblingMode && siblingFormData) {
-                        setSiblingFormData(prev => prev ? ({ ...prev, contactNo: val }) : null);
-                      }
-                    }}
-                    placeholder="Primary Calling Number"
-                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">WhatsApp No.</label>
                     <button
                       type="button"
-                      onClick={() => {
-                        const val = formData.contactNo;
-                        setFormData(prev => ({ ...prev, whatsappNo: val }));
-                        if (isJointSiblingMode && siblingFormData) {
-                          setSiblingFormData(prev => prev ? ({ ...prev, whatsappNo: val }) : null);
-                        }
-                      }}
-                      className="text-[10px] text-orange-600 dark:text-orange-400 hover:underline font-semibold"
+                      onClick={handleDisableSiblingMode}
+                      className="px-3.5 py-2 bg-white/10 hover:bg-white/20 active:bg-white/30 text-white rounded-xl border border-purple-300/40 text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm cursor-pointer shrink-0 self-start sm:self-auto"
+                      title="Switch back to single student enquiry form"
                     >
-                      Same as Contact
+                      <span className="text-purple-300 font-extrabold">✕</span>
+                      <span>Switch to Single Student</span>
                     </button>
                   </div>
-                  <input
-                    type="tel"
-                    value={formData.whatsappNo}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setFormData(prev => ({ ...prev, whatsappNo: val }));
-                      if (isJointSiblingMode && siblingFormData) {
-                        setSiblingFormData(prev => prev ? ({ ...prev, whatsappNo: val }) : null);
-                      }
-                    }}
-                    placeholder="WhatsApp Number"
-                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  />
                 </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Previous School {isJointSiblingMode && (siblingActiveTab === "child1" ? "(Child 1)" : "(Child 2)")} <span className="text-red-500 font-black">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData ? (siblingFormData.previousSchool || "") : formData.previousSchool}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      if (isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData) {
-                        setSiblingFormData(prev => prev ? ({ ...prev, previousSchool: val }) : null);
-                      } else {
-                        setFormData(prev => ({ ...prev, previousSchool: val }));
-                      }
-                    }}
-                    placeholder="Name of previous school & board"
-                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  />
-                </div>
+                {/* 1. SHARED FAMILY & PARENT DETAILS */}
+                <div className="space-y-4 bg-slate-50/80 dark:bg-slate-800/40 p-5 rounded-2xl border border-slate-200 dark:border-slate-800">
+                  <div className="flex items-center gap-2 border-b-2 border-orange-500 pb-2">
+                    <span className="w-6 h-6 rounded-full bg-orange-600 text-white flex items-center justify-center font-bold text-xs">1</span>
+                    <h3 className="text-sm font-black uppercase text-slate-900 dark:text-white tracking-wider flex items-center gap-2">
+                      <span>FAMILY &amp; PARENT DETAILS</span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-orange-100 dark:bg-orange-950 text-orange-700 dark:text-orange-300">
+                        Shared for both siblings
+                      </span>
+                    </h3>
+                  </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Previous Class {isJointSiblingMode && (siblingActiveTab === "child1" ? "(Child 1)" : "(Child 2)")}
-                  </label>
-                  <input
-                    type="text"
-                    value={isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData ? (siblingFormData.previousClass || "") : formData.previousClass}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      if (isJointSiblingMode && siblingActiveTab === "child2" && siblingFormData) {
-                        setSiblingFormData(prev => prev ? ({ ...prev, previousClass: val }) : null);
-                      } else {
-                        setFormData(prev => ({ ...prev, previousClass: val }));
-                      }
-                    }}
-                    placeholder="Class completed"
-                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  />
-                </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Date</label>
+                      <input
+                        type="text"
+                        value={formData.date}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setFormData(prev => ({ ...prev, date: val }));
+                          setSiblingFormData(prev => prev ? ({ ...prev, date: val }) : null);
+                        }}
+                        placeholder="DD-MM-YYYY"
+                        className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        required
+                      />
+                    </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Residential Address <span className="text-red-500 font-black">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={formData.residentialAddress || ""}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setFormData(prev => ({ ...prev, residentialAddress: val }));
-                      if (isJointSiblingMode && siblingFormData) {
-                        setSiblingFormData(prev => prev ? ({ ...prev, residentialAddress: val }) : null);
-                      }
-                    }}
-                    placeholder="House / Flat No., Area / Locality, Landmark"
-                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500 font-medium transition-all"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* SECTION 2: PARENT ENQUIRY */}
-            <div className="space-y-4">
-              <div className="flex items-center gap-2 border-b-2 border-orange-500 pb-1.5">
-                <span className="w-6 h-6 rounded-full bg-orange-600 text-white flex items-center justify-center font-bold text-xs">2</span>
-                <h3 className="text-sm font-black uppercase text-slate-900 dark:text-white tracking-wider">
-                  PARENT ENQUIRY
-                </h3>
-              </div>
-
-              <div className="space-y-3">
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
-                  How did you hear about our school?
-                </label>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2.5">
-                  {SOURCES.map(source => {
-                    const checked = (formData.heardAboutSchool || []).includes(source);
-                    return (
-                      <label 
-                        key={source} 
-                        onClick={() => handleSourceToggle(source)}
-                        className={`flex items-center gap-2 p-2.5 rounded-xl border text-xs cursor-pointer transition-all ${
-                          checked 
-                            ? "bg-orange-50 dark:bg-orange-950/40 border-orange-400 text-orange-800 dark:text-orange-300 font-bold" 
-                            : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300"
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => {}}
-                          className="rounded text-orange-600 focus:ring-orange-500"
-                        />
-                        <span className="truncate">{source}</span>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Father's Name <span className="text-red-500 font-black">*</span>
                       </label>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
-                <div className="md:col-span-1">
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Reason for choosing our school</label>
-                  <textarea
-                    rows={2}
-                    value={formData.reasonForChoosing}
-                    onChange={(e) => setFormData({ ...formData, reasonForChoosing: e.target.value })}
-                    placeholder="e.g. Reputation, Curriculum, Proximity, Referrals..."
-                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Preferred Contact</label>
-                  <div className="flex items-center gap-6 mt-2">
-                    <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-slate-700 dark:text-slate-300">
                       <input
-                        type="radio"
-                        name="preferredContact"
-                        value="Call"
-                        checked={formData.preferredContact === "Call"}
-                        onChange={() => setFormData({ ...formData, preferredContact: "Call" })}
-                        className="text-orange-600 focus:ring-orange-500"
-                      />
-                      <span>Call</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-slate-700 dark:text-slate-300">
-                      <input
-                        type="radio"
-                        name="preferredContact"
-                        value="WhatsApp"
-                        checked={formData.preferredContact === "WhatsApp"}
-                        onChange={() => setFormData({ ...formData, preferredContact: "WhatsApp" })}
-                        className="text-orange-600 focus:ring-orange-500"
-                      />
-                      <span>WhatsApp</span>
-                    </label>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Best time to contact</label>
-                  <input
-                    type="text"
-                    value={formData.bestTimeToContact}
-                    onChange={(e) => setFormData({ ...formData, bestTimeToContact: e.target.value })}
-                    placeholder="e.g. 10:00 AM - 12:00 PM or Evenings"
-                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* SECTION 3: STUDENT INFORMATION & PARENT EXPECTATIONS */}
-            <div className="space-y-4">
-              <div className="flex items-center gap-2 border-b-2 border-orange-500 pb-1.5">
-                <span className="w-6 h-6 rounded-full bg-orange-600 text-white flex items-center justify-center font-bold text-xs">3</span>
-                <h3 className="text-sm font-black uppercase text-slate-900 dark:text-white tracking-wider">
-                  STUDENT INFORMATION & PARENT EXPECTATIONS
-                </h3>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Academic Performance</label>
-                  <input
-                    type="text"
-                    value={formData.academicPerformance}
-                    onChange={(e) => setFormData({ ...formData, academicPerformance: e.target.value })}
-                    placeholder="e.g. Above average, Grade A, requires help in Math"
-                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Student Interests / Talents</label>
-                  <input
-                    type="text"
-                    value={formData.studentInterests}
-                    onChange={(e) => setFormData({ ...formData, studentInterests: e.target.value })}
-                    placeholder="e.g. Sports, Music, Art, Coding, Chess"
-                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Strengths</label>
-                  <input
-                    type="text"
-                    value={formData.strengths}
-                    onChange={(e) => setFormData({ ...formData, strengths: e.target.value })}
-                    placeholder="e.g. Good communication, creative thinking"
-                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Areas needing support</label>
-                  <input
-                    type="text"
-                    value={formData.areasNeedingSupport}
-                    onChange={(e) => setFormData({ ...formData, areasNeedingSupport: e.target.value })}
-                    placeholder="e.g. Handwriting, Second Language, Concentration"
-                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  />
-                </div>
-              </div>
-
-              {/* Requirement checkboxes */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 bg-slate-50 dark:bg-slate-800/40 p-4 rounded-xl border border-slate-200 dark:border-slate-800">
-                <div>
-                  <span className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">Transport Required?</span>
-                  <div className="flex items-center gap-4">
-                    <label className="flex items-center gap-1.5 cursor-pointer text-xs font-medium">
-                      <input
-                        type="radio"
-                        checked={formData.transportRequired === true}
-                        onChange={() => setFormData({ ...formData, transportRequired: true })}
-                        className="text-orange-600 focus:ring-orange-500"
-                      />
-                      <span>Yes</span>
-                    </label>
-                    <label className="flex items-center gap-1.5 cursor-pointer text-xs font-medium">
-                      <input
-                        type="radio"
-                        checked={formData.transportRequired === false}
-                        onChange={() => setFormData({ ...formData, transportRequired: false })}
-                        className="text-orange-600 focus:ring-orange-500"
-                      />
-                      <span>No</span>
-                    </label>
-                  </div>
-                </div>
-
-                <div>
-                  <span className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">Special Support Required?</span>
-                  <div className="flex items-center gap-4">
-                    <label className="flex items-center gap-1.5 cursor-pointer text-xs font-medium">
-                      <input
-                        type="radio"
-                        checked={formData.specialLearningSupport === true}
-                        onChange={() => setFormData({ ...formData, specialLearningSupport: true })}
-                        className="text-orange-600 focus:ring-orange-500"
-                      />
-                      <span>Yes</span>
-                    </label>
-                    <label className="flex items-center gap-1.5 cursor-pointer text-xs font-medium">
-                      <input
-                        type="radio"
-                        checked={formData.specialLearningSupport === false}
-                        onChange={() => setFormData({ ...formData, specialLearningSupport: false })}
-                        className="text-orange-600 focus:ring-orange-500"
-                      />
-                      <span>No</span>
-                    </label>
-                  </div>
-                </div>
-              </div>
-
-              {formData.specialLearningSupport && (
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Special Learning / Support Details
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.specialLearningDetails}
-                    onChange={(e) => setFormData({ ...formData, specialLearningDetails: e.target.value })}
-                    placeholder="Specify special educational or medical assistance needed"
-                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  />
-                </div>
-              )}
-            </div>
-
-            {/* SECTION 4: COUNSELLING / INTERACTION NOTES */}
-            <div className="space-y-4">
-              <div className="flex items-center gap-2 border-b-2 border-orange-500 pb-1.5">
-                <span className="w-6 h-6 rounded-full bg-orange-600 text-white flex items-center justify-center font-bold text-xs">4</span>
-                <h3 className="text-sm font-black uppercase text-slate-900 dark:text-white tracking-wider">
-                  COUNSELLING / INTERACTION NOTES
-                </h3>
-              </div>
-
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Points discussed with parents:
-                  </label>
-                  <textarea
-                    rows={3}
-                    value={formData.pointsDiscussed}
-                    onChange={(e) => setFormData({ ...formData, pointsDiscussed: e.target.value })}
-                    placeholder="Enter key topics, syllabus explanations, fee details, transport queries, campus visit impressions..."
-                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Counsellor observations / additional remarks:
-                  </label>
-                  <textarea
-                    rows={2}
-                    value={formData.counsellorObservations}
-                    onChange={(e) => setFormData({ ...formData, counsellorObservations: e.target.value })}
-                    placeholder="Counsellor's internal feedback regarding parent readiness, child confidence, recommended class level..."
-                    className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* SECTION 5: INFORMATION EXPLAINED */}
-            <div className="space-y-4">
-              <div className="flex items-center gap-2 border-b-2 border-orange-500 pb-1.5">
-                <span className="w-6 h-6 rounded-full bg-orange-600 text-white flex items-center justify-center font-bold text-xs">5</span>
-                <h3 className="text-sm font-black uppercase text-slate-900 dark:text-white tracking-wider">
-                  INFORMATION EXPLAINED (Check all that apply)
-                </h3>
-              </div>
-
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                {[
-                  { key: "explainedSchoolFacilities", label: "School Facilities" },
-                  { key: "explainedAcademicProgramme", label: "Academic Programme" },
-                  { key: "explainedFeeStructure", label: "Fee Structure" },
-                  { key: "explainedTransportDetails", label: "Transport Details" },
-                  { key: "explainedSchoolRules", label: "School Rules / Policies" },
-                  { key: "explainedActivitiesSports", label: "Activities / Sports" },
-                ].map(({ key, label }) => {
-                  const isChecked = (formData as any)[key] === true;
-                  return (
-                    <label
-                      key={key}
-                      onClick={() => setFormData({ ...formData, [key]: !isChecked })}
-                      className={`flex items-center gap-2.5 p-3 rounded-xl border text-xs cursor-pointer transition-all ${
-                        isChecked 
-                          ? "bg-emerald-50 dark:bg-emerald-950/30 border-emerald-400 text-emerald-800 dark:text-emerald-300 font-bold" 
-                          : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400"
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={isChecked}
-                        onChange={() => {}}
-                        className="rounded text-emerald-600 focus:ring-emerald-500"
-                      />
-                      <span>{label}: Explained</span>
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* SECTION 6: ADMISSION STATUS & FOLLOW-UP */}
-            <div className="space-y-4">
-              <div className="flex items-center gap-2 border-b-2 border-orange-500 pb-1.5">
-                <span className="w-6 h-6 rounded-full bg-orange-600 text-white flex items-center justify-center font-bold text-xs">6</span>
-                <h3 className="text-sm font-black uppercase text-slate-900 dark:text-white tracking-wider">
-                  ADMISSION STATUS & FOLLOW-UP
-                </h3>
-              </div>
-
-              <div className="space-y-3">
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">Admission Status</label>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
-                  {(Object.keys(STATUS_CONFIG) as AdmissionStatus[]).map(status => {
-                    const isSelected = formData.admissionStatus === status;
-                    const conf = STATUS_CONFIG[status];
-                    return (
-                      <button
-                        type="button"
-                        key={status}
-                        onClick={() => {
-                          let newFollowUp = formData.followUpDate;
-                          if (status === "Follow-up Required" && !newFollowUp) {
-                            newFollowUp = getFutureDateDMY(7); // Default 1 week if blank
-                          }
-                          setFormData({ ...formData, admissionStatus: status, followUpDate: newFollowUp });
-                          if (isJointSiblingMode && applyFollowUpToSibling && siblingFormData) {
-                            setSiblingFormData({ ...siblingFormData, admissionStatus: status, followUpDate: newFollowUp });
-                          }
+                        type="text"
+                        required
+                        value={formData.fatherName}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setFormData(prev => ({ ...prev, fatherName: val }));
+                          setSiblingFormData(prev => prev ? ({ ...prev, fatherName: val }) : null);
                         }}
-                        className={`px-3 py-2.5 rounded-xl border text-xs font-bold text-center cursor-pointer transition-all ${
-                          isSelected 
-                            ? `${conf.bg} ${conf.text} ${conf.border} ring-2 ring-orange-500` 
-                            : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-100"
-                        }`}
-                      >
-                        {conf.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
+                        placeholder="Father's Full Name"
+                        className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500 font-bold"
+                      />
+                    </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
-                <div className={formData.admissionStatus === "Follow-up Required" ? "p-3 bg-orange-50/80 dark:bg-orange-950/20 border-2 border-orange-400 dark:border-orange-600/60 rounded-2xl shadow-sm" : ""}>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-                      <Calendar size={14} className="text-orange-500" />
-                      <span>Follow-up Date</span>
-                      {formData.admissionStatus === "Follow-up Required" && (
-                        <span className="text-[10px] px-1.5 py-0.2 rounded-md bg-orange-600 text-white font-black uppercase">
-                          Alert Enabled
-                        </span>
-                      )}
-                    </label>
-                    {formData.followUpDate && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setFormData({ ...formData, followUpDate: "" });
-                          if (isJointSiblingMode && applyFollowUpToSibling && siblingFormData) {
-                            setSiblingFormData({ ...siblingFormData, followUpDate: "" });
-                          }
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Mother's Name <span className="text-red-500 font-black">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={formData.motherName}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setFormData(prev => ({ ...prev, motherName: val }));
+                          setSiblingFormData(prev => prev ? ({ ...prev, motherName: val }) : null);
                         }}
-                        className="text-[10px] text-slate-400 hover:text-red-500 font-bold cursor-pointer"
-                      >
-                        Clear
-                      </button>
-                    )}
-                  </div>
+                        placeholder="Mother's Full Name"
+                        className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500 font-bold"
+                      />
+                    </div>
 
-                  {/* Quick Date Presets */}
-                  <div className="flex flex-wrap items-center gap-1.5 mb-2">
-                    <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">⚡ Quick:</span>
-                    {[
-                      { label: "Tomorrow (+1D)", days: 1 },
-                      { label: "In 3 Days (+3D)", days: 3 },
-                      { label: "In 1 Week (+7D)", days: 7 },
-                      { label: "In 2 Weeks (+14D)", days: 14 }
-                    ].map(preset => {
-                      const targetDate = getFutureDateDMY(preset.days);
-                      const isSelected = formData.followUpDate === targetDate;
-                      return (
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Primary Contact No. <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="tel"
+                        value={formData.contactNo}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setFormData(prev => ({ ...prev, contactNo: val }));
+                          setSiblingFormData(prev => prev ? ({ ...prev, contactNo: val }) : null);
+                        }}
+                        placeholder="Calling Number"
+                        className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">WhatsApp No.</label>
                         <button
                           type="button"
-                          key={preset.days}
                           onClick={() => {
-                            setFormData({ ...formData, followUpDate: targetDate, admissionStatus: "Follow-up Required" });
-                            if (isJointSiblingMode && applyFollowUpToSibling && siblingFormData) {
-                              setSiblingFormData({ ...siblingFormData, followUpDate: targetDate, admissionStatus: "Follow-up Required" });
-                            }
+                            const val = formData.contactNo;
+                            setFormData(prev => ({ ...prev, whatsappNo: val }));
+                            setSiblingFormData(prev => prev ? ({ ...prev, whatsappNo: val }) : null);
                           }}
-                          className={`px-2 py-0.5 rounded-lg text-[10px] font-extrabold transition-all cursor-pointer border active:scale-95 ${
-                            isSelected
-                              ? "bg-orange-600 text-white border-orange-600 shadow-sm ring-1 ring-orange-400/40"
-                              : "bg-white dark:bg-slate-800 hover:bg-orange-100 dark:hover:bg-orange-950/60 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700"
-                          }`}
-                          title={`Set follow-up date to ${targetDate}`}
+                          className="text-[10px] text-orange-600 dark:text-orange-400 hover:underline font-semibold"
                         >
-                          {preset.label}
+                          Same as Contact
                         </button>
+                      </div>
+                      <input
+                        type="tel"
+                        value={formData.whatsappNo}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setFormData(prev => ({ ...prev, whatsappNo: val }));
+                          setSiblingFormData(prev => prev ? ({ ...prev, whatsappNo: val }) : null);
+                        }}
+                        placeholder="WhatsApp Number"
+                        className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      />
+                    </div>
+
+                    <div className="md:col-span-2 lg:col-span-3">
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Residential Address <span className="text-red-500 font-black">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={formData.residentialAddress || ""}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setFormData(prev => ({ ...prev, residentialAddress: val }));
+                          setSiblingFormData(prev => prev ? ({ ...prev, residentialAddress: val }) : null);
+                        }}
+                        placeholder="House / Flat No., Area / Locality, Landmark"
+                        className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500 font-medium"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="pt-2">
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
+                      How did you hear about our school?
+                    </label>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
+                      {SOURCES.map(source => {
+                        const checked = (formData.heardAboutSchool || []).includes(source);
+                        return (
+                          <label 
+                            key={source} 
+                            onClick={() => {
+                              handleSourceToggle(source);
+                              setSiblingFormData(prev => {
+                                if (!prev) return null;
+                                const current = prev.heardAboutSchool || [];
+                                const next = current.includes(source)
+                                  ? current.filter(s => s !== source)
+                                  : [...current, source];
+                                return { ...prev, heardAboutSchool: next };
+                              });
+                            }}
+                            className={`flex items-center gap-2 p-2 rounded-xl border text-xs cursor-pointer transition-all ${
+                              checked 
+                                ? "bg-orange-50 dark:bg-orange-950/40 border-orange-400 text-orange-800 dark:text-orange-300 font-bold" 
+                                : "bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => {}}
+                              className="rounded text-orange-600 focus:ring-orange-500"
+                            />
+                            <span className="truncate">{source}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. DUAL COLUMNS: CHILD 1 | CHILD 2 */}
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between border-b-2 border-purple-500 pb-2 flex-wrap gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="w-6 h-6 rounded-full bg-purple-600 text-white flex items-center justify-center font-bold text-xs">2</span>
+                      <h3 className="text-sm font-black uppercase text-slate-900 dark:text-white tracking-wider flex items-center gap-2">
+                        <span>STUDENTS ACADEMIC &amp; ADMISSION DETAILS</span>
+                        <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300">
+                          Side-by-Side Dual Columns
+                        </span>
+                      </h3>
+                    </div>
+                    <span className="text-xs text-slate-500 dark:text-slate-400">
+                      Both children are saved together in 1 unified session
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+                    {/* COLUMN 1: CHILD 1 (FIRST STUDENT) */}
+                    <div className="p-5 rounded-2xl border-2 border-orange-400 bg-orange-50/20 dark:bg-orange-950/10 space-y-4 shadow-sm">
+                      <div className="flex items-center justify-between border-b border-orange-200 dark:border-orange-800/40 pb-3">
+                        <div className="flex items-center gap-2">
+                          <span className="w-8 h-8 rounded-xl bg-orange-600 text-white flex items-center justify-center font-black text-sm shadow">
+                            👦
+                          </span>
+                          <div>
+                            <h4 className="text-xs font-black uppercase text-orange-700 dark:text-orange-400 tracking-wide">
+                              CHILD 1 (FIRST STUDENT)
+                            </h4>
+                            <div className="text-xs font-bold text-slate-900 dark:text-white truncate max-w-[200px]">
+                              {formData.studentName || "Enter Name Below"}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-[10px] text-slate-400 uppercase font-bold block">Enquiry No</span>
+                          <span className="font-mono font-black text-xs text-orange-600 dark:text-orange-400 bg-orange-100 dark:bg-orange-950/60 px-2 py-0.5 rounded border border-orange-300 dark:border-orange-700">
+                            {formData.enquiryNo}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                        <div className="sm:col-span-2">
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Student Full Name <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={formData.studentName}
+                            onChange={(e) => setFormData(prev => ({ ...prev, studentName: e.target.value }))}
+                            placeholder="Child 1 Full Name"
+                            className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Applying for Class <span className="text-red-500">*</span>
+                          </label>
+                          <select
+                            value={formData.applyingForClass}
+                            onChange={(e) => setFormData(prev => ({ ...prev, applyingForClass: e.target.value }))}
+                            className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                          >
+                            {CLASS_OPTIONS.map(c => (
+                              <option key={c} value={c}>{c}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Academic Year
+                          </label>
+                          <select
+                            value={formData.academicYear || "2026-2027"}
+                            onChange={(e) => setFormData(prev => ({ ...prev, academicYear: e.target.value }))}
+                            className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-bold text-orange-600 dark:text-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-500 cursor-pointer"
+                          >
+                            <option value="2026-2027">2026-2027 (Current)</option>
+                            <option value="2027-2028">2027-2028 (Next Year)</option>
+                            <option value="2028-2029">2028-2029 (Advance)</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Date of Birth
+                          </label>
+                          <input
+                            type="text"
+                            value={formData.dateOfBirth || ""}
+                            onChange={(e) => setFormData(prev => ({ ...prev, dateOfBirth: e.target.value }))}
+                            placeholder="DD-MM-YYYY"
+                            className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Gender
+                          </label>
+                          <div className="flex items-center gap-4 mt-2">
+                            <label className="flex items-center gap-1.5 cursor-pointer text-xs font-medium text-slate-700 dark:text-slate-300">
+                              <input
+                                type="radio"
+                                name="child1_gender"
+                                value="Male"
+                                checked={formData.gender === "Male"}
+                                onChange={() => setFormData(prev => ({ ...prev, gender: "Male" }))}
+                                className="text-orange-600 focus:ring-orange-500"
+                              />
+                              <span>Male</span>
+                            </label>
+                            <label className="flex items-center gap-1.5 cursor-pointer text-xs font-medium text-slate-700 dark:text-slate-300">
+                              <input
+                                type="radio"
+                                name="child1_gender"
+                                value="Female"
+                                checked={formData.gender === "Female"}
+                                onChange={() => setFormData(prev => ({ ...prev, gender: "Female" }))}
+                                className="text-orange-600 focus:ring-orange-500"
+                              />
+                              <span>Female</span>
+                            </label>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Previous School &amp; Board <span className="text-red-500 font-black">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={formData.previousSchool}
+                            onChange={(e) => setFormData(prev => ({ ...prev, previousSchool: e.target.value }))}
+                            placeholder="Previous school name & board"
+                            className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Previous Class
+                          </label>
+                          <input
+                            type="text"
+                            value={formData.previousClass || ""}
+                            onChange={(e) => setFormData(prev => ({ ...prev, previousClass: e.target.value }))}
+                            placeholder="Class completed"
+                            className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Academic Performance
+                          </label>
+                          <input
+                            type="text"
+                            value={formData.academicPerformance || ""}
+                            onChange={(e) => setFormData(prev => ({ ...prev, academicPerformance: e.target.value }))}
+                            placeholder="e.g. Grade A, Above Average"
+                            className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Interests / Talents
+                          </label>
+                          <input
+                            type="text"
+                            value={formData.studentInterests || ""}
+                            onChange={(e) => setFormData(prev => ({ ...prev, studentInterests: e.target.value }))}
+                            placeholder="e.g. Sports, Art, Chess, Music"
+                            className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Strengths
+                          </label>
+                          <input
+                            type="text"
+                            value={formData.strengths || ""}
+                            onChange={(e) => setFormData(prev => ({ ...prev, strengths: e.target.value }))}
+                            placeholder="e.g. Good communication, creative"
+                            className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Areas Needing Support
+                          </label>
+                          <input
+                            type="text"
+                            value={formData.areasNeedingSupport || ""}
+                            onChange={(e) => setFormData(prev => ({ ...prev, areasNeedingSupport: e.target.value }))}
+                            placeholder="e.g. Handwriting, Math basics"
+                            className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Admission Status for Child 1 */}
+                      <div className="pt-2 border-t border-orange-200 dark:border-orange-800/40">
+                        <label className="block text-xs font-bold text-orange-800 dark:text-orange-300 mb-1.5">
+                          Child 1 Admission Status:
+                        </label>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                          {(Object.keys(STATUS_CONFIG) as AdmissionStatus[]).map(status => {
+                            const isSelected = formData.admissionStatus === status;
+                            const conf = STATUS_CONFIG[status];
+                            return (
+                              <button
+                                type="button"
+                                key={`c1-${status}`}
+                                onClick={() => {
+                                  let newFollowUp = formData.followUpDate;
+                                  if (status === "Follow-up Required" && !newFollowUp) {
+                                    newFollowUp = getFutureDateDMY(7);
+                                  }
+                                  setFormData(prev => ({ ...prev, admissionStatus: status, followUpDate: newFollowUp }));
+                                  if (applyFollowUpToSibling) {
+                                    setSiblingFormData(prev => prev ? ({ ...prev, admissionStatus: status, followUpDate: newFollowUp }) : null);
+                                  }
+                                }}
+                                className={`px-2 py-1.5 rounded-lg border text-[11px] font-bold text-center cursor-pointer transition-all ${
+                                  isSelected 
+                                    ? `${conf.bg} ${conf.text} ${conf.border} ring-2 ring-orange-500 shadow-sm` 
+                                    : "bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-50"
+                                }`}
+                              >
+                                {conf.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* COLUMN 2: CHILD 2 (SIBLING STUDENT) */}
+                    <div className="p-5 rounded-2xl border-2 border-purple-400 bg-purple-50/20 dark:bg-purple-950/10 space-y-4 shadow-sm">
+                      <div className="flex items-center justify-between border-b border-purple-200 dark:border-purple-800/40 pb-3">
+                        <div className="flex items-center gap-2">
+                          <span className="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center font-black text-sm shadow">
+                            👧
+                          </span>
+                          <div>
+                            <h4 className="text-xs font-black uppercase text-purple-700 dark:text-purple-400 tracking-wide">
+                              CHILD 2 (SIBLING STUDENT)
+                            </h4>
+                            <div className="text-xs font-bold text-slate-900 dark:text-white truncate max-w-[200px]">
+                              {siblingFormData.studentName || "Enter Name Below"}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-[10px] text-slate-400 uppercase font-bold block">Enquiry No</span>
+                          <span className="font-mono font-black text-xs text-purple-600 dark:text-purple-400 bg-purple-100 dark:bg-purple-950/60 px-2 py-0.5 rounded border border-purple-300 dark:border-purple-700">
+                            {siblingFormData.enquiryNo}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                        <div className="sm:col-span-2">
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Student Full Name <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={siblingFormData.studentName}
+                            onChange={(e) => setSiblingFormData(prev => prev ? ({ ...prev, studentName: e.target.value }) : null)}
+                            placeholder="Child 2 Full Name"
+                            className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Applying for Class <span className="text-red-500">*</span>
+                          </label>
+                          <select
+                            value={siblingFormData.applyingForClass}
+                            onChange={(e) => setSiblingFormData(prev => prev ? ({ ...prev, applyingForClass: e.target.value }) : null)}
+                            className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          >
+                            {CLASS_OPTIONS.map(c => (
+                              <option key={c} value={c}>{c}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Academic Year
+                          </label>
+                          <select
+                            value={siblingFormData.academicYear || "2026-2027"}
+                            onChange={(e) => setSiblingFormData(prev => prev ? ({ ...prev, academicYear: e.target.value }) : null)}
+                            className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-bold text-purple-600 dark:text-purple-400 focus:outline-none focus:ring-2 focus:ring-purple-500 cursor-pointer"
+                          >
+                            <option value="2026-2027">2026-2027 (Current)</option>
+                            <option value="2027-2028">2027-2028 (Next Year)</option>
+                            <option value="2028-2029">2028-2029 (Advance)</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Date of Birth
+                          </label>
+                          <input
+                            type="text"
+                            value={siblingFormData.dateOfBirth || ""}
+                            onChange={(e) => setSiblingFormData(prev => prev ? ({ ...prev, dateOfBirth: e.target.value }) : null)}
+                            placeholder="DD-MM-YYYY"
+                            className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Gender
+                          </label>
+                          <div className="flex items-center gap-4 mt-2">
+                            <label className="flex items-center gap-1.5 cursor-pointer text-xs font-medium text-slate-700 dark:text-slate-300">
+                              <input
+                                type="radio"
+                                name="child2_gender"
+                                value="Male"
+                                checked={siblingFormData.gender === "Male"}
+                                onChange={() => setSiblingFormData(prev => prev ? ({ ...prev, gender: "Male" }) : null)}
+                                className="text-purple-600 focus:ring-purple-500"
+                              />
+                              <span>Male</span>
+                            </label>
+                            <label className="flex items-center gap-1.5 cursor-pointer text-xs font-medium text-slate-700 dark:text-slate-300">
+                              <input
+                                type="radio"
+                                name="child2_gender"
+                                value="Female"
+                                checked={siblingFormData.gender === "Female"}
+                                onChange={() => setSiblingFormData(prev => prev ? ({ ...prev, gender: "Female" }) : null)}
+                                className="text-purple-600 focus:ring-purple-500"
+                              />
+                              <span>Female</span>
+                            </label>
+                          </div>
+                        </div>
+
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+                              Previous School &amp; Board <span className="text-red-500 font-black">*</span>
+                            </label>
+                            {formData.previousSchool && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSiblingFormData(prev => prev ? ({ ...prev, previousSchool: formData.previousSchool }) : null);
+                                }}
+                                className="text-[10px] text-purple-600 dark:text-purple-400 hover:underline font-bold"
+                              >
+                                📋 Same as Child 1
+                              </button>
+                            )}
+                          </div>
+                          <input
+                            type="text"
+                            required
+                            value={siblingFormData.previousSchool || ""}
+                            onChange={(e) => setSiblingFormData(prev => prev ? ({ ...prev, previousSchool: e.target.value }) : null)}
+                            placeholder="Previous school name & board"
+                            className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Previous Class
+                          </label>
+                          <input
+                            type="text"
+                            value={siblingFormData.previousClass || ""}
+                            onChange={(e) => setSiblingFormData(prev => prev ? ({ ...prev, previousClass: e.target.value }) : null)}
+                            placeholder="Class completed"
+                            className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Academic Performance
+                          </label>
+                          <input
+                            type="text"
+                            value={siblingFormData.academicPerformance || ""}
+                            onChange={(e) => setSiblingFormData(prev => prev ? ({ ...prev, academicPerformance: e.target.value }) : null)}
+                            placeholder="e.g. Grade A, Above Average"
+                            className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Interests / Talents
+                          </label>
+                          <input
+                            type="text"
+                            value={siblingFormData.studentInterests || ""}
+                            onChange={(e) => setSiblingFormData(prev => prev ? ({ ...prev, studentInterests: e.target.value }) : null)}
+                            placeholder="e.g. Sports, Art, Chess, Music"
+                            className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Strengths
+                          </label>
+                          <input
+                            type="text"
+                            value={siblingFormData.strengths || ""}
+                            onChange={(e) => setSiblingFormData(prev => prev ? ({ ...prev, strengths: e.target.value }) : null)}
+                            placeholder="e.g. Good communication, creative"
+                            className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Areas Needing Support
+                          </label>
+                          <input
+                            type="text"
+                            value={siblingFormData.areasNeedingSupport || ""}
+                            onChange={(e) => setSiblingFormData(prev => prev ? ({ ...prev, areasNeedingSupport: e.target.value }) : null)}
+                            placeholder="e.g. Handwriting, Math basics"
+                            className="w-full px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Admission Status for Child 2 */}
+                      <div className="pt-2 border-t border-purple-200 dark:border-purple-800/40">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="block text-xs font-bold text-purple-800 dark:text-purple-300">
+                            Child 2 Admission Status:
+                          </label>
+                          {formData.admissionStatus && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSiblingFormData(prev => prev ? ({ ...prev, admissionStatus: formData.admissionStatus, followUpDate: formData.followUpDate }) : null);
+                              }}
+                              className="text-[10px] text-purple-600 dark:text-purple-400 hover:underline font-bold"
+                            >
+                              📋 Same as Child 1 ({formData.admissionStatus})
+                            </button>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                          {(Object.keys(STATUS_CONFIG) as AdmissionStatus[]).map(status => {
+                            const isSelected = siblingFormData.admissionStatus === status;
+                            const conf = STATUS_CONFIG[status];
+                            return (
+                              <button
+                                type="button"
+                                key={`c2-${status}`}
+                                onClick={() => {
+                                  let newFollowUp = siblingFormData.followUpDate;
+                                  if (status === "Follow-up Required" && !newFollowUp) {
+                                    newFollowUp = formData.followUpDate || getFutureDateDMY(7);
+                                  }
+                                  setSiblingFormData(prev => prev ? ({ ...prev, admissionStatus: status, followUpDate: newFollowUp }) : null);
+                                }}
+                                className={`px-2 py-1.5 rounded-lg border text-[11px] font-bold text-center cursor-pointer transition-all ${
+                                  isSelected 
+                                    ? `${conf.bg} ${conf.text} ${conf.border} ring-2 ring-purple-500 shadow-sm` 
+                                    : "bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-50"
+                                }`}
+                              >
+                                {conf.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. COUNSELLING & INTERACTION NOTES */}
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 border-b-2 border-orange-500 pb-1.5">
+                    <span className="w-6 h-6 rounded-full bg-orange-600 text-white flex items-center justify-center font-bold text-xs">3</span>
+                    <h3 className="text-sm font-black uppercase text-slate-900 dark:text-white tracking-wider">
+                      COUNSELLING &amp; INTERACTION NOTES
+                    </h3>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Points discussed with parents:
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={formData.pointsDiscussed}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setFormData(prev => ({ ...prev, pointsDiscussed: val }));
+                          setSiblingFormData(prev => prev ? ({ ...prev, pointsDiscussed: val }) : null);
+                        }}
+                        placeholder="Enter key topics, syllabus explanations, fee details, transport queries, campus visit impressions..."
+                        className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Counsellor observations / additional remarks:
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={formData.counsellorObservations}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setFormData(prev => ({ ...prev, counsellorObservations: val }));
+                          setSiblingFormData(prev => prev ? ({ ...prev, counsellorObservations: val }) : null);
+                        }}
+                        placeholder="Counsellor's internal feedback regarding parent readiness, sibling admission considerations..."
+                        className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Transport */}
+                  <div className="p-3.5 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200 dark:border-slate-800 flex items-center justify-between flex-wrap gap-3">
+                    <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                      Transport Facility Required for Siblings?
+                    </span>
+                    <div className="flex items-center gap-4">
+                      <label className="flex items-center gap-1.5 cursor-pointer text-xs font-medium">
+                        <input
+                          type="radio"
+                          name="sibling_transport"
+                          checked={formData.transportRequired === true}
+                          onChange={() => {
+                            setFormData(prev => ({ ...prev, transportRequired: true }));
+                            setSiblingFormData(prev => prev ? ({ ...prev, transportRequired: true }) : null);
+                          }}
+                          className="text-orange-600 focus:ring-orange-500"
+                        />
+                        <span>Yes, Transport Needed</span>
+                      </label>
+                      <label className="flex items-center gap-1.5 cursor-pointer text-xs font-medium">
+                        <input
+                          type="radio"
+                          name="sibling_transport"
+                          checked={formData.transportRequired === false}
+                          onChange={() => {
+                            setFormData(prev => ({ ...prev, transportRequired: false }));
+                            setSiblingFormData(prev => prev ? ({ ...prev, transportRequired: false }) : null);
+                          }}
+                          className="text-orange-600 focus:ring-orange-500"
+                        />
+                        <span>No (Own Transport)</span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4. INFORMATION EXPLAINED */}
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 border-b-2 border-orange-500 pb-1.5">
+                    <span className="w-6 h-6 rounded-full bg-orange-600 text-white flex items-center justify-center font-bold text-xs">4</span>
+                    <h3 className="text-sm font-black uppercase text-slate-900 dark:text-white tracking-wider">
+                      INFORMATION EXPLAINED (Check all that apply)
+                    </h3>
+                  </div>
+
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                    {[
+                      { key: "explainedSchoolFacilities", label: "School Facilities" },
+                      { key: "explainedAcademicProgramme", label: "Academic Programme" },
+                      { key: "explainedFeeStructure", label: "Fee Structure (Sibling Concession)" },
+                      { key: "explainedTransportDetails", label: "Transport Details" },
+                      { key: "explainedSchoolRules", label: "School Rules / Policies" },
+                      { key: "explainedActivitiesSports", label: "Activities / Sports" },
+                    ].map(({ key, label }) => {
+                      const isChecked = (formData as any)[key] === true;
+                      return (
+                        <label
+                          key={key}
+                          onClick={() => {
+                            const nextVal = !isChecked;
+                            setFormData(prev => ({ ...prev, [key]: nextVal }));
+                            setSiblingFormData(prev => prev ? ({ ...prev, [key]: nextVal }) : null);
+                          }}
+                          className={`flex items-center gap-2.5 p-3 rounded-xl border text-xs cursor-pointer transition-all ${
+                            isChecked 
+                              ? "bg-emerald-50 dark:bg-emerald-950/30 border-emerald-400 text-emerald-800 dark:text-emerald-300 font-bold" 
+                              : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => {}}
+                            className="rounded text-emerald-600 focus:ring-emerald-500"
+                          />
+                          <span>{label}: Explained</span>
+                        </label>
                       );
                     })}
                   </div>
+                </div>
 
-                  {/* Dual Input: Text Box + Native Calendar Date Picker */}
-                  <div className="flex items-center gap-1.5">
-                    <div className="relative flex-1">
+                {/* 5. FOLLOW-UP DATE & CONSENT */}
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 border-b-2 border-orange-500 pb-1.5">
+                    <span className="w-6 h-6 rounded-full bg-orange-600 text-white flex items-center justify-center font-bold text-xs">5</span>
+                    <h3 className="text-sm font-black uppercase text-slate-900 dark:text-white tracking-wider">
+                      FOLLOW-UP DATE &amp; CONSENT
+                    </h3>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+                    <div className={formData.admissionStatus === "Follow-up Required" || siblingFormData.admissionStatus === "Follow-up Required" ? "p-3 bg-orange-50/80 dark:bg-orange-950/20 border-2 border-orange-400 dark:border-orange-600/60 rounded-2xl shadow-sm" : ""}>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                          <Calendar size={14} className="text-orange-500" />
+                          <span>Follow-up Date</span>
+                          <span className="text-[10px] px-1.5 py-0.2 rounded-md bg-purple-600 text-white font-black uppercase">
+                            Siblings
+                          </span>
+                        </label>
+                        {formData.followUpDate && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFormData(prev => ({ ...prev, followUpDate: "" }));
+                              setSiblingFormData(prev => prev ? ({ ...prev, followUpDate: "" }) : null);
+                            }}
+                            className="text-[10px] text-slate-400 hover:text-red-500 font-bold cursor-pointer"
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Quick Date Presets */}
+                      <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                        <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">⚡ Quick:</span>
+                        {[
+                          { label: "Tomorrow (+1D)", days: 1 },
+                          { label: "In 3 Days (+3D)", days: 3 },
+                          { label: "In 1 Week (+7D)", days: 7 },
+                          { label: "In 2 Weeks (+14D)", days: 14 }
+                        ].map(preset => {
+                          const targetDate = getFutureDateDMY(preset.days);
+                          const isSelected = formData.followUpDate === targetDate;
+                          return (
+                            <button
+                              type="button"
+                              key={preset.days}
+                              onClick={() => {
+                                setFormData(prev => ({ ...prev, followUpDate: targetDate, admissionStatus: "Follow-up Required" }));
+                                if (applyFollowUpToSibling) {
+                                  setSiblingFormData(prev => prev ? ({ ...prev, followUpDate: targetDate, admissionStatus: "Follow-up Required" }) : null);
+                                }
+                              }}
+                              className={`px-2 py-0.5 rounded-lg text-[10px] font-extrabold transition-all cursor-pointer border active:scale-95 ${
+                                isSelected
+                                  ? "bg-orange-600 text-white border-orange-600 shadow-sm ring-1 ring-orange-400/40"
+                                  : "bg-white dark:bg-slate-800 hover:bg-orange-100 dark:hover:bg-orange-950/60 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700"
+                              }`}
+                            >
+                              {preset.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Text Box + Native Calendar Date Picker */}
+                      <div className="flex items-center gap-1.5">
+                        <div className="relative flex-1">
+                          <input
+                            type="text"
+                            value={formData.followUpDate}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setFormData(prev => ({ ...prev, followUpDate: val }));
+                              if (applyFollowUpToSibling) {
+                                setSiblingFormData(prev => prev ? ({ ...prev, followUpDate: val }) : null);
+                              }
+                            }}
+                            placeholder="DD-MM-YYYY"
+                            className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                          />
+                        </div>
+
+                        <div className="relative shrink-0" title="Open Calendar Picker">
+                          <input
+                            type="date"
+                            value={dmyToYmd(formData.followUpDate)}
+                            onChange={(e) => {
+                              const selectedDMY = ymdToDmy(e.target.value);
+                              setFormData(prev => ({ ...prev, followUpDate: selectedDMY, admissionStatus: "Follow-up Required" }));
+                              if (applyFollowUpToSibling) {
+                                setSiblingFormData(prev => prev ? ({ ...prev, followUpDate: selectedDMY, admissionStatus: "Follow-up Required" }) : null);
+                              }
+                            }}
+                            className="w-9 h-8 p-1 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-orange-500"
+                          />
+                        </div>
+                      </div>
+
+                      <label className="flex items-center gap-1.5 mt-2 cursor-pointer text-[11px] font-bold text-slate-700 dark:text-slate-300">
+                        <input
+                          type="checkbox"
+                          checked={applyFollowUpToSibling}
+                          onChange={(e) => setApplyFollowUpToSibling(e.target.checked)}
+                          className="rounded text-purple-600 focus:ring-purple-500"
+                        />
+                        <span>Sync follow-up date for both Child 1 &amp; Child 2</span>
+                      </label>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Counsellor Name &amp; ID
+                      </label>
+                      {userRole === "Counsellor" && activeCounsellor ? (
+                        <div className="px-3.5 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-black text-orange-600 dark:text-orange-400 flex items-center justify-between">
+                          <span>{activeCounsellor.name}</span>
+                          <span className="font-mono text-[10px] bg-orange-100 dark:bg-orange-950 px-2 py-0.5 rounded">
+                            {activeCounsellor.id}
+                          </span>
+                        </div>
+                      ) : (
+                        <select
+                          value={formData.counsellorId || (localAccounts[0]?.id || "COUNSELLOR-01")}
+                          onChange={(e) => {
+                            const sel = localAccounts.find(c => c.id === e.target.value);
+                            if (sel) {
+                              setFormData(prev => ({
+                                ...prev,
+                                counsellorId: sel.id,
+                                counsellorName: sel.name
+                              }));
+                              setSiblingFormData(prev => prev ? ({
+                                ...prev,
+                                counsellorId: sel.id,
+                                counsellorName: sel.name
+                              }) : null);
+                            }
+                          }}
+                          className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        >
+                          {localAccounts.map((c, idx) => (
+                            <option key={`counsellor-sel-sib-${c.id}-${c.username}-${idx}`} value={c.id}>
+                              {c.id}: {c.name} ({c.roleTitle})
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Parent Signature / Consent</label>
+                      <label className="flex items-center gap-2 mt-2 cursor-pointer text-xs font-bold text-slate-700 dark:text-slate-300">
+                        <input
+                          type="checkbox"
+                          checked={formData.parentSignatureRecorded}
+                          onChange={(e) => {
+                            const val = e.target.checked;
+                            setFormData(prev => ({ ...prev, parentSignatureRecorded: val }));
+                            setSiblingFormData(prev => prev ? ({ ...prev, parentSignatureRecorded: val }) : null);
+                          }}
+                          className="rounded text-orange-600 focus:ring-orange-500"
+                        />
+                        <span>Recorded / In-Person Signature Received</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Office remarks */}
+                  <div className="mt-4 p-4 bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 rounded-xl">
+                    <span className="text-[10px] font-black text-amber-800 dark:text-amber-400 tracking-wider uppercase">
+                      FOR SCHOOL OFFICE USE ONLY (SIBLING ADMISSIONS)
+                    </span>
+                    <input
+                      type="text"
+                      value={formData.officeRemarks || ""}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setFormData(prev => ({ ...prev, officeRemarks: val }));
+                        setSiblingFormData(prev => prev ? ({ ...prev, officeRemarks: val }) : null);
+                      }}
+                      placeholder="Sibling discount applied / 2 Application Kits issued / Fee quotation given / Notes..."
+                      className="w-full mt-1.5 px-3.5 py-2 bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : (
+              /* ============================================================== */
+              /* 👤 STANDARD SINGLE STUDENT ADMISSION FORM                       */
+              /* ============================================================== */
+              <div className="space-y-8">
+                {/* SECTION 1: STUDENT & PARENT DETAILS */}
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between border-b-2 border-orange-500 pb-1.5 flex-wrap gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="w-6 h-6 rounded-full bg-orange-600 text-white flex items-center justify-center font-bold text-xs">1</span>
+                      <h3 className="text-sm font-black uppercase text-slate-900 dark:text-white tracking-wider">
+                        STUDENT &amp; PARENT DETAILS
+                      </h3>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Date</label>
                       <input
                         type="text"
-                        value={formData.followUpDate}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setFormData({ ...formData, followUpDate: val });
-                          if (isJointSiblingMode && applyFollowUpToSibling && siblingFormData) {
-                            setSiblingFormData({ ...siblingFormData, followUpDate: val });
-                          }
-                        }}
+                        value={formData.date}
+                        onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))}
                         placeholder="DD-MM-YYYY"
-                        className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        required
                       />
                     </div>
 
-                    <div className="relative shrink-0" title="Open Calendar Picker">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Enquiry No.
+                      </label>
                       <input
-                        type="date"
-                        value={dmyToYmd(formData.followUpDate)}
-                        onChange={(e) => {
-                          const selectedDMY = ymdToDmy(e.target.value);
-                          setFormData({ ...formData, followUpDate: selectedDMY, admissionStatus: "Follow-up Required" });
-                          if (isJointSiblingMode && applyFollowUpToSibling && siblingFormData) {
-                            setSiblingFormData({ ...siblingFormData, followUpDate: selectedDMY, admissionStatus: "Follow-up Required" });
-                          }
-                        }}
-                        className="w-9 h-8 p-1 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        type="text"
+                        value={formData.enquiryNo}
+                        onChange={(e) => setFormData(prev => ({ ...prev, enquiryNo: e.target.value, id: e.target.value }))}
+                        className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-mono font-bold text-orange-600 dark:text-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Student Name <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={formData.studentName}
+                        onChange={(e) => setFormData(prev => ({ ...prev, studentName: e.target.value }))}
+                        placeholder="Enter Student Full Name"
+                        className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Applying for Class <span className="text-red-500">*</span>
+                      </label>
+                      <select
+                        value={formData.applyingForClass}
+                        onChange={(e) => setFormData(prev => ({ ...prev, applyingForClass: e.target.value }))}
+                        className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      >
+                        {CLASS_OPTIONS.map(c => (
+                          <option key={c} value={c}>{c}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Academic Year <span className="text-red-500">*</span>
+                      </label>
+                      <select
+                        value={formData.academicYear || "2026-2027"}
+                        onChange={(e) => setFormData(prev => ({ ...prev, academicYear: e.target.value }))}
+                        className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-bold text-orange-600 dark:text-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-500 cursor-pointer"
+                      >
+                        <option value="2026-2027">2026-2027 (Current Academic Year)</option>
+                        <option value="2027-2028">2027-2028 (Next Year Advance)</option>
+                        <option value="2028-2029">2028-2029 (Future Advance)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Date of Birth
+                      </label>
+                      <input
+                        type="text"
+                        value={formData.dateOfBirth || ""}
+                        onChange={(e) => setFormData(prev => ({ ...prev, dateOfBirth: e.target.value }))}
+                        placeholder="DD-MM-YYYY"
+                        className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Gender
+                      </label>
+                      <div className="flex items-center gap-6 mt-2">
+                        <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-slate-700 dark:text-slate-300">
+                          <input
+                            type="radio"
+                            name="single_student_gender"
+                            value="Male"
+                            checked={formData.gender === "Male"}
+                            onChange={() => setFormData(prev => ({ ...prev, gender: "Male" }))}
+                            className="text-orange-600 focus:ring-orange-500"
+                          />
+                          <span>Male</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-slate-700 dark:text-slate-300">
+                          <input
+                            type="radio"
+                            name="single_student_gender"
+                            value="Female"
+                            checked={formData.gender === "Female"}
+                            onChange={() => setFormData(prev => ({ ...prev, gender: "Female" }))}
+                            className="text-orange-600 focus:ring-orange-500"
+                          />
+                          <span>Female</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Father's Name <span className="text-red-500 font-black">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={formData.fatherName}
+                        onChange={(e) => setFormData(prev => ({ ...prev, fatherName: e.target.value }))}
+                        placeholder="Father Name"
+                        className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Mother's Name <span className="text-red-500 font-black">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={formData.motherName}
+                        onChange={(e) => setFormData(prev => ({ ...prev, motherName: e.target.value }))}
+                        placeholder="Mother Name"
+                        className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Contact No. <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="tel"
+                        value={formData.contactNo}
+                        onChange={(e) => setFormData(prev => ({ ...prev, contactNo: e.target.value }))}
+                        placeholder="Primary Calling Number"
+                        className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">WhatsApp No.</label>
+                        <button
+                          type="button"
+                          onClick={() => setFormData(prev => ({ ...prev, whatsappNo: prev.contactNo }))}
+                          className="text-[10px] text-orange-600 dark:text-orange-400 hover:underline font-semibold"
+                        >
+                          Same as Contact
+                        </button>
+                      </div>
+                      <input
+                        type="tel"
+                        value={formData.whatsappNo}
+                        onChange={(e) => setFormData(prev => ({ ...prev, whatsappNo: e.target.value }))}
+                        placeholder="WhatsApp Number"
+                        className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Previous School &amp; Board <span className="text-red-500 font-black">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={formData.previousSchool}
+                        onChange={(e) => setFormData(prev => ({ ...prev, previousSchool: e.target.value }))}
+                        placeholder="Name of previous school & board"
+                        className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Previous Class
+                      </label>
+                      <input
+                        type="text"
+                        value={formData.previousClass || ""}
+                        onChange={(e) => setFormData(prev => ({ ...prev, previousClass: e.target.value }))}
+                        placeholder="Class completed"
+                        className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Residential Address <span className="text-red-500 font-black">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={formData.residentialAddress || ""}
+                        onChange={(e) => setFormData(prev => ({ ...prev, residentialAddress: e.target.value }))}
+                        placeholder="House / Flat No., Area / Locality, Landmark"
+                        className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500 font-medium transition-all"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* SECTION 2: PARENT ENQUIRY */}
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 border-b-2 border-orange-500 pb-1.5">
+                    <span className="w-6 h-6 rounded-full bg-orange-600 text-white flex items-center justify-center font-bold text-xs">2</span>
+                    <h3 className="text-sm font-black uppercase text-slate-900 dark:text-white tracking-wider">
+                      PARENT ENQUIRY
+                    </h3>
+                  </div>
+
+                  <div className="space-y-3">
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+                      How did you hear about our school?
+                    </label>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2.5">
+                      {SOURCES.map(source => {
+                        const checked = (formData.heardAboutSchool || []).includes(source);
+                        return (
+                          <label 
+                            key={source} 
+                            onClick={() => handleSourceToggle(source)}
+                            className={`flex items-center gap-2 p-2.5 rounded-xl border text-xs cursor-pointer transition-all ${
+                              checked 
+                                ? "bg-orange-50 dark:bg-orange-950/40 border-orange-400 text-orange-800 dark:text-orange-300 font-bold" 
+                                : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => {}}
+                              className="rounded text-orange-600 focus:ring-orange-500"
+                            />
+                            <span className="truncate">{source}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+                    <div className="md:col-span-1">
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Reason for choosing our school</label>
+                      <textarea
+                        rows={2}
+                        value={formData.reasonForChoosing}
+                        onChange={(e) => setFormData({ ...formData, reasonForChoosing: e.target.value })}
+                        placeholder="e.g. Reputation, Curriculum, Proximity, Referrals..."
+                        className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Preferred Contact</label>
+                      <div className="flex items-center gap-6 mt-2">
+                        <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-slate-700 dark:text-slate-300">
+                          <input
+                            type="radio"
+                            name="preferredContact_single"
+                            value="Call"
+                            checked={formData.preferredContact === "Call"}
+                            onChange={() => setFormData({ ...formData, preferredContact: "Call" })}
+                            className="text-orange-600 focus:ring-orange-500"
+                          />
+                          <span>Call</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-slate-700 dark:text-slate-300">
+                          <input
+                            type="radio"
+                            name="preferredContact_single"
+                            value="WhatsApp"
+                            checked={formData.preferredContact === "WhatsApp"}
+                            onChange={() => setFormData({ ...formData, preferredContact: "WhatsApp" })}
+                            className="text-orange-600 focus:ring-orange-500"
+                          />
+                          <span>WhatsApp</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Best time to contact</label>
+                      <input
+                        type="text"
+                        value={formData.bestTimeToContact}
+                        onChange={(e) => setFormData({ ...formData, bestTimeToContact: e.target.value })}
+                        placeholder="e.g. 10:00 AM - 12:00 PM or Evenings"
+                        className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* SECTION 3: STUDENT INFORMATION & PARENT EXPECTATIONS */}
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 border-b-2 border-orange-500 pb-1.5">
+                    <span className="w-6 h-6 rounded-full bg-orange-600 text-white flex items-center justify-center font-bold text-xs">3</span>
+                    <h3 className="text-sm font-black uppercase text-slate-900 dark:text-white tracking-wider">
+                      STUDENT INFORMATION &amp; PARENT EXPECTATIONS
+                    </h3>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Academic Performance</label>
+                      <input
+                        type="text"
+                        value={formData.academicPerformance}
+                        onChange={(e) => setFormData({ ...formData, academicPerformance: e.target.value })}
+                        placeholder="e.g. Above average, Grade A, requires help in Math"
+                        className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Student Interests / Talents</label>
+                      <input
+                        type="text"
+                        value={formData.studentInterests}
+                        onChange={(e) => setFormData({ ...formData, studentInterests: e.target.value })}
+                        placeholder="e.g. Sports, Music, Art, Coding, Chess"
+                        className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Strengths</label>
+                      <input
+                        type="text"
+                        value={formData.strengths}
+                        onChange={(e) => setFormData({ ...formData, strengths: e.target.value })}
+                        placeholder="e.g. Good communication, creative thinking"
+                        className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Areas needing support</label>
+                      <input
+                        type="text"
+                        value={formData.areasNeedingSupport}
+                        onChange={(e) => setFormData({ ...formData, areasNeedingSupport: e.target.value })}
+                        placeholder="e.g. Handwriting, Second Language, Concentration"
+                        className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
                       />
                     </div>
                   </div>
 
-                  {formData.admissionStatus === "Follow-up Required" && (
-                    <p className="text-[10px] text-orange-700 dark:text-orange-300 mt-1.5 font-medium flex items-center gap-1">
-                      <span>🔔</span>
-                      <span>Will automatically pop up in your morning <strong>Follow-up Calls Alert</strong> on this date.</span>
-                    </p>
-                  )}
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Counsellor Name & ID
-                  </label>
-                  {userRole === "Counsellor" && activeCounsellor ? (
-                    <div className="px-3.5 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-black text-orange-600 dark:text-orange-400 flex items-center justify-between">
-                      <span>{activeCounsellor.name}</span>
-                      <span className="font-mono text-[10px] bg-orange-100 dark:bg-orange-950 px-2 py-0.5 rounded">
-                        {activeCounsellor.id}
-                      </span>
+                  {/* Requirement checkboxes */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 bg-slate-50 dark:bg-slate-800/40 p-4 rounded-xl border border-slate-200 dark:border-slate-800">
+                    <div>
+                      <span className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">Transport Required?</span>
+                      <div className="flex items-center gap-4">
+                        <label className="flex items-center gap-1.5 cursor-pointer text-xs font-medium">
+                          <input
+                            type="radio"
+                            name="single_transport"
+                            checked={formData.transportRequired === true}
+                            onChange={() => setFormData({ ...formData, transportRequired: true })}
+                            className="text-orange-600 focus:ring-orange-500"
+                          />
+                          <span>Yes</span>
+                        </label>
+                        <label className="flex items-center gap-1.5 cursor-pointer text-xs font-medium">
+                          <input
+                            type="radio"
+                            name="single_transport"
+                            checked={formData.transportRequired === false}
+                            onChange={() => setFormData({ ...formData, transportRequired: false })}
+                            className="text-orange-600 focus:ring-orange-500"
+                          />
+                          <span>No</span>
+                        </label>
+                      </div>
                     </div>
-                  ) : (
-                    <select
-                      value={formData.counsellorId || (localAccounts[0]?.id || "COUNSELLOR-01")}
-                      onChange={(e) => {
-                        const sel = localAccounts.find(c => c.id === e.target.value);
-                        if (sel) {
-                          setFormData({
-                            ...formData,
-                            counsellorId: sel.id,
-                            counsellorName: sel.name
-                          });
-                        }
-                      }}
-                      className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
-                    >
-                      {localAccounts.map((c, idx) => (
-                        <option key={`counsellor-sel-${c.id}-${c.username}-${idx}`} value={c.id}>
-                          {c.id}: {c.name} ({c.roleTitle})
-                        </option>
-                      ))}
-                    </select>
+
+                    <div>
+                      <span className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">Special Support Required?</span>
+                      <div className="flex items-center gap-4">
+                        <label className="flex items-center gap-1.5 cursor-pointer text-xs font-medium">
+                          <input
+                            type="radio"
+                            name="single_special_support"
+                            checked={formData.specialLearningSupport === true}
+                            onChange={() => setFormData({ ...formData, specialLearningSupport: true })}
+                            className="text-orange-600 focus:ring-orange-500"
+                          />
+                          <span>Yes</span>
+                        </label>
+                        <label className="flex items-center gap-1.5 cursor-pointer text-xs font-medium">
+                          <input
+                            type="radio"
+                            name="single_special_support"
+                            checked={formData.specialLearningSupport === false}
+                            onChange={() => setFormData({ ...formData, specialLearningSupport: false })}
+                            className="text-orange-600 focus:ring-orange-500"
+                          />
+                          <span>No</span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+
+                  {formData.specialLearningSupport && (
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Special Learning / Support Details
+                      </label>
+                      <input
+                        type="text"
+                        value={formData.specialLearningDetails}
+                        onChange={(e) => setFormData({ ...formData, specialLearningDetails: e.target.value })}
+                        placeholder="Specify special educational or medical assistance needed"
+                        className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      />
+                    </div>
                   )}
                 </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Parent Signature / Consent</label>
-                  <label className="flex items-center gap-2 mt-2 cursor-pointer text-xs font-bold text-slate-700 dark:text-slate-300">
+                {/* SECTION 4: COUNSELLING / INTERACTION NOTES */}
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 border-b-2 border-orange-500 pb-1.5">
+                    <span className="w-6 h-6 rounded-full bg-orange-600 text-white flex items-center justify-center font-bold text-xs">4</span>
+                    <h3 className="text-sm font-black uppercase text-slate-900 dark:text-white tracking-wider">
+                      COUNSELLING / INTERACTION NOTES
+                    </h3>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Points discussed with parents:
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={formData.pointsDiscussed}
+                        onChange={(e) => setFormData({ ...formData, pointsDiscussed: e.target.value })}
+                        placeholder="Enter key topics, syllabus explanations, fee details, transport queries, campus visit impressions..."
+                        className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Counsellor observations / additional remarks:
+                      </label>
+                      <textarea
+                        rows={2}
+                        value={formData.counsellorObservations}
+                        onChange={(e) => setFormData({ ...formData, counsellorObservations: e.target.value })}
+                        placeholder="Counsellor's internal feedback regarding parent readiness, child confidence, recommended class level..."
+                        className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* SECTION 5: INFORMATION EXPLAINED */}
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 border-b-2 border-orange-500 pb-1.5">
+                    <span className="w-6 h-6 rounded-full bg-orange-600 text-white flex items-center justify-center font-bold text-xs">5</span>
+                    <h3 className="text-sm font-black uppercase text-slate-900 dark:text-white tracking-wider">
+                      INFORMATION EXPLAINED (Check all that apply)
+                    </h3>
+                  </div>
+
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                    {[
+                      { key: "explainedSchoolFacilities", label: "School Facilities" },
+                      { key: "explainedAcademicProgramme", label: "Academic Programme" },
+                      { key: "explainedFeeStructure", label: "Fee Structure" },
+                      { key: "explainedTransportDetails", label: "Transport Details" },
+                      { key: "explainedSchoolRules", label: "School Rules / Policies" },
+                      { key: "explainedActivitiesSports", label: "Activities / Sports" },
+                    ].map(({ key, label }) => {
+                      const isChecked = (formData as any)[key] === true;
+                      return (
+                        <label
+                          key={key}
+                          onClick={() => setFormData({ ...formData, [key]: !isChecked })}
+                          className={`flex items-center gap-2.5 p-3 rounded-xl border text-xs cursor-pointer transition-all ${
+                            isChecked 
+                              ? "bg-emerald-50 dark:bg-emerald-950/30 border-emerald-400 text-emerald-800 dark:text-emerald-300 font-bold" 
+                              : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => {}}
+                            className="rounded text-emerald-600 focus:ring-emerald-500"
+                          />
+                          <span>{label}: Explained</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* SECTION 6: ADMISSION STATUS & FOLLOW-UP */}
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 border-b-2 border-orange-500 pb-1.5">
+                    <span className="w-6 h-6 rounded-full bg-orange-600 text-white flex items-center justify-center font-bold text-xs">6</span>
+                    <h3 className="text-sm font-black uppercase text-slate-900 dark:text-white tracking-wider">
+                      ADMISSION STATUS &amp; FOLLOW-UP
+                    </h3>
+                  </div>
+
+                  <div className="space-y-3">
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">Admission Status</label>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
+                      {(Object.keys(STATUS_CONFIG) as AdmissionStatus[]).map(status => {
+                        const isSelected = formData.admissionStatus === status;
+                        const conf = STATUS_CONFIG[status];
+                        return (
+                          <button
+                            type="button"
+                            key={status}
+                            onClick={() => {
+                              let newFollowUp = formData.followUpDate;
+                              if (status === "Follow-up Required" && !newFollowUp) {
+                                newFollowUp = getFutureDateDMY(7);
+                              }
+                              setFormData({ ...formData, admissionStatus: status, followUpDate: newFollowUp });
+                            }}
+                            className={`px-3 py-2.5 rounded-xl border text-xs font-bold text-center cursor-pointer transition-all ${
+                              isSelected 
+                                ? `${conf.bg} ${conf.text} ${conf.border} ring-2 ring-orange-500` 
+                                : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-100"
+                            }`}
+                          >
+                            {conf.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+                    <div className={formData.admissionStatus === "Follow-up Required" ? "p-3 bg-orange-50/80 dark:bg-orange-950/20 border-2 border-orange-400 dark:border-orange-600/60 rounded-2xl shadow-sm" : ""}>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                          <Calendar size={14} className="text-orange-500" />
+                          <span>Follow-up Date</span>
+                          {formData.admissionStatus === "Follow-up Required" && (
+                            <span className="text-[10px] px-1.5 py-0.2 rounded-md bg-orange-600 text-white font-black uppercase">
+                              Alert Enabled
+                            </span>
+                          )}
+                        </label>
+                        {formData.followUpDate && (
+                          <button
+                            type="button"
+                            onClick={() => setFormData({ ...formData, followUpDate: "" })}
+                            className="text-[10px] text-slate-400 hover:text-red-500 font-bold cursor-pointer"
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Quick Date Presets */}
+                      <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                        <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">⚡ Quick:</span>
+                        {[
+                          { label: "Tomorrow (+1D)", days: 1 },
+                          { label: "In 3 Days (+3D)", days: 3 },
+                          { label: "In 1 Week (+7D)", days: 7 },
+                          { label: "In 2 Weeks (+14D)", days: 14 }
+                        ].map(preset => {
+                          const targetDate = getFutureDateDMY(preset.days);
+                          const isSelected = formData.followUpDate === targetDate;
+                          return (
+                            <button
+                              type="button"
+                              key={preset.days}
+                              onClick={() => {
+                                setFormData({ ...formData, followUpDate: targetDate, admissionStatus: "Follow-up Required" });
+                              }}
+                              className={`px-2 py-0.5 rounded-lg text-[10px] font-extrabold transition-all cursor-pointer border active:scale-95 ${
+                                isSelected
+                                  ? "bg-orange-600 text-white border-orange-600 shadow-sm ring-1 ring-orange-400/40"
+                                  : "bg-white dark:bg-slate-800 hover:bg-orange-100 dark:hover:bg-orange-950/60 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700"
+                              }`}
+                              title={`Set follow-up date to ${targetDate}`}
+                            >
+                              {preset.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Dual Input: Text Box + Native Calendar Date Picker */}
+                      <div className="flex items-center gap-1.5">
+                        <div className="relative flex-1">
+                          <input
+                            type="text"
+                            value={formData.followUpDate}
+                            onChange={(e) => setFormData({ ...formData, followUpDate: e.target.value })}
+                            placeholder="DD-MM-YYYY"
+                            className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                          />
+                        </div>
+
+                        <div className="relative shrink-0" title="Open Calendar Picker">
+                          <input
+                            type="date"
+                            value={dmyToYmd(formData.followUpDate)}
+                            onChange={(e) => {
+                              const selectedDMY = ymdToDmy(e.target.value);
+                              setFormData({ ...formData, followUpDate: selectedDMY, admissionStatus: "Follow-up Required" });
+                            }}
+                            className="w-9 h-8 p-1 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-orange-500"
+                          />
+                        </div>
+                      </div>
+
+                      {formData.admissionStatus === "Follow-up Required" && (
+                        <p className="text-[10px] text-orange-700 dark:text-orange-300 mt-1.5 font-medium flex items-center gap-1">
+                          <span>🔔</span>
+                          <span>Will automatically pop up in your morning <strong>Follow-up Calls Alert</strong> on this date.</span>
+                        </p>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                        Counsellor Name &amp; ID
+                      </label>
+                      {userRole === "Counsellor" && activeCounsellor ? (
+                        <div className="px-3.5 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-black text-orange-600 dark:text-orange-400 flex items-center justify-between">
+                          <span>{activeCounsellor.name}</span>
+                          <span className="font-mono text-[10px] bg-orange-100 dark:bg-orange-950 px-2 py-0.5 rounded">
+                            {activeCounsellor.id}
+                          </span>
+                        </div>
+                      ) : (
+                        <select
+                          value={formData.counsellorId || (localAccounts[0]?.id || "COUNSELLOR-01")}
+                          onChange={(e) => {
+                            const sel = localAccounts.find(c => c.id === e.target.value);
+                            if (sel) {
+                              setFormData({
+                                ...formData,
+                                counsellorId: sel.id,
+                                counsellorName: sel.name
+                              });
+                            }
+                          }}
+                          className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        >
+                          {localAccounts.map((c, idx) => (
+                            <option key={`counsellor-sel-single-${c.id}-${c.username}-${idx}`} value={c.id}>
+                              {c.id}: {c.name} ({c.roleTitle})
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Parent Signature / Consent</label>
+                      <label className="flex items-center gap-2 mt-2 cursor-pointer text-xs font-bold text-slate-700 dark:text-slate-300">
+                        <input
+                          type="checkbox"
+                          checked={formData.parentSignatureRecorded}
+                          onChange={(e) => setFormData({ ...formData, parentSignatureRecorded: e.target.checked })}
+                          className="rounded text-orange-600 focus:ring-orange-500"
+                        />
+                        <span>Recorded / In-Person Signature Received</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Office Use Only */}
+                  <div className="mt-4 p-4 bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 rounded-xl">
+                    <span className="text-[10px] font-black text-amber-800 dark:text-amber-400 tracking-wider uppercase">
+                      FOR SCHOOL OFFICE USE ONLY
+                    </span>
                     <input
-                      type="checkbox"
-                      checked={formData.parentSignatureRecorded}
-                      onChange={(e) => setFormData({ ...formData, parentSignatureRecorded: e.target.checked })}
-                      className="rounded text-orange-600 focus:ring-orange-500"
+                      type="text"
+                      value={formData.officeRemarks || ""}
+                      onChange={(e) => setFormData({ ...formData, officeRemarks: e.target.value })}
+                      placeholder="Application Kit issued / Fee quotation given / Verification notes / Special remarks..."
+                      className="w-full mt-1.5 px-3.5 py-2 bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
                     />
-                    <span>Recorded / In-Person Signature Received</span>
-                  </label>
+                  </div>
                 </div>
               </div>
-
-              {/* Office Use Only */}
-              <div className="mt-4 p-4 bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 rounded-xl">
-                <span className="text-[10px] font-black text-amber-800 dark:text-amber-400 tracking-wider uppercase">
-                  FOR SCHOOL OFFICE USE ONLY
-                </span>
-                <input
-                  type="text"
-                  value={formData.officeRemarks || ""}
-                  onChange={(e) => setFormData({ ...formData, officeRemarks: e.target.value })}
-                  placeholder="Application Kit issued / Fee quotation given / Verification notes / Special remarks..."
-                  className="w-full mt-1.5 px-3.5 py-2 bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
-                />
-              </div>
-            </div>
+            )}
 
             {/* SECTION 7: LIVE MEETING VOICE RECORDING (FOR MANAGEMENT QUALITY AUDIT) */}
             <div className="space-y-4 pt-2">
@@ -6359,27 +8105,54 @@ Warm regards,
                         ? prev.pointsDiscussed
                         : (audioRec.meetingTextSummary || prev.pointsDiscussed)
                     };
-                    if (updated.studentName && updated.studentName.trim()) {
-                      onSaveEnquiry(updated);
-                    }
                     return updated;
                   });
+
+                  if (isJointSiblingMode) {
+                    setSiblingFormData(prev => {
+                      if (!prev) return null;
+                      return {
+                        ...prev,
+                        audioRecording: {
+                          ...audioRec,
+                          id: `${audioRec.id}-SIB`,
+                          enquiryNo: prev.enquiryNo || "",
+                          studentName: prev.studentName || "Sibling",
+                          isJointSiblingSession: true,
+                          jointSiblingNames: `${formData.studentName} & ${prev.studentName}`
+                        },
+                        conversationLanguageNotes: audioRec.conversationLanguageNotes || prev.conversationLanguageNotes,
+                        pointsDiscussed: prev.pointsDiscussed && prev.pointsDiscussed.trim()
+                          ? prev.pointsDiscussed
+                          : (audioRec.meetingTextSummary || prev.pointsDiscussed)
+                      };
+                    });
+                  }
                 }}
                 onRemoveAudio={() => {
-                  setFormData(prev => {
-                    const updated = {
-                      ...prev,
-                      audioRecording: undefined
-                    };
-                    if (updated.studentName && updated.studentName.trim()) {
-                      onSaveEnquiry(updated);
-                    }
-                    return updated;
-                  });
+                  setFormData(prev => ({
+                    ...prev,
+                    audioRecording: undefined
+                  }));
+                  if (isJointSiblingMode) {
+                    setSiblingFormData(prev => prev ? ({ ...prev, audioRecording: undefined }) : null);
+                  }
                 }}
                 onUpdateNotes={(newNotes) => {
-                  setFormData(prev => {
-                    const updated = {
+                  setFormData(prev => ({
+                    ...prev,
+                    pointsDiscussed: prev.pointsDiscussed && prev.pointsDiscussed.trim()
+                      ? prev.pointsDiscussed
+                      : newNotes,
+                    conversationLanguageNotes: newNotes,
+                    officeRemarks: prev.officeRemarks
+                      ? prev.officeRemarks.includes(newNotes)
+                        ? prev.officeRemarks
+                        : `${prev.officeRemarks}\n\n${newNotes}`
+                      : newNotes
+                  }));
+                  if (isJointSiblingMode) {
+                    setSiblingFormData(prev => prev ? ({
                       ...prev,
                       pointsDiscussed: prev.pointsDiscussed && prev.pointsDiscussed.trim()
                         ? prev.pointsDiscussed
@@ -6390,32 +8163,44 @@ Warm regards,
                           ? prev.officeRemarks
                           : `${prev.officeRemarks}\n\n${newNotes}`
                         : newNotes
-                    };
-                    if (updated.studentName && updated.studentName.trim()) {
-                      onSaveEnquiry(updated);
-                    }
-                    return updated;
-                  });
+                    }) : null);
+                  }
                 }}
               />
             </div>
           </div>
 
           {/* Form Actions Footer */}
-          <div className="p-6 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-200 dark:border-slate-800 flex items-center justify-end gap-3">
-            <button
-              type="button"
-              onClick={handleCancelForm}
-              className="px-5 py-2.5 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold transition-all cursor-pointer"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="px-6 py-2.5 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white rounded-xl text-xs font-black shadow-lg hover:shadow-xl transition-all cursor-pointer"
-            >
-              💾 Save Counselling Enquiry
-            </button>
+          <div className="p-6 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between flex-wrap gap-3">
+            <div>
+              {isJointSiblingMode && (
+                <button
+                  type="button"
+                  onClick={handleDisableSiblingMode}
+                  className="px-4 py-2.5 bg-purple-100 hover:bg-purple-200 dark:bg-purple-950/80 dark:hover:bg-purple-900 text-purple-900 dark:text-purple-200 border border-purple-300 dark:border-purple-700 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-sm"
+                >
+                  <span className="text-purple-600 dark:text-purple-400 font-extrabold">✕</span>
+                  <span>Switch to Single Student</span>
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={handleCancelForm}
+                className="px-5 py-2.5 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="px-6 py-2.5 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white rounded-xl text-xs font-black shadow-lg hover:shadow-xl transition-all cursor-pointer"
+              >
+                {isJointSiblingMode && siblingFormData
+                  ? `💾 Save Both Sibling Records (${formData.studentName || "Child 1"} & ${siblingFormData.studentName || "Child 2"})`
+                  : "💾 Save Counselling Enquiry"}
+              </button>
+            </div>
           </div>
         </form>
       )}
@@ -6880,19 +8665,41 @@ Warm regards,
                 <div className="text-slate-600 dark:text-slate-300 space-y-1">
                   <p><strong className="text-slate-800 dark:text-slate-100">Father:</strong> {inspectingEnquiry.fatherName || "N/A"}</p>
                   <p><strong className="text-slate-800 dark:text-slate-100">Mother:</strong> {inspectingEnquiry.motherName || "N/A"}</p>
-                  <p className="flex items-center gap-2">
-                    <strong className="text-slate-800 dark:text-slate-100">Phone:</strong> {inspectingEnquiry.contactNo}
-                    {inspectingEnquiry.whatsappNo && (
+                  <div className="space-y-1.5 pt-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <strong className="text-slate-800 dark:text-slate-100">📞 Primary Phone:</strong> 
+                      <span className="font-mono font-bold text-blue-600 dark:text-blue-400 text-xs">
+                        {inspectingEnquiry.contactNo || "N/A"}
+                      </span>
+                      {inspectingEnquiry.contactNo && (
+                        <a
+                          href={`tel:${inspectingEnquiry.contactNo}`}
+                          className="inline-flex items-center gap-1 text-[10px] font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/50 px-2 py-0.5 rounded-md hover:underline"
+                        >
+                          <Phone size={10} /> Call
+                        </a>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <strong className="text-slate-800 dark:text-slate-100">💬 WhatsApp No:</strong> 
+                      <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400 text-xs">
+                        {inspectingEnquiry.whatsappNo || inspectingEnquiry.contactNo || "N/A"}
+                      </span>
                       <a
-                        href={`https://wa.me/91${inspectingEnquiry.whatsappNo.replace(/[^0-9]/g, "")}`}
+                        href={`https://wa.me/91${(inspectingEnquiry.whatsappNo || inspectingEnquiry.contactNo || "").replace(/[^0-9]/g, "")}`}
                         target="_blank"
                         rel="noreferrer"
                         className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded-md hover:underline"
                       >
-                        <MessageSquare size={11} /> WhatsApp
+                        <MessageSquare size={10} /> Chat
                       </a>
-                    )}
-                  </p>
+                      {inspectingEnquiry.whatsappNo && inspectingEnquiry.whatsappNo !== inspectingEnquiry.contactNo && (
+                        <span className="text-[9px] px-1.5 py-0.2 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 font-bold">
+                          Alt WhatsApp
+                        </span>
+                      )}
+                    </div>
+                  </div>
                   <p><strong className="text-slate-800 dark:text-slate-100">Residential Address:</strong> {inspectingEnquiry.residentialAddress || "N/A"}</p>
                 </div>
               </div>
@@ -7294,6 +9101,18 @@ Warm regards,
           counsellors={localAccounts}
         />
       )}
+
+      {/* Dismissed Leads & Tokens Archive Modal */}
+      <DismissedLeadsModal
+        isOpen={isDismissedLeadsModalOpen}
+        onClose={() => setIsDismissedLeadsModalOpen(false)}
+        dismissedEntries={dismissedParentEntries}
+        onRestoreEntry={handleRestoreDismissedEntry}
+        onClaimEntry={handleClaimAndAutoFill}
+        onPermanentDelete={handlePermanentDeleteEntry}
+        currentCounsellorName={activeCounsellor?.name}
+        userRole={userRole}
+      />
 
       {/* Official Parent WhatsApp Communication Modal */}
       {!!whatsAppModalEnquiry && (

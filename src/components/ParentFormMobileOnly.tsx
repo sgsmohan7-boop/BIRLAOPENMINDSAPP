@@ -11,11 +11,12 @@ import {
   User,
   GraduationCap,
   Building2,
+  Globe,
   Printer,
   Calendar,
   Clock
 } from "lucide-react";
-import { ParentSelfEntry } from "../types";
+import { ParentSelfEntry, EnquiryType, getNextOnlineEnquiryNo, recordHighestOnlineEnquiryNumber } from "../types";
 import { isFirebaseConfigured, saveDocument, getNextDailyTokenNo } from "../utils/firebase";
 
 interface ParentFormMobileOnlyProps {
@@ -53,9 +54,21 @@ const SOURCES = [
 ];
 
 export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobileOnlyProps) {
+  // Detect URL parameter (?type=online or ?mode=online) to pre-select Online Enquiry for website/social links
+  const [enquiryType, setEnquiryType] = useState<EnquiryType>(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const t = (params.get("type") || params.get("mode") || "").toLowerCase();
+      if (t === "online" || t === "web" || t === "social") return "online";
+    }
+    return "walkin";
+  });
+
   const [isSubmittedSuccess, setIsSubmittedSuccess] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [assignedToken, setAssignedToken] = useState<number>(1);
+  const [assignedOnlineRef, setAssignedOnlineRef] = useState<string>("");
+  const [siblingAssignedOnlineRef, setSiblingAssignedOnlineRef] = useState<string | null>(null);
   const [submissionTimestamp, setSubmissionTimestamp] = useState<{ date: string; time: string }>({
     date: "",
     time: ""
@@ -113,24 +126,17 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
       return;
     }
 
-    const combinedParentInput = (parentNames || `${fatherName} / ${motherName}`).trim();
-    if (!combinedParentInput) {
-      alert("Please enter the Father's / Mother's full name.");
+    if (!fatherName.trim()) {
+      alert("Please enter the Father's full name.");
+      return;
+    }
+    if (!motherName.trim()) {
+      alert("Please enter the Mother's full name.");
       return;
     }
 
-    let finalFather = fatherName.trim();
-    let finalMother = motherName.trim();
-    if (parentNames.trim()) {
-      if (parentNames.includes("/")) {
-        const parts = parentNames.split("/");
-        finalFather = parts[0].trim();
-        finalMother = parts.slice(1).join("/").trim();
-      } else {
-        finalFather = parentNames.trim();
-        finalMother = "";
-      }
-    }
+    const finalFather = fatherName.trim();
+    const finalMother = motherName.trim();
 
     if (!previousSchool.trim()) {
       alert("Please enter the student's previous school & board.");
@@ -154,17 +160,36 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
     const id1 = `PSE-${now.getFullYear()}-${Math.floor(100 + Math.random() * 900)}-${Date.now()}`;
     const id2 = `PSE-${now.getFullYear()}-${Math.floor(100 + Math.random() * 900)}-${Date.now() + 1}`;
 
-    // Calculate authoritative daily token S.No across Firestore, Server API, and Local Storage BEFORE creating entry
-    let dailyTokenNo1 = 1;
-    try {
-      dailyTokenNo1 = await getNextDailyTokenNo(dmy, dateKey);
-    } catch {
-      dailyTokenNo1 = 1;
+    let dailyTokenNo1: number | undefined = undefined;
+    let onlineRefNo1 = "";
+    let onlineRefNo2: string | null = null;
+
+    if (enquiryType === "online") {
+      // 1. Online Enquiry: Distinct sequence numbering (e.g. ONL-2026-01) - NO daily token
+      onlineRefNo1 = getNextOnlineEnquiryNo();
+      const match = onlineRefNo1.match(/ONL-.*-(\d+)/i) || onlineRefNo1.match(/(\d+)$/);
+      const curNum = match ? parseInt(match[1] || match[0], 10) : 1;
+      recordHighestOnlineEnquiryNumber(curNum);
+
+      if (hasSibling && siblingName.trim()) {
+        const nextNum = curNum + 1;
+        const formatPad = (n: number) => n < 100 ? String(n).padStart(2, "0") : String(n);
+        onlineRefNo2 = `ONL-${now.getFullYear()}-${formatPad(nextNum)}`;
+        recordHighestOnlineEnquiryNumber(nextNum);
+      }
+    } else {
+      // 2. Campus Walk-in: Authoritative daily token S.No across Firestore, Server API, and Local Storage
+      try {
+        dailyTokenNo1 = await getNextDailyTokenNo(dmy, dateKey);
+      } catch {
+        dailyTokenNo1 = 1;
+      }
     }
-    const dailyTokenNo2 = dailyTokenNo1 + 1;
 
     let finalEntry1: ParentSelfEntry = {
-      id: id1,
+      id: enquiryType === "online" ? onlineRefNo1 : id1,
+      enquiryType,
+      onlineRefNo: enquiryType === "online" ? onlineRefNo1 : undefined,
       studentName: studentName.trim(),
       dateOfBirth: dateOfBirth.trim(),
       applyingForClass,
@@ -176,61 +201,25 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
       previousSchool: previousSchool.trim(),
       residentialAddress: residentialAddress.trim(),
       heardAboutSchool,
-      reasonForChoosing: reasonForChoosing.trim(),
+      reasonForChoosing: reasonForChoosing.trim() || (enquiryType === "online" ? "Online Website / Social Media QR Enquiry" : "Campus Reception Walk-in Visit"),
       submittedAt: now.toISOString(),
       formattedDate: `${dmy} ${timeStr}`,
       status: "pending",
-      dailyTokenNo: dailyTokenNo1,
+      dailyTokenNo: enquiryType === "walkin" ? dailyTokenNo1 : undefined,
       entryDate: dmy,
       dateKey,
       hasSibling: hasSibling && Boolean(siblingName.trim()),
-      siblingOfTokenNo: hasSibling ? dailyTokenNo2 : undefined,
-      linkedSiblingEntryId: hasSibling ? id2 : undefined,
       siblingDetails: hasSibling && siblingName.trim() ? {
-        studentName: siblingName.trim(),
-        dateOfBirth: siblingDob.trim(),
-        applyingForClass: siblingClass,
-        previousSchool: siblingPrevSchool.trim() || previousSchool.trim(),
-        gender: siblingGender
-      } : undefined
-    };
-
-    let finalEntry2: ParentSelfEntry | null = null;
-    if (hasSibling && siblingName.trim()) {
-      finalEntry2 = {
-        id: id2,
         studentName: siblingName.trim(),
         dateOfBirth: siblingDob.trim() || dateOfBirth.trim(),
         applyingForClass: siblingClass,
-        gender: siblingGender,
-        fatherName: finalFather || "—",
-        motherName: finalMother || "—",
-        contactNo: cleanPhone,
-        whatsappNo: (whatsappNo.trim() || cleanPhone).replace(/\D/g, "").slice(0, 10),
         previousSchool: siblingPrevSchool.trim() || previousSchool.trim(),
-        residentialAddress: residentialAddress.trim(),
-        heardAboutSchool,
-        reasonForChoosing: reasonForChoosing.trim(),
-        submittedAt: new Date(now.getTime() + 100).toISOString(),
-        formattedDate: `${dmy} ${timeStr}`,
-        status: "pending",
-        dailyTokenNo: dailyTokenNo2,
-        entryDate: dmy,
-        dateKey,
-        hasSibling: true,
-        siblingOfTokenNo: dailyTokenNo1,
-        linkedSiblingEntryId: id1,
-        siblingDetails: {
-          studentName: studentName.trim(),
-          dateOfBirth: dateOfBirth.trim(),
-          applyingForClass,
-          previousSchool: previousSchool.trim(),
-          gender
-        }
-      };
-    }
+        gender: siblingGender,
+        onlineRefNo: enquiryType === "online" && onlineRefNo2 ? onlineRefNo2 : undefined
+      } : undefined
+    };
 
-    // 1. Post to Server to get official server-authoritative token sequence numbers
+    // 1. Post to Server
     try {
       const res = await fetch("/api/parent-self-entry", {
         method: "POST",
@@ -239,35 +228,27 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
       });
       if (res.ok) {
         const json = await res.json();
-        if (json.success && json.entry && json.entry.dailyTokenNo) {
-          finalEntry1.dailyTokenNo = json.entry.dailyTokenNo;
-          dailyTokenNo1 = json.entry.dailyTokenNo;
+        if (json.success && json.entry) {
+          if (enquiryType === "walkin" && json.entry.dailyTokenNo) {
+            finalEntry1.dailyTokenNo = json.entry.dailyTokenNo;
+            dailyTokenNo1 = json.entry.dailyTokenNo;
+          }
+          if (enquiryType === "online" && json.entry.onlineRefNo) {
+            finalEntry1.onlineRefNo = json.entry.onlineRefNo;
+            onlineRefNo1 = json.entry.onlineRefNo;
+          }
         }
       }
     } catch (err) {
       console.warn("Server parent entry post error:", err);
     }
 
-    if (finalEntry2) {
-      finalEntry2.dailyTokenNo = dailyTokenNo1 + 1;
-      finalEntry1.siblingOfTokenNo = dailyTokenNo1 + 1;
-      finalEntry2.siblingOfTokenNo = dailyTokenNo1;
-      try {
-        await fetch("/api/parent-self-entry", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(finalEntry2)
-        });
-      } catch (err) {
-        console.warn("Server sibling parent entry post error:", err);
-      }
-    }
-
-    setAssignedToken(dailyTokenNo1);
-    if (finalEntry2) {
-      setSiblingAssignedToken(dailyTokenNo1 + 1);
+    if (enquiryType === "online") {
+      setAssignedOnlineRef(onlineRefNo1);
+      setSiblingAssignedOnlineRef(onlineRefNo2);
     } else {
-      setSiblingAssignedToken(null);
+      setAssignedToken(dailyTokenNo1 || 1);
+      setSiblingAssignedToken(hasSibling && siblingName.trim() ? (dailyTokenNo1 || 1) : null);
     }
 
     setSubmissionTimestamp({
@@ -275,13 +256,10 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
       time: timeStr
     });
 
-    // 2. Direct real-time Firebase Firestore save with verified token number so counsellor sees it within 100ms
+    // 2. Direct real-time Firebase Firestore save so counsellor desk sees it immediately
     try {
       if (isFirebaseConfigured()) {
-        await saveDocument("parent_self_entries", id1, finalEntry1);
-        if (finalEntry2) {
-          await saveDocument("parent_self_entries", id2, finalEntry2);
-        }
+        await saveDocument("parent_self_entries", finalEntry1.id, finalEntry1);
       }
     } catch (fErr) {
       console.warn("Firestore parent entry save warning:", fErr);
@@ -289,13 +267,11 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
 
     // 3. Save locally for instantaneous offline updates
     try {
-      const existingRaw = localStorage.getItem("parent_self_entries");
+      const existingRaw = localStorage.getItem("parent_self_entries") || localStorage.getItem("sgs_parent_self_entries");
       const existing: ParentSelfEntry[] = existingRaw ? JSON.parse(existingRaw) : [];
-      let updated = [finalEntry1, ...existing.filter(e => e.id !== id1 && e.id !== id2)];
-      if (finalEntry2) {
-        updated = [finalEntry2, ...updated];
-      }
+      let updated = [finalEntry1, ...existing.filter(e => e.id !== finalEntry1.id && e.id !== id1 && e.id !== id2)];
       localStorage.setItem("parent_self_entries", JSON.stringify(updated));
+      localStorage.setItem("sgs_parent_self_entries", JSON.stringify(updated));
       window.dispatchEvent(new CustomEvent("parent_self_entry_added", { detail: finalEntry1 }));
     } catch (err) {
       console.warn("Local storage save error:", err);
@@ -303,9 +279,6 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
 
     if (onSubmitSuccess) {
       onSubmitSuccess(finalEntry1);
-      if (finalEntry2) {
-        onSubmitSuccess(finalEntry2);
-      }
     }
 
     setIsSubmittedSuccess(true);
@@ -333,6 +306,8 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
     setSiblingGender("Female");
     setSiblingPrevSchool("");
     setSiblingAssignedToken(null);
+    setAssignedOnlineRef("");
+    setSiblingAssignedOnlineRef(null);
     setSubmissionTimestamp({ date: "", time: "" });
     setIsSubmittedSuccess(false);
   };
@@ -515,14 +490,21 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
                 <div class="school-subtitle">INTERNATIONAL SCHOOL • LB NAGAR BRANCH</div>
               </div>
             </div>
+            ${enquiryType === "online" ? `
+            <div class="token-badge" style="background: #065f46; border-color: #34d399;">
+              <div class="token-lbl">Online Enquiry Ref</div>
+              <div class="token-num" style="font-size: 16px; font-family: monospace;">#${assignedOnlineRef}</div>
+            </div>
+            ` : `
             <div class="token-badge">
               <div class="token-lbl">Walk-in Queue</div>
               <div class="token-num">#${assignedToken}</div>
             </div>
+            `}
           </div>
 
-          <div class="banner">
-            ✓ Official Admission Enquiry Acknowledgment Slip
+          <div class="banner" style="${enquiryType === "online" ? 'background: #ecfdf5; border-color: #a7f3d0; color: #065f46;' : ''}">
+            ✓ ${enquiryType === "online" ? "Official Online Admission Enquiry Acknowledgment Slip" : "Official Walk-in Admission Enquiry Acknowledgment Slip"}
           </div>
 
           <div class="grid">
@@ -721,67 +703,108 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
                 </div>
               </div>
 
-              {/* Box 1: Waiting Area & Live Token */}
-              <div className="bg-[#FFFDF5] border-2 border-amber-400 rounded-2xl p-3.5 sm:p-4 shadow-xs flex items-center gap-3 sm:gap-4 text-left">
-                <div className="shrink-0 flex items-center justify-center text-[#800020]">
-                  <div className="relative p-2 bg-amber-100/70 rounded-xl border border-amber-300">
-                    <svg className="w-7 h-7 sm:w-8 sm:h-8 text-[#800020]" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M12 4a2 2 0 100-4 2 2 0 000 4zm1 5h-2c-1.1 0-2 .9-2 2v6h2v5h2v-5h3v-2h-3v-4h2a1 1 0 001-1V9a1 1 0 00-1-1zm6.5 4a3.5 3.5 0 100 7 3.5 3.5 0 000-7zm0 1a2.5 2.5 0 110 5 2.5 2.5 0 010-5zm-.5 1h1v1.5l1 .5-.5.8-1.5-.8V15z"/>
-                    </svg>
-                  </div>
-                </div>
-                <div className="w-[1.5px] h-12 bg-amber-400/80 shrink-0"></div>
-                <div className="flex-1 text-slate-800 text-xs sm:text-sm leading-relaxed">
-                  {siblingAssignedToken ? (
-                    <div>
-                      <p className="font-bold text-slate-900">
-                        Family Sibling Admission Tokens:{" "}
-                        <span className="inline-block bg-[#800020] text-white font-extrabold px-2 py-0.5 rounded-md shadow-xs text-xs sm:text-sm mx-0.5">
-                          #{assignedToken} ({studentName})
-                        </span>{" "}
-                        &amp;{" "}
-                        <span className="inline-block bg-purple-700 text-white font-extrabold px-2 py-0.5 rounded-md shadow-xs text-xs sm:text-sm mx-0.5">
-                          #{siblingAssignedToken} ({siblingName})
+              {/* Conditional Display: Online Enquiry vs Campus Walk-in Token */}
+              {enquiryType === "online" ? (
+                <div className="bg-emerald-50/95 border-2 border-emerald-500 rounded-2xl p-4 sm:p-5 shadow-xs flex flex-col gap-3 text-left">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-md">
+                      <Globe size={24} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <span className="text-[10px] font-black uppercase tracking-wider text-emerald-800 bg-emerald-200/80 px-2.5 py-0.5 rounded-full inline-block mb-1">
+                        🌐 Online Enquiry Reference
+                      </span>
+                      <h4 className="text-base sm:text-lg font-black text-emerald-950 font-mono flex items-center gap-2 flex-wrap">
+                        <span className="px-3 py-1 bg-emerald-700 text-white rounded-lg shadow-sm">
+                          #{assignedOnlineRef || "ONL-PENDING"}
                         </span>
-                      </p>
-                      <p className="text-purple-700 font-semibold text-[11px] sm:text-xs mt-1">
-                        👨‍👩‍👧‍👦 Both tokens are linked for one single family counselling meeting.
-                      </p>
+                        {studentName && <span className="text-sm font-bold text-slate-700">({studentName})</span>}
+                        {siblingAssignedOnlineRef && (
+                          <span className="px-3 py-1 bg-purple-700 text-white rounded-lg shadow-sm">
+                            #{siblingAssignedOnlineRef} ({siblingName})
+                          </span>
+                        )}
+                      </h4>
                     </div>
-                  ) : (
-                    <div>
-                      <p className="font-medium text-slate-900">
-                        Your{" "}
-                        <span className="inline-block bg-[#800020] text-white font-extrabold px-2.5 py-0.5 rounded-md shadow-xs text-xs sm:text-sm mx-0.5">
-                          Token #{assignedToken}
-                        </span>{" "}
-                        is live at our Admissions Counsellor's desk.
-                      </p>
-                      <p className="text-slate-600 text-[11px] sm:text-xs mt-0.5">
-                        If you are at school, please relax in our waiting area; you will be called shortly.
-                      </p>
-                    </div>
-                  )}
-                </div>
-              </div>
+                  </div>
 
-              {/* Box 2: Online / Remote Submission Notice */}
-              <div className="bg-[#FFFDF5] border-2 border-amber-400 rounded-2xl p-3.5 sm:p-4 shadow-xs flex items-center gap-3 sm:gap-4 text-left">
-                <div className="shrink-0 flex items-center justify-center text-[#800020]">
-                  <div className="relative p-2 bg-amber-100/70 rounded-xl border border-amber-300">
-                    <svg className="w-7 h-7 sm:w-8 sm:h-8 text-[#800020]" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2">
-                      <rect x="3" y="4" width="18" height="12" rx="2" />
-                      <path d="M2 20h20" />
-                      <circle cx="12" cy="10" r="3" />
-                      <path d="M12 7c-1.5 1-2 2-2 3s.5 2 2 3c1.5-1 2-2 2-3s-.5-2-2-3z" />
-                    </svg>
+                  <div className="p-3 bg-white/90 rounded-xl border border-emerald-200 text-xs text-slate-800 space-y-1.5">
+                    <p className="font-bold text-emerald-900 flex items-center gap-1.5">
+                      <span>📞 What happens next?</span>
+                    </p>
+                    <p className="text-slate-700 leading-relaxed font-medium">
+                      Your admission enquiry has been sent directly to our Admissions Counsellor pool. Our counsellor will call you on <strong className="font-mono text-slate-900">+91 {contactNo}</strong> or send curriculum and fee details via WhatsApp.
+                    </p>
+                    <p className="text-[11px] text-emerald-800 font-semibold pt-1 border-t border-emerald-100 flex items-center gap-1">
+                      <span>ℹ️</span> Our Admissions Team will follow up directly via Phone / WhatsApp regarding fee structure and admission.
+                    </p>
                   </div>
                 </div>
-                <div className="w-[1.5px] h-10 bg-amber-400/80 shrink-0"></div>
-                <div className="flex-1 text-slate-700 text-xs sm:text-sm leading-relaxed">
-                  If you have submitted this form online from another location, our Admissions Team will contact you if required.
-                </div>
-              </div>
+              ) : (
+                <>
+                  {/* Box 1: Waiting Area & Live Token */}
+                  <div className="bg-[#FFFDF5] border-2 border-amber-400 rounded-2xl p-3.5 sm:p-4 shadow-xs flex items-center gap-3 sm:gap-4 text-left">
+                    <div className="shrink-0 flex items-center justify-center text-[#800020]">
+                      <div className="relative p-2 bg-amber-100/70 rounded-xl border border-amber-300">
+                        <svg className="w-7 h-7 sm:w-8 sm:h-8 text-[#800020]" fill="currentColor" viewBox="0 0 24 24">
+                          <path d="M12 4a2 2 0 100-4 2 2 0 000 4zm1 5h-2c-1.1 0-2 .9-2 2v6h2v5h2v-5h3v-2h-3v-4h2a1 1 0 001-1V9a1 1 0 00-1-1zm6.5 4a3.5 3.5 0 100 7 3.5 3.5 0 000-7zm0 1a2.5 2.5 0 110 5 2.5 2.5 0 010-5zm-.5 1h1v1.5l1 .5-.5.8-1.5-.8V15z"/>
+                        </svg>
+                      </div>
+                    </div>
+                    <div className="w-[1.5px] h-12 bg-amber-400/80 shrink-0"></div>
+                    <div className="flex-1 text-slate-800 text-xs sm:text-sm leading-relaxed">
+                      {siblingAssignedToken ? (
+                        <div>
+                          <p className="font-bold text-slate-900">
+                            Family Sibling Admission Tokens:{" "}
+                            <span className="inline-block bg-[#800020] text-white font-extrabold px-2 py-0.5 rounded-md shadow-xs text-xs sm:text-sm mx-0.5">
+                              #{assignedToken} ({studentName})
+                            </span>{" "}
+                            &amp;{" "}
+                            <span className="inline-block bg-purple-700 text-white font-extrabold px-2 py-0.5 rounded-md shadow-xs text-xs sm:text-sm mx-0.5">
+                              #{siblingAssignedToken} ({siblingName})
+                            </span>
+                          </p>
+                          <p className="text-purple-700 font-semibold text-[11px] sm:text-xs mt-1">
+                            👨‍👩‍👧‍👦 Both tokens are linked for one single family counselling meeting.
+                          </p>
+                        </div>
+                      ) : (
+                        <div>
+                          <p className="font-medium text-slate-900">
+                            Your{" "}
+                            <span className="inline-block bg-[#800020] text-white font-extrabold px-2.5 py-0.5 rounded-md shadow-xs text-xs sm:text-sm mx-0.5">
+                              Token #{assignedToken}
+                            </span>{" "}
+                            is live at our Admissions Counsellor's desk.
+                          </p>
+                          <p className="text-slate-600 text-[11px] sm:text-xs mt-0.5">
+                            If you are at school, please relax in our waiting area; you will be called shortly.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Box 2: Online / Remote Submission Notice */}
+                  <div className="bg-[#FFFDF5] border-2 border-amber-400 rounded-2xl p-3.5 sm:p-4 shadow-xs flex items-center gap-3 sm:gap-4 text-left">
+                    <div className="shrink-0 flex items-center justify-center text-[#800020]">
+                      <div className="relative p-2 bg-amber-100/70 rounded-xl border border-amber-300">
+                        <svg className="w-7 h-7 sm:w-8 sm:h-8 text-[#800020]" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2">
+                          <rect x="3" y="4" width="18" height="12" rx="2" />
+                          <path d="M2 20h20" />
+                          <circle cx="12" cy="10" r="3" />
+                          <path d="M12 7c-1.5 1-2 2-2 3s.5 2 2 3c1.5-1 2-2 2-3s-.5-2-2-3z" />
+                        </svg>
+                      </div>
+                    </div>
+                    <div className="w-[1.5px] h-10 bg-amber-400/80 shrink-0"></div>
+                    <div className="flex-1 text-slate-700 text-xs sm:text-sm leading-relaxed">
+                      If you have submitted this form online from another location, our Admissions Team will contact you if required.
+                    </div>
+                  </div>
+                </>
+              )}
 
               {/* Candidate Verification Summary Details */}
               <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3 text-left text-xs space-y-2">
@@ -868,6 +891,93 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
 
             <form onSubmit={handleSubmit} className="space-y-4">
               
+              {/* Enquiry Mode Selector: Campus Walk-in vs Online Enquiry */}
+              <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 sm:p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-black uppercase tracking-wider text-slate-200 flex items-center gap-1.5">
+                    <span>Admission Enquiry Mode</span>
+                    <span className="text-orange-500 font-black">*</span>
+                  </label>
+                  <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider ${
+                    enquiryType === "walkin" 
+                      ? "bg-orange-500/20 text-orange-400 border border-orange-500/30" 
+                      : "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                  }`}>
+                    {enquiryType === "walkin" ? "Campus Visit" : "Online Lead"}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {/* Option 1: Campus Walk-in */}
+                  <button
+                    type="button"
+                    onClick={() => setEnquiryType("walkin")}
+                    className={`p-3.5 rounded-xl border-2 transition-all flex items-start gap-3 text-left cursor-pointer ${
+                      enquiryType === "walkin"
+                        ? "bg-gradient-to-br from-orange-600/25 via-amber-600/15 to-transparent border-orange-500 text-white shadow-lg ring-2 ring-orange-500/20"
+                        : "bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-300"
+                    }`}
+                  >
+                    <div className={`p-2.5 rounded-xl shrink-0 mt-0.5 ${
+                      enquiryType === "walkin" ? "bg-orange-500 text-white shadow-md shadow-orange-500/30" : "bg-slate-800 text-slate-400"
+                    }`}>
+                      <Building2 size={19} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-black text-white">Campus Walk-in</span>
+                        {enquiryType === "walkin" && (
+                          <span className="w-2.5 h-2.5 rounded-full bg-orange-400 ring-4 ring-orange-400/20"></span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-300 mt-1 leading-snug">
+                        Currently visiting the school campus reception lounge
+                      </p>
+                      <div className="mt-2 flex items-center gap-1.5">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-orange-500/15 text-orange-300 text-[10px] font-bold border border-orange-500/30">
+                          <span>🏛️</span>
+                          <span>In-Person Lounge Token</span>
+                        </span>
+                      </div>
+                    </div>
+                  </button>
+
+                  {/* Option 2: Online Enquiry */}
+                  <button
+                    type="button"
+                    onClick={() => setEnquiryType("online")}
+                    className={`p-3.5 rounded-xl border-2 transition-all flex items-start gap-3 text-left cursor-pointer ${
+                      enquiryType === "online"
+                        ? "bg-gradient-to-br from-emerald-600/25 via-teal-600/15 to-transparent border-emerald-500 text-white shadow-lg ring-2 ring-emerald-500/20"
+                        : "bg-slate-950/60 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-300"
+                    }`}
+                  >
+                    <div className={`p-2.5 rounded-xl shrink-0 mt-0.5 ${
+                      enquiryType === "online" ? "bg-emerald-500 text-white shadow-md shadow-emerald-500/30" : "bg-slate-800 text-slate-400"
+                    }`}>
+                      <Globe size={19} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-black text-white">Online Enquiry</span>
+                        {enquiryType === "online" && (
+                          <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 ring-4 ring-emerald-400/20"></span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-300 mt-1 leading-snug">
+                        Applying remotely via Website, QR code, or Social Media
+                      </p>
+                      <div className="mt-2 flex items-center gap-1.5">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 text-[10px] font-bold border border-emerald-500/30">
+                          <span>📱</span>
+                          <span>Telephonic &amp; WhatsApp Follow-up</span>
+                        </span>
+                      </div>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
               {/* Student Name */}
               <div className="space-y-1.5">
                 <label className="block text-xs font-black text-slate-200 tracking-wide">
@@ -1091,30 +1201,41 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
                 )}
               </div>
 
-              {/* Combined Father / Mother Name */}
-              <div className="space-y-1.5">
-                <label className="block text-xs font-black text-slate-200 tracking-wide">
-                  Father's / Mother's Name <span className="text-orange-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={parentNames || (fatherName && motherName ? `${fatherName} / ${motherName}` : fatherName || motherName)}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setParentNames(val);
-                    if (val.includes("/")) {
-                      const parts = val.split("/");
-                      setFatherName(parts[0].trim());
-                      setMotherName(parts.slice(1).join("/").trim());
-                    } else {
-                      setFatherName(val.trim());
-                      setMotherName("");
-                    }
-                  }}
-                  placeholder="e.g. Ramesh Kumar / Sunita Devi"
-                  className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all"
-                />
+              {/* Father's & Mother's Names - 2 Columns Side-by-Side */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-black text-slate-200 tracking-wide">
+                    Father's Full Name <span className="text-orange-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={fatherName}
+                    onChange={(e) => {
+                      setFatherName(e.target.value);
+                      setParentNames(`${e.target.value} / ${motherName}`);
+                    }}
+                    placeholder="e.g. Ramesh Kumar"
+                    className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white font-medium placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-black text-slate-200 tracking-wide">
+                    Mother's Full Name <span className="text-orange-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={motherName}
+                    onChange={(e) => {
+                      setMotherName(e.target.value);
+                      setParentNames(`${fatherName} / ${e.target.value}`);
+                    }}
+                    placeholder="e.g. Sunita Devi"
+                    className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white font-medium placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-orange-500 transition-all"
+                  />
+                </div>
               </div>
 
               {/* Previous School */}

@@ -37,7 +37,8 @@ import {
   HardDrive,
   Calendar,
   CheckCircle2,
-  RefreshCw
+  RefreshCw,
+  FolderArchive
 } from "lucide-react";
 import { 
   CounsellingEnquiry, 
@@ -50,12 +51,26 @@ import {
   Ticket, 
   Room, 
   InventoryItem,
-  ADMISSION_CLASSES
+  ADMISSION_CLASSES,
+  ParentSelfEntry
 } from "../types";
-import { loadCounsellorAccounts, saveCounsellorAccounts, DEMO_COUNSELLING, mergeWithDefaultCounsellorAccounts, recordDeletedCounsellorAccountId, unrecordDeletedCounsellorAccountId, getAllowCounsellorMultiDelete, setAllowCounsellorMultiDelete } from "../utils/storage";
+import { 
+  loadCounsellorAccounts, 
+  saveCounsellorAccounts, 
+  DEMO_COUNSELLING, 
+  mergeWithDefaultCounsellorAccounts, 
+  recordDeletedCounsellorAccountId, 
+  unrecordDeletedCounsellorAccountId, 
+  getAllowCounsellorMultiDelete, 
+  setAllowCounsellorMultiDelete,
+  loadDismissedParentEntries,
+  removeDismissedParentEntryFromArchive
+} from "../utils/storage";
+import { normalizeCounsellorIdentity, cleanAndNormalizeCounsellorAccounts } from "../utils/counsellorNormalizer";
 import ManagementAudioDesk from "./ManagementAudioDesk";
 import ManagementAdmissionDesk from "./ManagementAdmissionDesk";
 import { isFirebaseConfigured, saveDocument, deleteDocument, syncCollection } from "../utils/firebase";
+import { DismissedLeadsModal } from "./DismissedLeadsModal";
 
 
 interface ManagementPortalProps {
@@ -185,6 +200,7 @@ export default function ManagementPortal({
 
     // Periodic fallback server pull (10s)
     const fetchServer = async () => {
+      if (typeof document !== "undefined" && document.hidden) return;
       try {
         const res = await fetch("/api/accounts");
         if (res.ok) {
@@ -199,7 +215,7 @@ export default function ManagementPortal({
       } catch {}
     };
     fetchServer();
-    const interval = setInterval(fetchServer, 10000);
+    const interval = setInterval(fetchServer, 30000);
 
     return () => {
       clearInterval(interval);
@@ -211,6 +227,92 @@ export default function ManagementPortal({
       }
     };
   }, []);
+
+  // Dismissed Leads & Walk-in Archive state
+  const [isDismissedLeadsModalOpen, setIsDismissedLeadsModalOpen] = useState(false);
+  const [dismissedEntries, setDismissedEntries] = useState<ParentSelfEntry[]>(() => {
+    return loadDismissedParentEntries();
+  });
+
+  useEffect(() => {
+    let unsubFirestore: (() => void) | undefined;
+    if (isFirebaseConfigured()) {
+      try {
+        unsubFirestore = syncCollection<ParentSelfEntry>(
+          "parent_self_entries",
+          (items) => {
+            if (Array.isArray(items)) {
+              const dismissed = items.filter(i => i.status === "dismissed");
+              const local = loadDismissedParentEntries();
+              const map = new Map<string, ParentSelfEntry>();
+              local.forEach(e => map.set(e.id, e));
+              dismissed.forEach(e => map.set(e.id, e));
+              const merged = Array.from(map.values()).sort((a, b) => (b.submittedAt || "").localeCompare(a.submittedAt || ""));
+              setDismissedEntries(merged);
+            }
+          },
+          []
+        );
+      } catch (err) {
+        console.warn("Management dismissed leads Firestore sync error:", err);
+      }
+    }
+
+    const fetchDismissed = async () => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      try {
+        const res = await fetch("/api/parent-self-entry/dismissed");
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && Array.isArray(json.data)) {
+            const local = loadDismissedParentEntries();
+            const map = new Map<string, ParentSelfEntry>();
+            local.forEach(e => map.set(e.id, e));
+            json.data.forEach((e: ParentSelfEntry) => map.set(e.id, e));
+            const merged = Array.from(map.values()).sort((a, b) => (b.submittedAt || "").localeCompare(a.submittedAt || ""));
+            setDismissedEntries(merged);
+          }
+        }
+      } catch {}
+    };
+    fetchDismissed();
+    const interval = setInterval(fetchDismissed, 25000);
+
+    return () => {
+      clearInterval(interval);
+      if (unsubFirestore) unsubFirestore();
+    };
+  }, []);
+
+  const handleRestoreDismissedEntry = async (entry: ParentSelfEntry) => {
+    const restored: ParentSelfEntry = {
+      ...entry,
+      status: "pending",
+      dismissedAt: undefined,
+      dismissedBy: undefined,
+      dismissedById: undefined,
+      dismissedReason: undefined
+    };
+    setDismissedEntries(prev => prev.filter(e => e.id !== entry.id));
+    removeDismissedParentEntryFromArchive(entry.id);
+
+    try {
+      await fetch("/api/parent-self-entry/restore", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: entry.id })
+      });
+    } catch {}
+
+    if (isFirebaseConfigured()) {
+      try {
+        await saveDocument("parent_self_entries", entry.id, restored);
+      } catch {}
+    }
+    const leadIdLabel = entry.onlineRefNo || (entry.dailyTokenNo ? `Token #${entry.dailyTokenNo}` : entry.id);
+    setDeleteToast(`Lead ${leadIdLabel} restored to Active Queue!`);
+    setTimeout(() => setDeleteToast(null), 3500);
+  };
 
   // Management Account modal states
   const [isMgmtModalOpen, setIsMgmtModalOpen] = useState(false);
@@ -622,9 +724,77 @@ export default function ManagementPortal({
     setTimeout(() => setCopiedCounsellorId(null), 3000);
   };
 
-  // Safe enquiries source
+  // Safe enquiries source with linked sibling audio hydration
   const safeEnquiries = useMemo(() => {
-    return Array.isArray(enquiries) ? enquiries : [];
+    const list = Array.isArray(enquiries) ? enquiries : [];
+    
+    // Audio map by enquiry number & ID for fast linked sibling resolution
+    const audioMap = new Map<string, any>();
+    list.forEach(e => {
+      if (e?.audioRecording && (
+        e.audioRecording.audioData || 
+        e.audioRecording.storageKey || 
+        e.audioRecording.driveFileUrl || 
+        e.audioRecording.driveFileId || 
+        e.audioRecording.audioUrl || 
+        e.audioRecording.fileName || 
+        (e.audioRecording.durationSeconds && e.audioRecording.durationSeconds > 0) ||
+        e.audioRecording.meetingTextSummary
+      )) {
+        if (e.enquiryNo) audioMap.set(e.enquiryNo.trim().toLowerCase(), e.audioRecording);
+        if (e.id) audioMap.set(e.id.trim().toLowerCase(), e.audioRecording);
+      }
+    });
+
+    return list.map(e => {
+      if (!e) return e;
+      const hasDirectAudio = Boolean(
+        e.audioRecording && (
+          e.audioRecording.audioData || 
+          e.audioRecording.storageKey || 
+          e.audioRecording.driveFileUrl || 
+          e.audioRecording.driveFileId || 
+          e.audioRecording.audioUrl || 
+          e.audioRecording.fileName || 
+          (e.audioRecording.durationSeconds && e.audioRecording.durationSeconds > 0) ||
+          e.audioRecording.meetingTextSummary
+        )
+      );
+
+      if (hasDirectAudio) return e;
+
+      // Check linked sibling enquiry
+      const sibKey = (e.siblingEnquiryNo || "").trim().toLowerCase();
+      let sharedAudio = sibKey ? audioMap.get(sibKey) : null;
+
+      if (!sharedAudio && (e.isSibling || e.siblingStudentName)) {
+        const linkedOther = list.find(o =>
+          o && o !== e && (
+            (o.siblingEnquiryNo && o.siblingEnquiryNo.trim().toLowerCase() === (e.enquiryNo || "").trim().toLowerCase()) ||
+            (o.contactNo && o.contactNo === e.contactNo && o.fatherName === e.fatherName && o.audioRecording)
+          )
+        );
+        if (linkedOther?.audioRecording) {
+          sharedAudio = linkedOther.audioRecording;
+        }
+      }
+
+      if (sharedAudio) {
+        return {
+          ...e,
+          audioRecording: {
+            ...sharedAudio,
+            id: `${sharedAudio.id || e.id || e.enquiryNo}-SIB`,
+            enquiryNo: e.enquiryNo || e.id,
+            studentName: e.studentName,
+            isJointSiblingSession: true,
+            jointSiblingNames: sharedAudio.jointSiblingNames || `${sharedAudio.studentName || 'Child 1'} & ${e.studentName}`
+          }
+        };
+      }
+
+      return e;
+    });
   }, [enquiries]);
 
   // 5 KPI Metric Cards Date-Wise Drill-Down State for Executive Management
@@ -925,11 +1095,13 @@ export default function ManagementPortal({
       isArchived?: boolean;
     } } = {};
 
-    // Seed from active counsellor accounts
-    localCounsellorAccounts.forEach(acc => {
-      counsellorMap[acc.id] = {
-        id: acc.id,
-        name: acc.name,
+    // Seed from active counsellor accounts (excluding obsolete duplicates like R SOWJANYA)
+    const cleanedAccounts = cleanAndNormalizeCounsellorAccounts(localCounsellorAccounts);
+    cleanedAccounts.forEach(acc => {
+      const norm = normalizeCounsellorIdentity(acc.name, acc.id);
+      counsellorMap[norm.id] = {
+        id: norm.id,
+        name: norm.name,
         roleTitle: acc.roleTitle || "Admissions Counsellor",
         totalLeads: 0,
         confirmed: 0,
@@ -941,14 +1113,15 @@ export default function ManagementPortal({
       };
     });
 
-    // Populate from safeEnquiries (Ensures deleted counsellor's data is never lost!)
+    // Populate from safeEnquiries, automatically normalizing 'R SOWJANYA' into 'sowjanya' (COUNSELLOR-03)
     safeEnquiries.forEach(enq => {
-      const cid = enq.counsellorId || (enq.counsellorName ? `ARCHIVED-${enq.counsellorName.replace(/\s+/g, "_")}` : "COUNSELLOR-01");
+      const norm = normalizeCounsellorIdentity(enq.counsellorName, enq.counsellorId);
+      const cid = norm.id;
       if (!counsellorMap[cid]) {
         counsellorMap[cid] = {
           id: cid,
-          name: enq.counsellorName || "Former Counsellor",
-          roleTitle: "Former Counsellor (Historical Data Preserved)",
+          name: norm.name,
+          roleTitle: "Admissions Counsellor",
           totalLeads: 0,
           confirmed: 0,
           audioSessions: 0,
@@ -1116,6 +1289,16 @@ CONFIDENTIAL - FOR BOARD OF DIRECTORS & PRINCIPAL REVIEW ONLY
           >
             <GraduationCap size={14} className="text-orange-400" />
             <span>Counselling Dept</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setIsDismissedLeadsModalOpen(true)}
+            className="px-3.5 py-2 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs active:scale-95"
+            title="View Archived & Dismissed Leads across Online and Walk-ins"
+          >
+            <FolderArchive size={14} className="text-emerald-400" />
+            <span>Dismissed Leads ({dismissedEntries.length})</span>
           </button>
 
           <button
@@ -2752,6 +2935,20 @@ CONFIDENTIAL - FOR BOARD OF DIRECTORS & PRINCIPAL REVIEW ONLY
           <span className="text-xs font-bold">{deleteToast}</span>
         </div>
       )}
+
+      {/* DISMISSED LEADS ARCHIVE MODAL */}
+      <DismissedLeadsModal
+        isOpen={isDismissedLeadsModalOpen}
+        onClose={() => setIsDismissedLeadsModalOpen(false)}
+        dismissedEntries={dismissedEntries}
+        onRestoreEntry={handleRestoreDismissedEntry}
+        onClaimEntry={(entry) => {
+          setIsDismissedLeadsModalOpen(false);
+          window.location.href = `/?portal=counsellor&claimId=${entry.id}`;
+        }}
+        currentCounsellorName="Executive Management"
+        userRole="Management"
+      />
     </div>
   );
 }

@@ -18,25 +18,26 @@
     <meta property="og:description" content="A comprehensive IT command center for managing assets, tickets, rooms, AI-powered IT troubleshooting, and Birla Institute CCTV dynamic attendance monitoring." />
     <meta property="og:type" content="website" />
     
-    <!-- Immediate Dev/Preview Cache & ServiceWorker Buster to Prevent Blank Screens -->
+    <!-- Instant Splash Screen Failsafe Dismissal -->
     <script>
       (function() {
-        try {
-          if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.getRegistrations().then(function(registrations) {
-              for (var i = 0; i < registrations.length; i++) {
-                registrations[i].unregister().catch(function(){});
-              }
-            }).catch(function(){});
-          }
-          if ('caches' in window) {
-            caches.keys().then(function(names) {
-              for (var i = 0; i < names.length; i++) {
-                caches.delete(names[i]).catch(function(){});
-              }
-            }).catch(function(){});
-          }
-        } catch (e) {}
+        window.dismissSplashScreen = function() {
+          try {
+            var splash = document.getElementById('splash-screen');
+            if (splash) {
+              splash.style.transition = 'opacity 0.25s ease-out';
+              splash.style.opacity = '0';
+              splash.style.pointerEvents = 'none';
+              setTimeout(function() {
+                if (splash && splash.parentNode) {
+                  splash.parentNode.removeChild(splash);
+                }
+              }, 250);
+            }
+          } catch(e) {}
+        };
+        // Failsafe auto-dismissal after 2.0s so app never gets stuck on loading spinner
+        setTimeout(window.dismissSplashScreen, 2000);
       })();
     </script>
 
@@ -155,24 +156,12 @@
     </div>
     <script type="module" src="/src/main.tsx"></script>
     <script>
-      // Clear stale service worker and caches in dev mode so the app opens instantly
-      if ('serviceWorker' in navigator) {
-        var isDevEnv = location.hostname === 'localhost' || location.hostname.includes('ais-dev-');
-        if (isDevEnv) {
-          navigator.serviceWorker.getRegistrations().then(function(regs) {
-            for (var i = 0; i < regs.length; i++) {
-              regs[i].unregister();
-            }
-          });
-          if ('caches' in window) {
-            caches.keys().then(function(names) {
-              for (var i = 0; i < names.length; i++) {
-                caches.delete(names[i]);
-              }
-            });
-          }
+      // Automatically dismiss splash screen once window finishes loading
+      window.addEventListener("load", function() {
+        if (typeof window.dismissSplashScreen === "function") {
+          window.dismissSplashScreen();
         }
-      }
+      });
 
       // Capture PWA installation prompt globally to trigger instantly on click
       window.deferredPrompt = null;
