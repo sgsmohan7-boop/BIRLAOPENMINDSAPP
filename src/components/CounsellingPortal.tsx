@@ -8482,6 +8482,7 @@ Warm regards,
               </div>
 
               <AudioMeetingRecorder
+                key={`recorder-${formData.id || formData.enquiryNo || 'new'}`}
                 enquiryNo={formData.enquiryNo}
                 studentName={formData.studentName}
                 applyingForClass={formData.applyingForClass}
@@ -8494,42 +8495,47 @@ Warm regards,
                 counsellorName={formData.counsellorName || (activeCounsellor?.name || "Admissions Counsellor")}
                 existingAudio={formData.audioRecording}
                 onSaveAudio={(audioRec) => {
-                  const finalCounsellor = activeCounsellor || localAccounts.find(c => c.id === formData.counsellorId) || localAccounts[0];
-                  const assignedCounsellorId = userRole === "Counsellor" && activeCounsellor ? activeCounsellor.id : (formData.counsellorId || finalCounsellor.id);
-                  const assignedCounsellorName = userRole === "Counsellor" && activeCounsellor ? activeCounsellor.name : (formData.counsellorName || finalCounsellor.name);
+                  setFormData(prev => {
+                    const finalCounsellor = activeCounsellor || localAccounts.find(c => c.id === prev.counsellorId) || localAccounts[0];
+                    const assignedCounsellorId = userRole === "Counsellor" && activeCounsellor ? activeCounsellor.id : (prev.counsellorId || finalCounsellor.id);
+                    const assignedCounsellorName = userRole === "Counsellor" && activeCounsellor ? activeCounsellor.name : (prev.counsellorName || finalCounsellor.name);
 
-                  const updated: CounsellingEnquiry = {
-                    ...formData,
-                    counsellorId: assignedCounsellorId,
-                    counsellorName: assignedCounsellorName,
-                    audioRecording: audioRec,
-                    conversationLanguageNotes: audioRec.conversationLanguageNotes || formData.conversationLanguageNotes,
-                    pointsDiscussed: formData.pointsDiscussed && formData.pointsDiscussed.trim()
-                      ? formData.pointsDiscussed
-                      : (audioRec.meetingTextSummary || formData.pointsDiscussed)
-                  };
-
-                  setFormData(updated);
-                  onSaveEnquiry(updated);
-
-                  if (isJointSiblingMode && siblingFormData) {
-                    const sibUpdated: CounsellingEnquiry = {
-                      ...siblingFormData,
-                      audioRecording: {
-                        ...audioRec,
-                        id: `${audioRec.id}-SIB`,
-                        enquiryNo: siblingFormData.enquiryNo || "",
-                        studentName: siblingFormData.studentName || "Sibling",
-                        isJointSiblingSession: true,
-                        jointSiblingNames: `${formData.studentName} & ${siblingFormData.studentName}`
-                      },
-                      conversationLanguageNotes: audioRec.conversationLanguageNotes || siblingFormData.conversationLanguageNotes,
-                      pointsDiscussed: siblingFormData.pointsDiscussed && siblingFormData.pointsDiscussed.trim()
-                        ? siblingFormData.pointsDiscussed
-                        : (audioRec.meetingTextSummary || siblingFormData.pointsDiscussed)
+                    const updated: CounsellingEnquiry = {
+                      ...prev,
+                      counsellorId: assignedCounsellorId,
+                      counsellorName: assignedCounsellorName,
+                      audioRecording: audioRec,
+                      conversationLanguageNotes: audioRec.conversationLanguageNotes || prev.conversationLanguageNotes,
+                      pointsDiscussed: prev.pointsDiscussed && prev.pointsDiscussed.trim()
+                        ? prev.pointsDiscussed
+                        : (audioRec.meetingTextSummary || prev.pointsDiscussed)
                     };
-                    setSiblingFormData(sibUpdated);
-                    onSaveEnquiry(sibUpdated);
+
+                    onSaveEnquiry(updated);
+                    return updated;
+                  });
+
+                  if (isJointSiblingMode) {
+                    setSiblingFormData(prev => {
+                      if (!prev) return null;
+                      const sibUpdated: CounsellingEnquiry = {
+                        ...prev,
+                        audioRecording: {
+                          ...audioRec,
+                          id: `${audioRec.id}-SIB`,
+                          enquiryNo: prev.enquiryNo || "",
+                          studentName: prev.studentName || "Sibling",
+                          isJointSiblingSession: true,
+                          jointSiblingNames: `${formData.studentName} & ${prev.studentName}`
+                        },
+                        conversationLanguageNotes: audioRec.conversationLanguageNotes || prev.conversationLanguageNotes,
+                        pointsDiscussed: prev.pointsDiscussed && prev.pointsDiscussed.trim()
+                          ? prev.pointsDiscussed
+                          : (audioRec.meetingTextSummary || prev.pointsDiscussed)
+                      };
+                      onSaveEnquiry(sibUpdated);
+                      return sibUpdated;
+                    });
                   }
                 }}
                 onRemoveAudio={() => {

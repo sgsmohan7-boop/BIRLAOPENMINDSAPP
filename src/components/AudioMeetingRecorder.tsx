@@ -802,7 +802,18 @@ export default function AudioMeetingRecorder({
   useEffect(() => {
     let active = true;
     const loadExistingAudio = async () => {
-      if (!existingAudio) return;
+      if (!existingAudio) {
+        setRecordedAudioUrl(null);
+        setRecordedBlob(null);
+        setDialogueTurns([]);
+        dialogueTurnsRef.current = [];
+        setRecordingSeconds(0);
+        recordingSecondsRef.current = 0;
+        setSaveSuccessMsg(null);
+        setErrorMessage(null);
+        audioChunksRef.current = [];
+        return;
+      }
       if (existingAudio.parentLanguage) setSelectedLanguage(existingAudio.parentLanguage);
       if (existingAudio.conversationLanguageNotes) setConversationNotes(existingAudio.conversationLanguageNotes);
       if (existingAudio.meetingTextSummary) {
