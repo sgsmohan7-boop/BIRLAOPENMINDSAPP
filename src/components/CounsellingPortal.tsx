@@ -1332,6 +1332,40 @@ export default function CounsellingPortal({
       });
     } catch {}
 
+    // If this entry already has an active or saved draft with filled fields or recorded audio, restore it seamlessly
+    let existingSavedDraft: any = null;
+    try {
+      if (activeDraft && (activeDraft?.entry?.id === entry.id || activeDraft?.formData?.studentName?.toLowerCase() === entry.studentName.toLowerCase())) {
+        existingSavedDraft = activeDraft;
+      } else {
+        const rawDraft = localStorage.getItem("bomis_counsellor_active_draft");
+        if (rawDraft) {
+          const parsed = JSON.parse(rawDraft);
+          if (parsed?.entry?.id === entry.id || parsed?.formData?.studentName?.toLowerCase() === entry.studentName.toLowerCase()) {
+            existingSavedDraft = parsed;
+          }
+        }
+      }
+    } catch {}
+
+    if (existingSavedDraft?.formData) {
+      setFormData(existingSavedDraft.formData);
+      if (existingSavedDraft.siblingFormData) {
+        setSiblingFormData(existingSavedDraft.siblingFormData);
+        setIsJointSiblingMode(true);
+        if (existingSavedDraft.entry) setLinkedSiblingTokens([existingSavedDraft.entry]);
+      } else {
+        setSiblingFormData(null);
+        setIsJointSiblingMode(false);
+      }
+      setActiveDraft(existingSavedDraft);
+      setSelectedEnquiry(null);
+      setActiveView("form");
+      setDeleteToast(`✓ Resumed draft for ${entry.studentName} with preserved audio recording & notes.`);
+      setTimeout(() => setDeleteToast(null), 3500);
+      return;
+    }
+
     // Generate clean Enquiry ID and auto-fill form (preserving ONL- for online, ENQ- for walkin)
     const isOnline = entry.enquiryType === "online";
     const draftNo = isOnline 
@@ -2338,40 +2372,52 @@ export default function CounsellingPortal({
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.studentName.trim()) {
+    if (!formData.studentName || !formData.studentName.trim()) {
       setDeleteToast("⚠️ Please enter Student Name before saving.");
       setTimeout(() => setDeleteToast(null), 3500);
       return;
     }
-    if (isJointSiblingMode && siblingFormData && !siblingFormData.studentName.trim()) {
+    if (isJointSiblingMode && siblingFormData && (!siblingFormData.studentName || !siblingFormData.studentName.trim())) {
       setDeleteToast("⚠️ Please enter Sibling (Child 2) Student Name before saving.");
       setTimeout(() => setDeleteToast(null), 3500);
       return;
     }
-    if (!formData.fatherName || !formData.fatherName.trim()) {
-      setDeleteToast("⚠️ Please enter Father's Name (mandatory field *).");
+
+    // Resilient Parent & Details fallbacks: Never block saving an admission enquiry
+    const fName = (formData.fatherName || "").trim();
+    const mName = (formData.motherName || "").trim();
+    if (!fName && !mName) {
+      setDeleteToast("⚠️ Please enter Father's or Mother's Name before saving.");
       setTimeout(() => setDeleteToast(null), 3500);
       return;
+    }
+    if (!formData.fatherName || !formData.fatherName.trim()) {
+      formData.fatherName = mName || "—";
     }
     if (!formData.motherName || !formData.motherName.trim()) {
-      setDeleteToast("⚠️ Please enter Mother's Name (mandatory field *).");
-      setTimeout(() => setDeleteToast(null), 3500);
-      return;
+      formData.motherName = fName || "—";
     }
     if (!formData.residentialAddress || !formData.residentialAddress.trim()) {
-      setDeleteToast("⚠️ Please enter Residential Address (mandatory field *).");
-      setTimeout(() => setDeleteToast(null), 3500);
-      return;
+      formData.residentialAddress = "Campus Walk-in / Local Area";
     }
     if (!formData.previousSchool || !formData.previousSchool.trim()) {
-      setDeleteToast("⚠️ Please enter Previous School & Board (mandatory field *).");
-      setTimeout(() => setDeleteToast(null), 3500);
-      return;
+      formData.previousSchool = "Fresher / Not applicable";
     }
-    if (isJointSiblingMode && siblingFormData && (!siblingFormData.previousSchool || !siblingFormData.previousSchool.trim())) {
-      siblingFormData.previousSchool = formData.previousSchool;
+    if (isJointSiblingMode && siblingFormData) {
+      if (!siblingFormData.previousSchool || !siblingFormData.previousSchool.trim()) {
+        siblingFormData.previousSchool = formData.previousSchool || "Fresher / Not applicable";
+      }
+      if (!siblingFormData.fatherName || !siblingFormData.fatherName.trim()) {
+        siblingFormData.fatherName = formData.fatherName;
+      }
+      if (!siblingFormData.motherName || !siblingFormData.motherName.trim()) {
+        siblingFormData.motherName = formData.motherName;
+      }
+      if (!siblingFormData.residentialAddress || !siblingFormData.residentialAddress.trim()) {
+        siblingFormData.residentialAddress = formData.residentialAddress;
+      }
     }
-    if (!formData.contactNo.trim()) {
+    if (!formData.contactNo || !formData.contactNo.trim()) {
       formData.contactNo = "9876543210";
     }
 
@@ -2552,13 +2598,71 @@ export default function CounsellingPortal({
 
     unmarkDeletedEnquiryId(updated.id, updated.enquiryNo);
     onSaveEnquiry(updated);
+
+    // Mark associated parentSelfEntry as COMPLETED so it departs the active kiosk queue cleanly
+    const claimedEntryId = activeDraft?.entry?.id || linkedSiblingTokens?.[0]?.id;
+    const targetStudentLower = (updated.studentName || "").trim().toLowerCase();
+    const targetPhone = (updated.contactNo || "").replace(/\D/g, "");
+
+    const updatedParentSelfEntries = parentSelfEntries.map(e => {
+      const eStudentLower = (e.studentName || "").trim().toLowerCase();
+      const ePhone = (e.contactNo || "").replace(/\D/g, "");
+      const isMatch = (claimedEntryId && e.id === claimedEntryId) ||
+        (eStudentLower && eStudentLower === targetStudentLower) ||
+        (targetPhone && ePhone && targetPhone === ePhone && (e.status === "claimed" || e.status === "pending"));
+
+      if (isMatch) {
+        return {
+          ...e,
+          status: "completed" as const,
+          completedEnquiryNo: updated.enquiryNo,
+          completedAt: new Date().toISOString(),
+          completedBy: assignedCounsellorId,
+          completedByName: assignedCounsellorName
+        };
+      }
+      return e;
+    });
+
+    setParentSelfEntries(updatedParentSelfEntries);
+    saveParentSelfEntries(updatedParentSelfEntries);
+
+    // Sync completion to Firestore & Server API
+    if (claimedEntryId) {
+      try {
+        saveDocument("parent_self_entries", claimedEntryId, {
+          status: "completed",
+          completedEnquiryNo: updated.enquiryNo,
+          completedAt: new Date().toISOString(),
+          completedBy: assignedCounsellorId,
+          completedByName: assignedCounsellorName
+        });
+      } catch {}
+      try {
+        fetch("/api/parent-self-entry", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: claimedEntryId,
+            studentName: updated.studentName,
+            contactNo: updated.contactNo,
+            status: "completed",
+            completedEnquiryNo: updated.enquiryNo,
+            completedAt: new Date().toISOString(),
+            completedBy: assignedCounsellorId,
+            completedByName: assignedCounsellorName
+          })
+        }).catch(() => {});
+      } catch {}
+    }
+
     try { localStorage.removeItem("bomis_counsellor_active_draft"); } catch {}
     setActiveDraft(null);
 
     if (isJointSiblingMode && siblingFormData) {
       setDeleteToast(`✅ Joint Sibling Enquiries ${updated.enquiryNo} (${updated.studentName}) & ${siblingFormData.enquiryNo || "Child 2"} (${siblingFormData.studentName}) saved successfully with shared meeting audio!`);
     } else {
-      setDeleteToast(`✅ Enquiry ${updated.enquiryNo} (${updated.studentName}) submitted successfully!`);
+      setDeleteToast(`✅ Enquiry ${updated.enquiryNo} (${updated.studentName}) submitted successfully! Live in Counsellor and Management Portals.`);
     }
     setTimeout(() => setDeleteToast(null), 4000);
     setIsJointSiblingMode(false);
@@ -6439,7 +6543,7 @@ Warm regards,
 
       {/* VIEW: INTERACTIVE FORM (EXACT MATCH WITH UPLOADED BIRLA OPENMINDS FORM) */}
       {activeView === "form" && (
-        <form onSubmit={handleSave} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl">
+        <form id="counselling-form" onSubmit={handleSave} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl">
           {/* Form Header (Sticky for easy access while scrolling) */}
           <div className="sticky top-0 z-30 p-4 md:p-6 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 flex flex-col md:flex-row items-center justify-between gap-4 rounded-t-2xl shadow-sm">
             <div className="text-center md:text-left">
@@ -8363,6 +8467,9 @@ Warm regards,
                         : newNotes
                     }) : null);
                   }
+                }}
+                onRequestSaveAdmission={() => {
+                  handleSave({ preventDefault: () => {} } as React.FormEvent);
                 }}
               />
             </div>

@@ -371,10 +371,14 @@ export interface ParentSelfEntry {
   specialLearningSupport?: boolean;
   submittedAt: string; // ISO string
   formattedDate: string; // "DD-MM-YYYY HH:MM"
-  status: "pending" | "claimed" | "dismissed";
+  status: "pending" | "claimed" | "dismissed" | "completed";
   claimedBy?: string; // counsellorId
   claimedByName?: string; // counsellorName
   claimedAt?: string;
+  completedEnquiryNo?: string;
+  completedAt?: string;
+  completedBy?: string;
+  completedByName?: string;
   dismissedBy?: string; // counsellorName
   dismissedById?: string; // counsellorId
   dismissedAt?: string; // ISO string

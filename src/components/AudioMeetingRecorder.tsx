@@ -76,6 +76,7 @@ interface AudioMeetingRecorderProps {
   onSaveAudio: (audioRecord: CounsellingAudioRecord) => void;
   onRemoveAudio?: () => void;
   onUpdateNotes?: (notes: string) => void;
+  onRequestSaveAdmission?: () => void;
 }
 
 /**
@@ -625,7 +626,8 @@ export default function AudioMeetingRecorder({
   existingAudio,
   onSaveAudio,
   onRemoveAudio,
-  onUpdateNotes
+  onUpdateNotes,
+  onRequestSaveAdmission
 }: AudioMeetingRecorderProps) {
   // Recorder states
   const [isRecording, setIsRecording] = useState(false);
@@ -3046,6 +3048,32 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
                 onError={(e) => console.warn("Audio preview error:", e)}
                 className="w-full h-10 accent-indigo-600 rounded-lg"
               />
+            </div>
+          )}
+
+          {/* QUICK COMMIT ADMISSION ACTION BANNER */}
+          {onRequestSaveAdmission && (
+            <div className="p-3.5 bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-700 text-white rounded-xl flex flex-col sm:flex-row items-center justify-between gap-3 shadow-md">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center text-lg shrink-0">
+                  💾
+                </div>
+                <div>
+                  <p className="text-xs font-black uppercase tracking-wider">
+                    Audio Attached • Ready to Save Admission Enquiry
+                  </p>
+                  <p className="text-[11px] text-emerald-100">
+                    Click button to officially commit this enquiry to Counsellor &amp; Management Portals!
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={onRequestSaveAdmission}
+                className="w-full sm:w-auto px-4 py-2 bg-white text-emerald-900 hover:bg-emerald-50 active:scale-95 rounded-lg text-xs font-black shadow transition-all cursor-pointer flex items-center justify-center gap-1.5 shrink-0"
+              >
+                <span>💾 Save Entire Enquiry Now</span>
+              </button>
             </div>
           )}
 

@@ -656,15 +656,18 @@ export default function App() {
           if (!items) return;
 
           if (items.length === 0) {
-            setCounsellingEnquiries([]);
-            saveCounselling([]);
-            try {
-              fetch("/api/counselling", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify([])
-              }).catch(() => {});
-            } catch (_) {}
+            // Only wipe if user explicitly triggered a complete database wipe
+            if (localStorage.getItem("sgs_wiping_database") === "true") {
+              setCounsellingEnquiries([]);
+              saveCounselling([]);
+              try {
+                fetch("/api/counselling", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify([])
+                }).catch(() => {});
+              } catch (_) {}
+            }
             return;
           }
 
