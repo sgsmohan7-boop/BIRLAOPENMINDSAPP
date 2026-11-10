@@ -12,11 +12,10 @@ export const ADMISSION_SOURCES = [
 ];
 
 export const ADMISSION_STATUS_LIST = [
-  "Interested",
+  "Follow-up Required",
   "Application Taken",
   "Entrance Test Required",
   "Admission Confirmed",
-  "Follow-up Required",
   "Not Interested"
 ];
 
@@ -240,7 +239,7 @@ export function printOfficialAdmissionForm(enquiry: CounsellingEnquiry | null | 
         <div class="checkboxes-wrap">
           ${statuses.map(st => `
             <span class="box-check">
-              <span class="square-box">${enq.admissionStatus === st ? "✓" : "&nbsp;"}</span> ${st}
+              <span class="square-box">${(enq.admissionStatus === st || (st === "Follow-up Required" && enq.admissionStatus === "Interested")) ? "✓" : "&nbsp;"}</span> ${st}
             </span>
           `).join("")}
         </div>

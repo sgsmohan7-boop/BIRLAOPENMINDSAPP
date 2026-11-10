@@ -243,12 +243,130 @@ const SOURCES = [
 ];
 
 const STATUS_CONFIG: Record<AdmissionStatus, { label: string; bg: string; text: string; border: string }> = {
-  "Interested": { label: "Interested", bg: "bg-blue-50 dark:bg-blue-900/30", text: "text-blue-700 dark:text-blue-300", border: "border-blue-300 dark:border-blue-700" },
+  "Interested": { label: "Follow-up Required", bg: "bg-orange-50 dark:bg-orange-900/30", text: "text-orange-700 dark:text-orange-300", border: "border-orange-300 dark:border-orange-700" },
+  "Follow-up Required": { label: "Follow-up Required", bg: "bg-orange-50 dark:bg-orange-900/30", text: "text-orange-700 dark:text-orange-300", border: "border-orange-300 dark:border-orange-700" },
   "Application Taken": { label: "Application Taken", bg: "bg-amber-50 dark:bg-amber-900/30", text: "text-amber-700 dark:text-amber-300", border: "border-amber-300 dark:border-amber-700" },
   "Entrance Test Required": { label: "Entrance Test Required", bg: "bg-purple-50 dark:bg-purple-900/30", text: "text-purple-700 dark:text-purple-300", border: "border-purple-300 dark:border-purple-700" },
   "Admission Confirmed": { label: "Admission Confirmed", bg: "bg-emerald-50 dark:bg-emerald-900/30", text: "text-emerald-700 dark:text-emerald-300", border: "border-emerald-300 dark:border-emerald-700" },
-  "Follow-up Required": { label: "Follow-up Required", bg: "bg-orange-50 dark:bg-orange-900/30", text: "text-orange-700 dark:text-orange-300", border: "border-orange-300 dark:border-orange-700" },
   "Not Interested": { label: "Not Interested", bg: "bg-slate-100 dark:bg-slate-800", text: "text-slate-600 dark:text-slate-400", border: "border-slate-300 dark:border-slate-700" }
+};
+
+export const FORM_STATUS_OPTIONS: AdmissionStatus[] = [
+  "Follow-up Required",
+  "Application Taken",
+  "Entrance Test Required",
+  "Admission Confirmed",
+  "Not Interested"
+];
+
+// Pure date utility functions accessible throughout CounsellingPortal module
+export const formatDMYFromDate = (d: Date): string => {
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  return `${dd}-${mm}-${yyyy}`;
+};
+
+export const getFutureDateDMY = (daysToAdd: number): string => {
+  const d = new Date();
+  d.setDate(d.getDate() + daysToAdd);
+  return formatDMYFromDate(d);
+};
+
+export const dmyToYmd = (dmyStr?: string): string => {
+  if (!dmyStr) return "";
+  const clean = dmyStr.trim().replace(/[\/\.]/g, "-");
+  const parts = clean.split("-");
+  if (parts.length === 3 && parts[2].length === 4) {
+    const dd = parts[0].padStart(2, "0");
+    const mm = parts[1].padStart(2, "0");
+    const yyyy = parts[2];
+    return `${yyyy}-${mm}-${dd}`;
+  }
+  if (parts.length === 3 && parts[0].length === 4) {
+    return clean;
+  }
+  return "";
+};
+
+export const ymdToDmy = (ymdStr?: string): string => {
+  if (!ymdStr) return "";
+  const clean = ymdStr.trim().replace(/[\/\.]/g, "-");
+  const parts = clean.split("-");
+  if (parts.length === 3 && parts[0].length === 4) {
+    const yyyy = parts[0];
+    const mm = parts[1].padStart(2, "0");
+    const dd = parts[2].padStart(2, "0");
+    return `${dd}-${mm}-${yyyy}`;
+  }
+  return clean;
+};
+
+export const parseEnquiryDateInfo = (dateStr: string) => {
+  if (!dateStr) return { ymd: "", dmy: "", timestamp: 0 };
+  const clean = dateStr.replace(/[\/\.]/g, "-").trim();
+  // DD-MM-YYYY
+  const dmyMatch = clean.match(/^(\d{1,2})-(\d{1,2})-(\d{4})/);
+  if (dmyMatch) {
+    const d = parseInt(dmyMatch[1], 10);
+    const m = parseInt(dmyMatch[2], 10);
+    const y = parseInt(dmyMatch[3], 10);
+    const dd = String(d).padStart(2, "0");
+    const mm = String(m).padStart(2, "0");
+    return {
+      ymd: `${y}-${mm}-${dd}`,
+      dmy: `${dd}-${mm}-${y}`,
+      timestamp: new Date(y, m - 1, d).getTime()
+    };
+  }
+  // YYYY-MM-DD
+  const ymdMatch = clean.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (ymdMatch) {
+    const y = parseInt(ymdMatch[1], 10);
+    const m = parseInt(ymdMatch[2], 10);
+    const d = parseInt(ymdMatch[3], 10);
+    const dd = String(d).padStart(2, "0");
+    const mm = String(m).padStart(2, "0");
+    return {
+      ymd: `${y}-${mm}-${dd}`,
+      dmy: `${dd}-${mm}-${y}`,
+      timestamp: new Date(y, m - 1, d).getTime()
+    };
+  }
+  return { ymd: "", dmy: clean, timestamp: 0 };
+};
+
+export const getTodayYMDStr = (): string => {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
+export const getYesterdayYMDStr = (): string => {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
+export const getPastDaysYMDStr = (daysAgo: number): string => {
+  const d = new Date();
+  d.setDate(d.getDate() - daysAgo);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
+export const getMonthStartYMDStr = (): string => {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  return `${y}-${m}-01`;
 };
 
 export default function CounsellingPortal({
@@ -273,6 +391,8 @@ export default function CounsellingPortal({
   const [filterChannel, setFilterChannel] = useState<"ALL" | "WALKIN" | "ONLINE">("ALL");
   const [filterClass, setFilterClass] = useState<string>("ALL");
   const [filterAuditStatus, setFilterAuditStatus] = useState<string>("ALL");
+  const [filterDate, setFilterDate] = useState<string>("");
+  const [filterDatePreset, setFilterDatePreset] = useState<"ALL" | "TODAY" | "YESTERDAY" | "custom">("ALL");
   const [adminFilterCounsellor, setAdminFilterCounsellor] = useState<string>("ALL");
   const [selectedEnquiry, setSelectedEnquiry] = useState<CounsellingEnquiry | null>(null);
   const [inspectingEnquiry, setInspectingEnquiry] = useState<CounsellingEnquiry | null>(null);
@@ -612,6 +732,8 @@ export default function CounsellingPortal({
     }
   });
   const [isDismissedLeadsModalOpen, setIsDismissedLeadsModalOpen] = useState<boolean>(false);
+  const [tokenActionModalEntry, setTokenActionModalEntry] = useState<ParentSelfEntry | null>(null);
+  const [counsellorDismissVersion, setCounsellorDismissVersion] = useState<number>(0);
 
   const toggleOnlinePoolCollapsed = () => {
     setIsOnlinePoolCollapsed(prev => {
@@ -805,7 +927,7 @@ export default function CounsellingPortal({
         }
         return new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime();
       });
-  }, [parentSelfEntries, activeCounsellor]);
+  }, [parentSelfEntries, activeCounsellor, counsellorDismissVersion]);
 
   // 2. Online Leads Pool (Remote / Website / WhatsApp QR Enquiries with ONL-YYYY-XX numbers)
   const pendingOnlineEntries = useMemo(() => {
@@ -814,7 +936,7 @@ export default function CounsellingPortal({
     return (parentSelfEntries || [])
       .filter(e => e.status === "pending" && e.enquiryType === "online" && !dismissedSet.has(e.id))
       .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
-  }, [parentSelfEntries, activeCounsellor]);
+  }, [parentSelfEntries, activeCounsellor, counsellorDismissVersion]);
 
   // 3. Dismissed Leads & Tokens Archive (Preserves all dismissed entries across counsellors)
   const dismissedParentEntries = useMemo(() => {
@@ -840,7 +962,7 @@ export default function CounsellingPortal({
       const timeB = b.dismissedAt ? new Date(b.dismissedAt).getTime() : new Date(b.submittedAt).getTime();
       return timeB - timeA;
     });
-  }, [parentSelfEntries, activeCounsellor]);
+  }, [parentSelfEntries, activeCounsellor, counsellorDismissVersion]);
 
   // Automatic Sibling Family Detection in Reception Lounge
   const pendingSiblingGroups = useMemo(() => {
@@ -932,9 +1054,41 @@ export default function CounsellingPortal({
     }).catch(() => {});
   };
 
-  const handleDismissParentEntry = async (entryId: string) => {
+  // 1. Skip for My Profile (Keeps token active & waiting for other counsellors!)
+  const handleSkipForMyProfile = (entryId: string) => {
     const counsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR";
     const counsellorName = activeCounsellor ? activeCounsellor.name : "Admissions Desk";
+    
+    // Save to this counsellor's personal dismissed list only
+    recordDismissedParentEntryId(entryId, counsellorId);
+
+    const nowStr = new Date().toISOString();
+    const target = parentSelfEntries.find(e => e.id === entryId);
+    if (target) {
+      const skippedItem: ParentSelfEntry = {
+        ...target,
+        dismissedBy: counsellorName,
+        dismissedById: counsellorId,
+        dismissedAt: nowStr,
+        dismissedReason: `Skipped by ${counsellorName} (Still waiting for other counsellors)`
+      };
+      saveDismissedParentEntry(skippedItem);
+    }
+
+    // Force queue refresh for this counsellor
+    setCounsellorDismissVersion(v => v + 1);
+
+    setDeleteToast(`✓ Token #${target?.dailyTokenNo || ""} hidden from your queue. Still ACTIVE for other counsellors.`);
+    setTimeout(() => setDeleteToast(null), 4000);
+  };
+
+  // 2. Global Dismiss (Parent left campus without meeting or lead cancelled)
+  const handleGlobalDismissParentEntry = async (entryId: string, reason = "Parent left campus without meeting") => {
+    const counsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR";
+    const counsellorName = activeCounsellor ? activeCounsellor.name : "Admissions Desk";
+    
+    // Record globally and for this counsellor
+    recordDismissedParentEntryId(entryId);
     recordDismissedParentEntryId(entryId, counsellorId);
 
     const nowStr = new Date().toISOString();
@@ -945,36 +1099,40 @@ export default function CounsellingPortal({
       dismissedBy: counsellorName,
       dismissedById: counsellorId,
       dismissedAt: nowStr,
-      dismissedReason: "Dismissed by counsellor"
+      dismissedReason: reason
     } : {
       id: entryId,
       status: "dismissed" as const,
       dismissedBy: counsellorName,
       dismissedById: counsellorId,
-      dismissedAt: nowStr
+      dismissedAt: nowStr,
+      dismissedReason: reason
     };
 
     saveDismissedParentEntry(dismissedItem);
 
-    // 1. Update React state & LocalStorage marking status as dismissed (PRESERVED!)
+    // 1. Update React state & LocalStorage marking status as dismissed globally
     const updated = parentSelfEntries.map(e => e.id === entryId ? {
       ...e,
       status: "dismissed" as const,
       dismissedBy: counsellorName,
       dismissedById: counsellorId,
-      dismissedAt: nowStr
+      dismissedAt: nowStr,
+      dismissedReason: reason
     } : e);
     setParentSelfEntries(updated);
     saveParentSelfEntries(updated);
+    setCounsellorDismissVersion(v => v + 1);
 
-    // 2. Update Firestore with status: "dismissed" (PRESERVES DATA FOR ALL COUNSELLORS & AUDIT!)
+    // 2. Update Firestore with status: "dismissed"
     try {
       if (isFirebaseConfigured()) {
         await saveDocument("parent_self_entries", entryId, {
           status: "dismissed",
           dismissedBy: counsellorName,
           dismissedById: counsellorId,
-          dismissedAt: nowStr
+          dismissedAt: nowStr,
+          dismissedReason: reason
         });
       }
     } catch {}
@@ -987,16 +1145,41 @@ export default function CounsellingPortal({
         body: JSON.stringify({
           id: entryId,
           counsellorId,
-          counsellorName
+          counsellorName,
+          reason
         })
       });
     } catch {}
 
-    setDeleteToast("✓ Lead archived to Dismissed Archive. You can view or restore it anytime.");
+    setDeleteToast("✓ Token cancelled and archived globally for all portals.");
     setTimeout(() => setDeleteToast(null), 3500);
   };
 
+  // Main entry point for dismiss: opens modal to clarify whether to skip for self or cancel globally
+  const handleDismissParentEntry = (entryId: string) => {
+    const target = parentSelfEntries.find(e => e.id === entryId);
+    if (target) {
+      setTokenActionModalEntry(target);
+    } else {
+      handleSkipForMyProfile(entryId);
+    }
+  };
+
   const handleRestoreDismissedEntry = async (entry: ParentSelfEntry) => {
+    // Guard: Prevent restoring if already claimed by another counsellor
+    const liveMatch = parentSelfEntries.find(e => e.id === entry.id);
+    const isAlreadyClaimed = Boolean(
+      (liveMatch && (liveMatch.status === "claimed" || liveMatch.claimedBy || liveMatch.claimedByName)) ||
+      entry.status === "claimed" ||
+      entry.claimedBy ||
+      entry.claimedByName
+    );
+    const currentCounsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR-01";
+    if (isAlreadyClaimed && liveMatch && liveMatch.claimedBy && liveMatch.claimedBy !== currentCounsellorId) {
+      alert(`⚠️ Cannot restore Token #${entry.dailyTokenNo || entry.id}: It has already been claimed by ${liveMatch.claimedByName || liveMatch.claimedBy} and is currently in active counselling!`);
+      return;
+    }
+
     const counsellorId = activeCounsellor ? activeCounsellor.id : undefined;
     unrecordDismissedParentEntryId(entry.id, counsellorId);
     removeDismissedParentEntryFromArchive(entry.id);
@@ -1011,6 +1194,7 @@ export default function CounsellingPortal({
     } : e);
     setParentSelfEntries(updated);
     saveParentSelfEntries(updated);
+    setCounsellorDismissVersion(v => v + 1);
 
     try {
       if (isFirebaseConfigured()) {
@@ -1107,6 +1291,13 @@ export default function CounsellingPortal({
     const currentCounsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR-01";
     const currentCounsellorName = activeCounsellor ? activeCounsellor.name : "Admissions Counsellor";
 
+    // Guard: Prevent claiming if another counsellor has already claimed this token
+    const liveCheck = parentSelfEntries.find(e => e.id === entry.id);
+    if (liveCheck && (liveCheck.status === "claimed" || liveCheck.claimedBy) && liveCheck.claimedBy !== currentCounsellorId) {
+      alert(`⚠️ Token #${entry.dailyTokenNo || entry.id} has already been claimed by ${liveCheck.claimedByName || liveCheck.claimedBy}! Two counsellors cannot claim the same parent token simultaneously.`);
+      return;
+    }
+
     // Mark claimed
     const updatedEntries = parentSelfEntries.map(e => e.id === entry.id ? {
       ...e,
@@ -1187,8 +1378,8 @@ export default function CounsellingPortal({
       explainedTransportDetails: false,
       explainedSchoolRules: false,
       explainedActivitiesSports: false,
-      admissionStatus: "Interested",
-      followUpDate: "",
+      admissionStatus: "Follow-up Required",
+      followUpDate: getFutureDateDMY(7),
       counsellorId: currentCounsellorId,
       counsellorName: currentCounsellorName,
       parentSignatureRecorded: true,
@@ -1345,7 +1536,7 @@ export default function CounsellingPortal({
       academicPerformance: "",
       strengths: "",
       areasNeedingSupport: "",
-      admissionStatus: formData.admissionStatus || "Interested",
+      admissionStatus: formData.admissionStatus || "Follow-up Required",
       isSibling: true,
       siblingEnquiryNo: formData.enquiryNo,
       siblingStudentName: formData.studentName || "Child 1",
@@ -1488,8 +1679,8 @@ export default function CounsellingPortal({
       explainedTransportDetails: false,
       explainedSchoolRules: false,
       explainedActivitiesSports: false,
-      admissionStatus: "Interested",
-      followUpDate: "",
+      admissionStatus: "Follow-up Required",
+      followUpDate: getFutureDateDMY(7),
       counsellorId: currentCounsellorId,
       counsellorName: currentCounsellorName,
       parentSignatureRecorded: true,
@@ -1538,8 +1729,8 @@ export default function CounsellingPortal({
       explainedTransportDetails: false,
       explainedSchoolRules: false,
       explainedActivitiesSports: false,
-      admissionStatus: "Interested",
-      followUpDate: "",
+      admissionStatus: "Follow-up Required",
+      followUpDate: getFutureDateDMY(7),
       counsellorId: currentCounsellorId,
       counsellorName: currentCounsellorName,
       parentSignatureRecorded: true,
@@ -2043,8 +2234,8 @@ export default function CounsellingPortal({
       explainedTransportDetails: false,
       explainedSchoolRules: false,
       explainedActivitiesSports: false,
-      admissionStatus: "Interested",
-      followUpDate: "",
+      admissionStatus: "Follow-up Required",
+      followUpDate: getFutureDateDMY(7),
       counsellorId: defaultCounsellor.id,
       counsellorName: defaultCounsellor.name,
       parentSignatureRecorded: false,
@@ -2474,6 +2665,17 @@ export default function CounsellingPortal({
     setIsAddingFollowUp(false);
   };
 
+  const handleDatePresetChange = (preset: "ALL" | "TODAY" | "YESTERDAY" | "custom") => {
+    setFilterDatePreset(preset);
+    if (preset === "ALL") {
+      setFilterDate("");
+    } else if (preset === "TODAY") {
+      setFilterDate(getTodayYMDStr());
+    } else if (preset === "YESTERDAY") {
+      setFilterDate(getYesterdayYMDStr());
+    }
+  };
+
   // Filtered list
   const filteredEnquiries = useMemo(() => {
     return counsellorScopeEnquiries.filter(item => {
@@ -2500,9 +2702,24 @@ export default function CounsellingPortal({
         (filterChannel === "ONLINE" && (item.enquiryType === "online" || item.enquiryNo?.startsWith("ONL-"))) ||
         (filterChannel === "WALKIN" && item.enquiryType !== "online" && !item.enquiryNo?.startsWith("ONL-"));
 
-      return matchQuery && matchStatus && matchClass && matchAudit && matchChannel;
+      // Date matching filter: supports YYYY-MM-DD from date picker and DD-MM-YYYY in data
+      let matchDate = true;
+      if (filterDate) {
+        const parsed = parseEnquiryDateInfo(item.date);
+        const [fY, fM, fD] = filterDate.split("-");
+        const filterDmy = fY && fM && fD ? `${fD}-${fM}-${fY}` : "";
+        matchDate = 
+          Boolean(parsed.ymd && parsed.ymd === filterDate) ||
+          Boolean(parsed.dmy && filterDmy && parsed.dmy === filterDmy) ||
+          Boolean(item.date && (item.date.includes(filterDate) || (filterDmy && item.date.includes(filterDmy)))) ||
+          Boolean(item.createdAt && item.createdAt.includes(filterDate)) ||
+          Boolean((item as any).dateKey === filterDate) ||
+          Boolean((item as any).entryDate === filterDmy);
+      }
+
+      return matchQuery && matchStatus && matchClass && matchAudit && matchChannel && matchDate;
     });
-  }, [counsellorScopeEnquiries, searchQuery, filterStatus, filterChannel, filterClass, filterAuditStatus]);
+  }, [counsellorScopeEnquiries, searchQuery, filterStatus, filterChannel, filterClass, filterAuditStatus, filterDate]);
 
   // Statistics for active scope
   const stats = useMemo(() => {
@@ -2543,118 +2760,6 @@ export default function CounsellingPortal({
     }
     setSelectedEnquiryIds([]);
     setIsBulkDeleteModalOpen(false);
-  };
-
-
-  // Date Normalizer and Helper for Counselling Enquiries
-  const parseEnquiryDateInfo = (dateStr: string) => {
-    if (!dateStr) return { ymd: "", dmy: "", timestamp: 0 };
-    const clean = dateStr.replace(/[\/\.]/g, "-").trim();
-    // DD-MM-YYYY
-    const dmyMatch = clean.match(/^(\d{1,2})-(\d{1,2})-(\d{4})/);
-    if (dmyMatch) {
-      const d = parseInt(dmyMatch[1], 10);
-      const m = parseInt(dmyMatch[2], 10);
-      const y = parseInt(dmyMatch[3], 10);
-      const dd = String(d).padStart(2, "0");
-      const mm = String(m).padStart(2, "0");
-      return {
-        ymd: `${y}-${mm}-${dd}`,
-        dmy: `${dd}-${mm}-${y}`,
-        timestamp: new Date(y, m - 1, d).getTime()
-      };
-    }
-    // YYYY-MM-DD
-    const ymdMatch = clean.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-    if (ymdMatch) {
-      const y = parseInt(ymdMatch[1], 10);
-      const m = parseInt(ymdMatch[2], 10);
-      const d = parseInt(ymdMatch[3], 10);
-      const dd = String(d).padStart(2, "0");
-      const mm = String(m).padStart(2, "0");
-      return {
-        ymd: `${y}-${mm}-${dd}`,
-        dmy: `${dd}-${mm}-${y}`,
-        timestamp: new Date(y, m - 1, d).getTime()
-      };
-    }
-    return { ymd: "", dmy: clean, timestamp: 0 };
-  };
-
-  const getTodayYMDStr = (): string => {
-    const d = new Date();
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-  };
-
-  const getYesterdayYMDStr = (): string => {
-    const d = new Date();
-    d.setDate(d.getDate() - 1);
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-  };
-
-  const getPastDaysYMDStr = (daysAgo: number): string => {
-    const d = new Date();
-    d.setDate(d.getDate() - daysAgo);
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-  };
-
-  const getMonthStartYMDStr = (): string => {
-    const d = new Date();
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    return `${y}-${m}-01`;
-  };
-
-  // Helper functions for follow-up date calculations & presets
-  const formatDMYFromDate = (d: Date): string => {
-    const dd = String(d.getDate()).padStart(2, "0");
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const yyyy = d.getFullYear();
-    return `${dd}-${mm}-${yyyy}`;
-  };
-
-  const getFutureDateDMY = (daysToAdd: number): string => {
-    const d = new Date();
-    d.setDate(d.getDate() + daysToAdd);
-    return formatDMYFromDate(d);
-  };
-
-  const dmyToYmd = (dmyStr?: string): string => {
-    if (!dmyStr) return "";
-    const clean = dmyStr.trim().replace(/[\/\.]/g, "-");
-    const parts = clean.split("-");
-    if (parts.length === 3 && parts[2].length === 4) {
-      const dd = parts[0].padStart(2, "0");
-      const mm = parts[1].padStart(2, "0");
-      const yyyy = parts[2];
-      return `${yyyy}-${mm}-${dd}`;
-    }
-    if (parts.length === 3 && parts[0].length === 4) {
-      return clean;
-    }
-    return "";
-  };
-
-  const ymdToDmy = (ymdStr?: string): string => {
-    if (!ymdStr) return "";
-    const clean = ymdStr.trim().replace(/[\/\.]/g, "-");
-    const parts = clean.split("-");
-    if (parts.length === 3 && parts[0].length === 4) {
-      const yyyy = parts[0];
-      const mm = parts[1].padStart(2, "0");
-      const dd = parts[2].padStart(2, "0");
-      return `${dd}-${mm}-${yyyy}`;
-    }
-    return clean;
   };
 
   const getFollowUpStatusInfo = (followUpDateStr?: string) => {
@@ -5563,7 +5668,7 @@ Warm regards,
               <select
                 value={filterChannel}
                 onChange={(e) => setFilterChannel(e.target.value as any)}
-                className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 shrink-0"
+                className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 shrink-0 cursor-pointer"
                 title="Filter by Walk-in or Online Enquiry"
               >
                 <option value="ALL">🌐 All Channels</option>
@@ -5571,24 +5676,76 @@ Warm regards,
                 <option value="ONLINE">🌐 Online Enquiry (ONL)</option>
               </select>
 
+              {/* Choose Date Filter: Presets (All / Today / Yesterday) + Calendar Date Picker */}
+              <div className="flex items-center gap-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-2.5 py-1.5 shrink-0 shadow-2xs hover:border-orange-400 dark:hover:border-orange-500 transition-all">
+                <Calendar size={14} className="text-orange-500 shrink-0" />
+                <span className="text-xs font-bold text-slate-700 dark:text-slate-300 shrink-0">Choose Date:</span>
+                <select
+                  value={filterDatePreset}
+                  onChange={(e) => handleDatePresetChange(e.target.value as any)}
+                  className="bg-transparent text-xs font-semibold text-slate-700 dark:text-slate-300 focus:outline-none cursor-pointer border-r border-slate-200 dark:border-slate-700 pr-1.5 mr-0.5"
+                  title="Quick date filter: Today, Yesterday, or All Dates"
+                >
+                  <option value="ALL">All Dates</option>
+                  <option value="TODAY">Today</option>
+                  <option value="YESTERDAY">Yesterday</option>
+                  {filterDate && filterDatePreset === "custom" && (
+                    <option value="custom">Custom Date</option>
+                  )}
+                </select>
+
+                <input
+                  type="date"
+                  value={filterDate}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setFilterDate(val);
+                    if (!val) {
+                      setFilterDatePreset("ALL");
+                    } else if (val === getTodayYMDStr()) {
+                      setFilterDatePreset("TODAY");
+                    } else if (val === getYesterdayYMDStr()) {
+                      setFilterDatePreset("YESTERDAY");
+                    } else {
+                      setFilterDatePreset("custom");
+                    }
+                  }}
+                  className="bg-transparent text-xs font-semibold text-slate-800 dark:text-slate-200 focus:outline-none cursor-pointer"
+                  title="Pick specific date to filter enquiries"
+                />
+
+                {filterDate && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFilterDate("");
+                      setFilterDatePreset("ALL");
+                    }}
+                    className="p-1 text-slate-400 hover:text-rose-500 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-md transition-all cursor-pointer"
+                    title="Clear Date Filter"
+                  >
+                    <X size={13} />
+                  </button>
+                )}
+              </div>
+
               <select
                 value={filterStatus}
                 onChange={(e) => setFilterStatus(e.target.value)}
-                className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-orange-500 shrink-0"
+                className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-orange-500 shrink-0 cursor-pointer"
               >
                 <option value="ALL">All Statuses</option>
-                <option value="Interested">Interested</option>
+                <option value="Follow-up Required">Follow-up Required</option>
                 <option value="Application Taken">Application Taken</option>
                 <option value="Entrance Test Required">Entrance Test Required</option>
                 <option value="Admission Confirmed">Admission Confirmed</option>
-                <option value="Follow-up Required">Follow-up Required</option>
                 <option value="Not Interested">Not Interested</option>
               </select>
 
               <select
                 value={filterClass}
                 onChange={(e) => setFilterClass(e.target.value)}
-                className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-orange-500 shrink-0"
+                className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-orange-500 shrink-0 cursor-pointer"
               >
                 <option value="ALL">All Classes</option>
                 {CLASS_OPTIONS.map(c => (
@@ -5599,7 +5756,7 @@ Warm regards,
               <select
                 value={filterAuditStatus}
                 onChange={(e) => setFilterAuditStatus(e.target.value)}
-                className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-orange-500 shrink-0"
+                className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-orange-500 shrink-0 cursor-pointer"
                 title="Filter by Management Audio Review & Feedback status"
               >
                 <option value="ALL">All Audits</option>
@@ -5631,6 +5788,32 @@ Warm regards,
               )}
             </div>
           </div>
+
+          {/* Active Date Filter Notice Banner */}
+          {filterDate && (
+            <div className="px-4 py-2.5 bg-orange-50 dark:bg-orange-950/40 border-b border-orange-200 dark:border-orange-900/50 flex flex-wrap items-center justify-between gap-2 text-xs animate-in fade-in duration-150">
+              <div className="flex items-center gap-2 text-orange-900 dark:text-orange-200">
+                <Calendar size={14} className="text-orange-600 dark:text-orange-400 shrink-0" />
+                <span>
+                  Showing enquiries for Date: <strong className="font-bold underline tracking-wide">{filterDate.split("-").reverse().join("-")}</strong> 
+                  <span className="ml-2 px-2 py-0.5 bg-orange-200 dark:bg-orange-900 text-orange-800 dark:text-orange-200 rounded-full font-bold text-[11px]">
+                    {filteredEnquiries.length} {filteredEnquiries.length === 1 ? "Record" : "Records"} Found
+                  </span>
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setFilterDate("");
+                  setFilterDatePreset("ALL");
+                }}
+                className="text-[11px] font-bold text-orange-700 dark:text-orange-300 hover:text-rose-600 dark:hover:text-rose-400 flex items-center gap-1 cursor-pointer transition-all hover:underline"
+              >
+                <X size={12} />
+                <span>Clear Date Filter (Show All Records)</span>
+              </button>
+            </div>
+          )}
 
           {/* Multi-Selection Bulk Action Banner */}
           {canUseMultiDelete && selectedEnquiryIds.length > 0 && (
@@ -5702,18 +5885,33 @@ Warm regards,
                 {filteredEnquiries.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="text-center py-12 text-slate-400">
-                      <FileText size={32} className="mx-auto mb-2 opacity-50" />
-                      <p className="font-semibold">
-                        {userRole === "Counsellor"
-                          ? `No enquiries registered for ${activeCounsellor?.name || "your account"} yet.`
-                          : "No counselling enquiries found."}
+                      <FileText size={32} className="mx-auto mb-2 opacity-50 text-orange-500" />
+                      <p className="font-semibold text-slate-700 dark:text-slate-300">
+                        {filterDate
+                          ? `No enquiries found registered on ${filterDate.split("-").reverse().join("-")}.`
+                          : userRole === "Counsellor"
+                            ? `No enquiries registered for ${activeCounsellor?.name || "your account"} yet.`
+                            : "No counselling enquiries found matching the selected filters."}
                       </p>
-                      <button 
-                        onClick={startNewEnquiry}
-                        className="mt-3 px-3.5 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg font-bold text-xs"
-                      >
-                        Create First Enquiry
-                      </button>
+                      {filterDate ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setFilterDate("");
+                            setFilterDatePreset("ALL");
+                          }}
+                          className="mt-3 px-3.5 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-xs shadow-sm transition-all cursor-pointer"
+                        >
+                          Clear Date Filter (Show All Dates)
+                        </button>
+                      ) : (
+                        <button 
+                          onClick={startNewEnquiry}
+                          className="mt-3 px-3.5 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg font-bold text-xs"
+                        >
+                          Create First Enquiry
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ) : (
@@ -7884,10 +8082,10 @@ Warm regards,
 
                   <div className="space-y-3">
                     <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">Admission Status</label>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
-                      {(Object.keys(STATUS_CONFIG) as AdmissionStatus[]).map(status => {
-                        const isSelected = formData.admissionStatus === status;
-                        const conf = STATUS_CONFIG[status];
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+                      {FORM_STATUS_OPTIONS.map(status => {
+                        const isSelected = formData.admissionStatus === status || (status === "Follow-up Required" && formData.admissionStatus === "Interested");
+                        const conf = STATUS_CONFIG[status] || STATUS_CONFIG["Follow-up Required"];
                         return (
                           <button
                             type="button"
@@ -8337,15 +8535,14 @@ Warm regards,
               <div className="p-2 space-y-2">
                 <div className="flex gap-4 flex-wrap">
                   {[
-                    "Interested",
+                    "Follow-up Required",
                     "Application Taken",
                     "Entrance Test Required",
                     "Admission Confirmed",
-                    "Follow-up Required",
                     "Not Interested"
                   ].map(status => (
                     <span key={status}>
-                      [ {selectedEnquiry.admissionStatus === status ? "✓" : " "} ] {status}
+                      [ {(selectedEnquiry.admissionStatus === status || (status === "Follow-up Required" && selectedEnquiry.admissionStatus === "Interested")) ? "✓" : " "} ] {status}
                     </span>
                   ))}
                 </div>
@@ -9103,16 +9300,19 @@ Warm regards,
       )}
 
       {/* Dismissed Leads & Tokens Archive Modal */}
-      <DismissedLeadsModal
-        isOpen={isDismissedLeadsModalOpen}
-        onClose={() => setIsDismissedLeadsModalOpen(false)}
-        dismissedEntries={dismissedParentEntries}
-        onRestoreEntry={handleRestoreDismissedEntry}
-        onClaimEntry={handleClaimAndAutoFill}
-        onPermanentDelete={handlePermanentDeleteEntry}
-        currentCounsellorName={activeCounsellor?.name}
-        userRole={userRole}
-      />
+      {isDismissedLeadsModalOpen && (
+        <DismissedLeadsModal
+          isOpen={isDismissedLeadsModalOpen}
+          onClose={() => setIsDismissedLeadsModalOpen(false)}
+          dismissedEntries={dismissedParentEntries}
+          liveQueueEntries={parentSelfEntries}
+          onRestoreEntry={handleRestoreDismissedEntry}
+          onClaimEntry={handleClaimAndAutoFill}
+          onPermanentDelete={handlePermanentDeleteEntry}
+          currentCounsellorName={activeCounsellor?.name}
+          userRole={userRole}
+        />
+      )}
 
       {/* Official Parent WhatsApp Communication Modal */}
       {!!whatsAppModalEnquiry && (
@@ -9126,6 +9326,114 @@ Warm regards,
             viewPrintPreview(enquiry);
           }}
         />
+      )}
+
+      {/* Modal: Clarify Token Dismiss - Skip for Me (Pass to others) vs Cancel for Everyone */}
+      {tokenActionModalEntry && (
+        <div className="fixed inset-0 z-[99999] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-white dark:bg-slate-900 border-2 border-orange-500/50 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            {/* Header */}
+            <div className="flex items-start justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
+              <div className="flex items-start gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-400 to-orange-500 text-slate-950 flex items-center justify-center font-black text-xl shadow-md shrink-0">
+                  🎫
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-xs font-black px-2.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/80 text-amber-900 dark:text-amber-200 border border-amber-300 dark:border-amber-700">
+                      {tokenActionModalEntry.dailyTokenNo ? `Token #${tokenActionModalEntry.dailyTokenNo}` : tokenActionModalEntry.onlineRefNo || `#${tokenActionModalEntry.id}`}
+                    </span>
+                    <span className="text-xs font-bold text-orange-600 dark:text-orange-400">
+                      {tokenActionModalEntry.applyingForClass}
+                    </span>
+                  </div>
+                  <h3 className="text-base font-black text-slate-900 dark:text-white mt-1">
+                    {tokenActionModalEntry.studentName}
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Parent: <strong className="text-slate-700 dark:text-slate-300">{tokenActionModalEntry.fatherName || tokenActionModalEntry.motherName || "Parent"}</strong> • 📞 {tokenActionModalEntry.contactNo}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setTokenActionModalEntry(null)}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-500 hover:text-slate-900 dark:hover:text-white flex items-center justify-center transition-all cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Prompt explanation */}
+            <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 rounded-2xl p-3.5 text-xs text-amber-900 dark:text-amber-200 space-y-1">
+              <p className="font-bold">
+                What would you like to do with this token?
+              </p>
+              <p className="text-[11px] text-amber-800/80 dark:text-amber-300/80">
+                If you are busy with another parent, choose <strong>"Skip for Me"</strong> so other available counsellors can attend to this waiting parent.
+              </p>
+            </div>
+
+            {/* 2 Big Action Buttons */}
+            <div className="space-y-3 pt-1">
+              {/* Option 1: Skip for My Profile Only (Pass to other counsellors) */}
+              <button
+                type="button"
+                onClick={() => {
+                  handleSkipForMyProfile(tokenActionModalEntry.id);
+                  setTokenActionModalEntry(null);
+                }}
+                className="w-full text-left p-4 rounded-2xl border-2 border-indigo-500/40 bg-indigo-50/70 hover:bg-indigo-100/90 dark:bg-indigo-950/40 dark:hover:bg-indigo-900/50 transition-all cursor-pointer group shadow-sm hover:shadow-md"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5 font-black text-sm text-indigo-700 dark:text-indigo-300">
+                    <UserCheck size={18} className="text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform" />
+                    <span>👤 Skip for My Profile (Pass to Other Counsellors)</span>
+                  </div>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-200 text-indigo-900 dark:bg-indigo-800 dark:text-indigo-100">
+                    Recommended (Safe)
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-300 mt-1.5 pl-7 leading-relaxed">
+                  Hide from your screen only because you are busy. <strong>Keeps the token active and visible for all other counsellors (Radhika, Sowjanya, etc.) to call and attend.</strong>
+                </p>
+              </button>
+
+              {/* Option 2: Parent Left Campus / Cancel Globally */}
+              <button
+                type="button"
+                onClick={() => {
+                  handleGlobalDismissParentEntry(tokenActionModalEntry.id, "Parent left campus without meeting");
+                  setTokenActionModalEntry(null);
+                }}
+                className="w-full text-left p-4 rounded-2xl border-2 border-rose-300 dark:border-rose-900/60 bg-rose-50/50 hover:bg-rose-100/80 dark:bg-rose-950/30 dark:hover:bg-rose-900/40 transition-all cursor-pointer group"
+              >
+                <div className="flex items-center gap-2.5 font-black text-sm text-rose-700 dark:text-rose-300">
+                  <X size={18} className="text-rose-600 dark:text-rose-400 group-hover:scale-110 transition-transform" />
+                  <span>🚪 Parent Left Campus (Cancel for Everyone)</span>
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-400 mt-1.5 pl-7 leading-relaxed">
+                  Parent walked out or left without attending counselling. <strong>Removes token from all portals and safely archives it in Dismissed Leads Archive.</strong>
+                </p>
+              </button>
+            </div>
+
+            {/* Bottom Actions */}
+            <div className="pt-2 flex items-center justify-between border-t border-slate-100 dark:border-slate-800">
+              <span className="text-[11px] text-slate-400">
+                Parent remains in waiting lounge
+              </span>
+              <button
+                type="button"
+                onClick={() => setTokenActionModalEntry(null)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                Keep Waiting in Queue
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Confirmation Alert Dialog for Clearing Waiting Queue */}

@@ -269,7 +269,7 @@ export default function ManagementAudioDesk({
       case "Entrance Test Required":
         return "bg-purple-100 text-purple-800 dark:bg-purple-950/80 dark:text-purple-300 border-purple-300 dark:border-purple-800";
       case "Interested":
-        return "bg-indigo-100 text-indigo-800 dark:bg-indigo-950/80 dark:text-indigo-300 border-indigo-300 dark:border-indigo-800";
+        return "bg-amber-100 text-amber-800 dark:bg-amber-950/80 dark:text-amber-300 border-amber-300 dark:border-amber-800";
       default:
         return "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border-slate-200 dark:border-slate-700";
     }
@@ -291,11 +291,13 @@ export default function ManagementAudioDesk({
       "Admission Confirmed": 0,
       "Application Taken": 0,
       "Entrance Test Required": 0,
-      "Interested": 0,
     };
 
     baseList.forEach(e => {
-      const status = e.admissionStatus || "Interested";
+      let status = e.admissionStatus || "Follow-up Required";
+      if (status === "Interested") {
+        status = "Follow-up Required";
+      }
       if (counts[status] !== undefined) {
         counts[status]++;
       }
@@ -340,7 +342,8 @@ export default function ManagementAudioDesk({
 
       let matchAdmissionStatus = true;
       if (filterAdmissionStatus !== "ALL") {
-        const curStatus = e.admissionStatus || "Interested";
+        let curStatus = e.admissionStatus || "Follow-up Required";
+        if (curStatus === "Interested") curStatus = "Follow-up Required";
         matchAdmissionStatus = curStatus === filterAdmissionStatus;
       }
 
@@ -1282,25 +1285,6 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT COACHING ONLY
                       {admissionStatusCounts["Entrance Test Required"]}
                     </span>
                   </button>
-
-                  {/* 6. INTERESTED */}
-                  <button
-                    type="button"
-                    onClick={() => setFilterAdmissionStatus("Interested")}
-                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                      filterAdmissionStatus === "Interested"
-                        ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30 ring-2 ring-indigo-400"
-                        : "bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-900/60"
-                    }`}
-                  >
-                    <Star size={12} className={filterAdmissionStatus === "Interested" ? "text-white" : "text-indigo-600 dark:text-indigo-400"} />
-                    <span>Interested</span>
-                    <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${
-                      filterAdmissionStatus === "Interested" ? "bg-white/25 text-white" : "bg-indigo-200 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200"
-                    }`}>
-                      {admissionStatusCounts["Interested"]}
-                    </span>
-                  </button>
                 </div>
               </div>
 
@@ -1345,7 +1329,6 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT COACHING ONLY
                   <option value="Admission Confirmed">🎉 Admission Confirmed ({admissionStatusCounts["Admission Confirmed"]})</option>
                   <option value="Application Taken">📝 Application Taken ({admissionStatusCounts["Application Taken"]})</option>
                   <option value="Entrance Test Required">🎓 Entrance Test ({admissionStatusCounts["Entrance Test Required"]})</option>
-                  <option value="Interested">🌟 Interested ({admissionStatusCounts["Interested"]})</option>
                 </select>
 
                 <select
@@ -1448,7 +1431,7 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT COACHING ONLY
                               {enq.admissionStatus === "Not Interested" && <Ban size={10} className="shrink-0 text-rose-600 dark:text-rose-400" />}
                               {enq.admissionStatus === "Follow-up Required" && <Calendar size={10} className="shrink-0 text-amber-600 dark:text-amber-400" />}
                               {enq.admissionStatus === "Admission Confirmed" && <CheckCircle size={10} className="shrink-0 text-emerald-600 dark:text-emerald-400" />}
-                              <span>{enq.admissionStatus || "Interested"}</span>
+                              <span>{enq.admissionStatus === "Interested" ? "Follow-up Required" : (enq.admissionStatus || "Follow-up Required")}</span>
                             </span>
                           </div>
                           <h4 className="font-black text-sm text-slate-900 dark:text-white mt-1 truncate">
@@ -1617,7 +1600,7 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT COACHING ONLY
                           {activeEnquiry.admissionStatus === "Not Interested" && <Ban size={12} className="shrink-0 text-rose-600 dark:text-rose-400" />}
                           {activeEnquiry.admissionStatus === "Follow-up Required" && <Calendar size={12} className="shrink-0 text-amber-600 dark:text-amber-400" />}
                           {activeEnquiry.admissionStatus === "Admission Confirmed" && <CheckCircle size={12} className="shrink-0 text-emerald-600 dark:text-emerald-400" />}
-                          <span>Admission Status: {activeEnquiry.admissionStatus || "Interested"}</span>
+                          <span>Admission Status: {activeEnquiry.admissionStatus === "Interested" ? "Follow-up Required" : (activeEnquiry.admissionStatus || "Follow-up Required")}</span>
                         </span>
                       </div>
                       <h3 className="text-base font-black text-slate-900 dark:text-white mt-1">
@@ -2017,7 +2000,7 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT COACHING ONLY
                         {activeEnquiry.admissionStatus === "Not Interested" && <Ban size={11} className="shrink-0" />}
                         {activeEnquiry.admissionStatus === "Follow-up Required" && <Calendar size={11} className="shrink-0" />}
                         {activeEnquiry.admissionStatus === "Admission Confirmed" && <CheckCircle size={11} className="shrink-0" />}
-                        <span>Status: {activeEnquiry.admissionStatus || "Interested"}</span>
+                        <span>Status: {activeEnquiry.admissionStatus === "Interested" ? "Follow-up Required" : (activeEnquiry.admissionStatus || "Follow-up Required")}</span>
                       </span>
                     </div>
                   </div>

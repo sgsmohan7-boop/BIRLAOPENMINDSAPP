@@ -80,7 +80,7 @@ export const DEMO_COUNSELLING: CounsellingEnquiry[] = [
     explainedTransportDetails: true,
     explainedSchoolRules: true,
     explainedActivitiesSports: true,
-    admissionStatus: "Interested",
+    admissionStatus: "Follow-up Required",
     followUpDate: new Date().toISOString().slice(0, 10),
     counsellorId: "COUNSELLOR-01",
     counsellorName: "radhika",

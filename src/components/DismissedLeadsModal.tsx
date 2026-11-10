@@ -24,6 +24,7 @@ interface DismissedLeadsModalProps {
   isOpen: boolean;
   onClose: () => void;
   dismissedEntries: ParentSelfEntry[];
+  liveQueueEntries?: ParentSelfEntry[];
   onRestoreEntry: (entry: ParentSelfEntry) => void;
   onClaimEntry: (entry: ParentSelfEntry) => void;
   onPermanentDelete?: (id: string) => void;
@@ -35,6 +36,7 @@ export const DismissedLeadsModal: React.FC<DismissedLeadsModalProps> = ({
   isOpen,
   onClose,
   dismissedEntries,
+  liveQueueEntries,
   onRestoreEntry,
   onClaimEntry,
   onPermanentDelete,
@@ -44,8 +46,6 @@ export const DismissedLeadsModal: React.FC<DismissedLeadsModalProps> = ({
   const [searchQuery, setSearchQuery] = useState("");
   const [filterType, setFilterType] = useState<"ALL" | "ONLINE" | "WALKIN">("ALL");
   const [actionToast, setActionToast] = useState<string | null>(null);
-
-  if (!isOpen) return null;
 
   const showToast = (msg: string) => {
     setActionToast(msg);
@@ -90,6 +90,8 @@ export const DismissedLeadsModal: React.FC<DismissedLeadsModalProps> = ({
   const walkinCount = useMemo(() => {
     return (dismissedEntries || []).filter(e => e.enquiryType !== "online").length;
   }, [dismissedEntries]);
+
+  if (!isOpen) return null;
 
   const handleExportCSV = () => {
     if (filteredList.length === 0) return;
@@ -150,7 +152,7 @@ export const DismissedLeadsModal: React.FC<DismissedLeadsModalProps> = ({
             <div>
               <div className="flex items-center gap-2 flex-wrap">
                 <h2 className="text-lg font-black tracking-wide">
-                  DISMISSED LEADS ARCHIVE / రద్దయిన లీడ్స్ డేటా
+                  DISMISSED LEADS & TOKENS ARCHIVE
                 </h2>
                 <span className="px-2.5 py-0.5 rounded-full bg-amber-400 text-slate-950 text-xs font-black">
                   {dismissedEntries.length} Archived
@@ -335,6 +337,33 @@ export const DismissedLeadsModal: React.FC<DismissedLeadsModalProps> = ({
                           </span>
                         )}
                       </div>
+
+                      {/* Claimed by Another Counsellor Banner */}
+                      {(() => {
+                        const liveMatch = liveQueueEntries?.find(e => e.id === entry.id);
+                        const isAlreadyClaimed = Boolean(
+                          (liveMatch && (liveMatch.status === "claimed" || liveMatch.claimedBy || liveMatch.claimedByName)) ||
+                          entry.status === "claimed" ||
+                          entry.claimedBy ||
+                          entry.claimedByName
+                        );
+                        const claimedCounsellor = liveMatch?.claimedByName || liveMatch?.claimedBy || entry.claimedByName || entry.claimedBy || "Another Counsellor";
+
+                        if (isAlreadyClaimed) {
+                          return (
+                            <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-700/80 text-amber-900 dark:text-amber-200 text-xs font-bold flex items-center justify-between shadow-xs">
+                              <span className="flex items-center gap-1.5">
+                                <CheckCircle2 size={14} className="text-amber-600 dark:text-amber-400 shrink-0" />
+                                <span>Session In Progress: Claimed by <strong>{claimedCounsellor}</strong></span>
+                              </span>
+                              <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-md bg-amber-200 dark:bg-amber-900 text-amber-950 dark:text-amber-100 font-black">
+                                In Session
+                              </span>
+                            </div>
+                          );
+                        }
+                        return null;
+                      })()}
                     </div>
 
                     {/* Action Buttons */}
@@ -365,34 +394,61 @@ export const DismissedLeadsModal: React.FC<DismissedLeadsModalProps> = ({
                       </div>
 
                       {/* Restoration & Claim Actions */}
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            onRestoreEntry(entry);
-                            showToast(`✓ Restored ${entry.studentName} back to active leads!`);
-                          }}
-                          className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
-                          title="Restore lead back into active queue"
-                        >
-                          <RotateCcw size={12} />
-                          <span>Restore</span>
-                        </button>
+                      {(() => {
+                        const liveMatch = liveQueueEntries?.find(e => e.id === entry.id);
+                        const isAlreadyClaimed = Boolean(
+                          (liveMatch && (liveMatch.status === "claimed" || liveMatch.claimedBy || liveMatch.claimedByName)) ||
+                          entry.status === "claimed" ||
+                          entry.claimedBy ||
+                          entry.claimedByName
+                        );
+                        const claimedCounsellor = liveMatch?.claimedByName || liveMatch?.claimedBy || entry.claimedByName || entry.claimedBy || "Another Counsellor";
 
-                        <button
-                          type="button"
-                          onClick={() => {
-                            onClaimEntry(entry);
-                            onClose();
-                          }}
-                          className="px-3 py-1.5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 shadow-sm"
-                          title="Claim this lead and open admission form immediately"
-                        >
-                          <Zap size={13} className="fill-amber-300 text-amber-300" />
-                          <span>Claim &amp; Form</span>
-                        </button>
+                        if (isAlreadyClaimed) {
+                          return (
+                            <div className="flex items-center gap-1.5">
+                              <span
+                                className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-not-allowed select-none"
+                                title={`This token is already in active counselling with ${claimedCounsellor}. To avoid duplicate calls or forms, it cannot be reclaimed.`}
+                              >
+                                🔒 Claimed by {claimedCounsellor}
+                              </span>
+                            </div>
+                          );
+                        }
 
-                        {onPermanentDelete && (userRole === "Super Admin" || userRole === "Admin" || userRole === "Management") && (
+                        return (
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onRestoreEntry(entry);
+                                showToast(`✓ Restored ${entry.studentName} back to active leads!`);
+                              }}
+                              className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
+                              title="Restore lead back into active queue"
+                            >
+                              <RotateCcw size={12} />
+                              <span>Restore</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onClaimEntry(entry);
+                                onClose();
+                              }}
+                              className="px-3 py-1.5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 shadow-sm"
+                              title="Claim this lead and open admission form immediately"
+                            >
+                              <Zap size={13} className="fill-amber-300 text-amber-300" />
+                              <span>Claim &amp; Form</span>
+                            </button>
+                          </div>
+                        );
+                      })()}
+
+                      {onPermanentDelete && (userRole === "Super Admin" || userRole === "Admin" || userRole === "Management") && (
                           <button
                             type="button"
                             onClick={() => {
@@ -409,9 +465,8 @@ export const DismissedLeadsModal: React.FC<DismissedLeadsModalProps> = ({
                         )}
                       </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
             </div>
           ) : (
             <div className="py-12 px-4 text-center">

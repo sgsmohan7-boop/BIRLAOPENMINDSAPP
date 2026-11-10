@@ -2431,8 +2431,8 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
             >
               <option value="english_indian">🇮🇳 Indian English (Default)</option>
               <option value="bilingual_admissions">🌐 Smart Auto (Telugu + English)</option>
-              <option value="telugu_native">🇮🇳 Pure Telugu (తెలుగు)</option>
-              <option value="hindi_native">🇮🇳 Hindi (हिंदी)</option>
+              <option value="telugu_native">🇮🇳 Telugu</option>
+              <option value="hindi_native">🇮🇳 Hindi</option>
               <option value="english_global">🌍 Global English</option>
             </select>
           </div>

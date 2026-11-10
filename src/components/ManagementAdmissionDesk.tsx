@@ -94,7 +94,10 @@ export default function ManagementAdmissionDesk({
         (enq.fatherName && enq.fatherName.toLowerCase().includes(searchTerm.toLowerCase())) ||
         (enq.contactNo && enq.contactNo.includes(searchTerm));
 
-      const matchStatus = statusFilter === "ALL" || enq.admissionStatus === statusFilter;
+      const matchStatus = 
+        statusFilter === "ALL" || 
+        enq.admissionStatus === statusFilter || 
+        (statusFilter === "Follow-up Required" && enq.admissionStatus === "Interested");
       const matchCounsellor = counsellorFilter === "ALL" || enq.counsellorName === counsellorFilter;
 
       return matchSearch && matchStatus && matchCounsellor;
@@ -285,10 +288,11 @@ export default function ManagementAdmissionDesk({
               className="px-2.5 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-200 focus:outline-none"
             >
               <option value="ALL">All Statuses</option>
-              <option value="Interested">Interested</option>
               <option value="Follow-up Required">Follow-up Required</option>
               <option value="Application Taken">Application Taken</option>
+              <option value="Entrance Test Required">Entrance Test Required</option>
               <option value="Admission Confirmed">Admission Confirmed</option>
+              <option value="Not Interested">Not Interested</option>
             </select>
           </div>
 

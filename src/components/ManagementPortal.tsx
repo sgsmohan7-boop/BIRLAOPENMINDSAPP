@@ -2937,18 +2937,20 @@ CONFIDENTIAL - FOR BOARD OF DIRECTORS & PRINCIPAL REVIEW ONLY
       )}
 
       {/* DISMISSED LEADS ARCHIVE MODAL */}
-      <DismissedLeadsModal
-        isOpen={isDismissedLeadsModalOpen}
-        onClose={() => setIsDismissedLeadsModalOpen(false)}
-        dismissedEntries={dismissedEntries}
-        onRestoreEntry={handleRestoreDismissedEntry}
-        onClaimEntry={(entry) => {
-          setIsDismissedLeadsModalOpen(false);
-          window.location.href = `/?portal=counsellor&claimId=${entry.id}`;
-        }}
-        currentCounsellorName="Executive Management"
-        userRole="Management"
-      />
+      {isDismissedLeadsModalOpen && (
+        <DismissedLeadsModal
+          isOpen={isDismissedLeadsModalOpen}
+          onClose={() => setIsDismissedLeadsModalOpen(false)}
+          dismissedEntries={dismissedEntries}
+          onRestoreEntry={handleRestoreDismissedEntry}
+          onClaimEntry={(entry) => {
+            setIsDismissedLeadsModalOpen(false);
+            window.location.href = `/?portal=counsellor&claimId=${entry.id}`;
+          }}
+          currentCounsellorName="Executive Management"
+          userRole="Management"
+        />
+      )}
     </div>
   );
 }

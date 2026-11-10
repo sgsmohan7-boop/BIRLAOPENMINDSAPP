@@ -136,7 +136,7 @@ It was a sincere pleasure interacting with you during our counselling session!
 • *Enquiry No:* ${enquiryNo}
 • *Student Name:* ${studentName}
 • *Class Applied:* Class ${applyingClass}
-• *Admission Status:* ${enquiry.admissionStatus || "Interested"}
+• *Admission Status:* ${enquiry.admissionStatus === "Interested" ? "Follow-up Required" : (enquiry.admissionStatus || "Follow-up Required")}
 ${enquiry.followUpDate ? `• *Next Follow-up Date:* ${enquiry.followUpDate}\n` : ''}
 ${enquiry.pointsDiscussed ? `📝 *KEY POINTS DISCUSSED:* \n${enquiry.pointsDiscussed}\n\n` : ''}${customNotes ? `💡 *ADDITIONAL NOTES:* \n${customNotes}\n\n` : ''}📞 *YOUR ASSIGNED ADMISSIONS COUNSELLOR:*
 👤 *Name:* ${counsellorName} ${counsellorId ? `(${counsellorId})` : ''}
