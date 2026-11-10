@@ -1350,9 +1350,14 @@ export default function CounsellingPortal({
 
     if (existingSavedDraft?.formData) {
       setFormData(existingSavedDraft.formData);
+      unmarkDeletedEnquiryId(existingSavedDraft.formData.id, existingSavedDraft.formData.enquiryNo);
+      onSaveEnquiry(existingSavedDraft.formData);
+
       if (existingSavedDraft.siblingFormData) {
         setSiblingFormData(existingSavedDraft.siblingFormData);
         setIsJointSiblingMode(true);
+        unmarkDeletedEnquiryId(existingSavedDraft.siblingFormData.id, existingSavedDraft.siblingFormData.enquiryNo);
+        onSaveEnquiry(existingSavedDraft.siblingFormData);
         if (existingSavedDraft.entry) setLinkedSiblingTokens([existingSavedDraft.entry]);
       } else {
         setSiblingFormData(null);
@@ -1460,6 +1465,12 @@ export default function CounsellingPortal({
       newClaimedData.siblingStudentName = entry.siblingDetails.studentName;
       newClaimedData.siblingClass = entry.siblingDetails.applyingForClass;
 
+      // Save both sibling enquiries immediately to master list
+      unmarkDeletedEnquiryId(newClaimedData.id, newClaimedData.enquiryNo);
+      onSaveEnquiry(newClaimedData);
+      unmarkDeletedEnquiryId(sibClaimedData.id, sibClaimedData.enquiryNo);
+      onSaveEnquiry(sibClaimedData);
+
       setFormData(newClaimedData);
       setSiblingFormData(sibClaimedData);
       setIsJointSiblingMode(true);
@@ -1474,6 +1485,10 @@ export default function CounsellingPortal({
       setDeleteToast(`👨‍👩‍👧‍👦 Claimed Sibling ${isOnline ? "Online Lead" : "Walk-in"} for ${entry.studentName} & ${entry.siblingDetails.studentName}!`);
       setTimeout(() => setDeleteToast(null), 4000);
     } else {
+      // Save claimed enquiry immediately to master list so it shows in dashboard table instantly
+      unmarkDeletedEnquiryId(newClaimedData.id, newClaimedData.enquiryNo);
+      onSaveEnquiry(newClaimedData);
+
       setFormData(newClaimedData);
       setSiblingFormData(null);
       setIsJointSiblingMode(false);
