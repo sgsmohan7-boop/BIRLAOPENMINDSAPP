@@ -884,9 +884,11 @@ export default function CounsellingPortal({
           "parent_self_entries",
           (firestoreEntries: any[]) => {
             if (Array.isArray(firestoreEntries)) {
-              const deduped = deduplicateParentEntries(firestoreEntries);
-              setParentSelfEntries(deduped);
-              saveParentSelfEntries(deduped);
+              setParentSelfEntries(prev => {
+                const combined = deduplicateParentEntries([...firestoreEntries, ...(prev || [])]);
+                saveParentSelfEntries(combined);
+                return combined;
+              });
             }
           },
           []

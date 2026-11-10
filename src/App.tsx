@@ -699,20 +699,28 @@ export default function App() {
               id: e.enquiryNo || e.id
             }));
 
-          const deduped = deduplicateEnquiries(nonDeletedItems);
-          const { enquiries: normalizedEnquiries, changedCount } = normalizeAllEnquiries(deduped);
-          setCounsellingEnquiries(normalizedEnquiries);
-          saveCounselling(normalizedEnquiries);
-          if (changedCount > 0 && isFirebaseConfigured()) {
-            normalizedEnquiries.forEach(item => {
-              saveDocument("counselling_forms", item.id, item).catch(() => {});
+          setCounsellingEnquiries((prev) => {
+            const prevFiltered = (prev || []).filter((e: any) => {
+              if (!e) return false;
+              const eId = (e.id || "").toLowerCase();
+              const eNo = (e.enquiryNo || "").toLowerCase();
+              return (!eId || !deletedSet.has(eId)) && (!eNo || !deletedSet.has(eNo));
             });
-          }
-          fetch("/api/counselling", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(normalizedEnquiries)
-          }).catch(() => {});
+            const deduped = deduplicateEnquiries([...nonDeletedItems, ...prevFiltered]);
+            const { enquiries: normalizedEnquiries, changedCount } = normalizeAllEnquiries(deduped);
+            saveCounselling(normalizedEnquiries);
+            if (changedCount > 0 && isFirebaseConfigured()) {
+              normalizedEnquiries.forEach(item => {
+                saveDocument("counselling_forms", item.id, item).catch(() => {});
+              });
+            }
+            fetch("/api/counselling", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(normalizedEnquiries)
+            }).catch(() => {});
+            return normalizedEnquiries;
+          });
         }, []),
 
         syncCollection<{ id: string; username?: string }>("deleted_counsellor_accounts", (deletedDocs) => {
