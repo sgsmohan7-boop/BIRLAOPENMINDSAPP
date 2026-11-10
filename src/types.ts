@@ -341,6 +341,7 @@ export interface CounsellingEnquiry {
   // Enquiry Channel & Mode
   enquiryType?: "walkin" | "online";
   onlineRefNo?: string; // e.g. "ONL-2026-01"
+  walkInTokenNo?: number; // e.g. 1, 2, 3
 
   createdAt: string;
   updatedAt: string;

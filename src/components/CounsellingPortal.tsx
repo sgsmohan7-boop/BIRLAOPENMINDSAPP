@@ -425,7 +425,10 @@ export default function CounsellingPortal({
   const [metricAdminCounsellor, setMetricAdminCounsellor] = useState<string>("ALL");
   const [selectedDateChip, setSelectedDateChip] = useState<string | null>(null);
 
-  // Safe enquiries source with deleted IDs filtered out & linked sibling audio hydration
+  // Parent Self Registration Kiosk State & Realtime Queue
+  const [parentSelfEntries, setParentSelfEntries] = useState<ParentSelfEntry[]>(() => loadParentSelfEntries());
+
+  // Safe enquiries source with deleted IDs filtered out, synthesized claimed walk-in tokens & linked sibling audio hydration
   const safeEnquiries = useMemo(() => {
     const list = Array.isArray(enquiries) ? enquiries : [];
     const deletedSet = new Set(getDeletedEnquiryIds().map(x => x.toLowerCase()));
@@ -436,9 +439,91 @@ export default function CounsellingPortal({
       return (!eId || !deletedSet.has(eId)) && (!eNo || !deletedSet.has(eNo));
     });
 
+    // Build set of existing enquiry keys so we don't duplicate
+    const existingKeys = new Set<string>();
+    filtered.forEach(e => {
+      if (e.id) existingKeys.add(e.id.toLowerCase());
+      if (e.enquiryNo) existingKeys.add(e.enquiryNo.toLowerCase());
+      if (e.onlineRefNo) existingKeys.add(e.onlineRefNo.toLowerCase());
+      if (e.walkInTokenNo) existingKeys.add(`token-${e.walkInTokenNo}`);
+    });
+
+    // Synthesize claimed kiosk walk-in tokens from parentSelfEntries if missing from enquiries list
+    const synthesizedFromClaimedTokens: CounsellingEnquiry[] = [];
+    if (Array.isArray(parentSelfEntries)) {
+      parentSelfEntries.forEach(entry => {
+        if (!entry) return;
+        const isClaimedOrCompleted = entry.status === "claimed" || entry.status === "completed" || Boolean(entry.claimedBy);
+        if (isClaimedOrCompleted && entry.status !== "dismissed") {
+          const entryId = entry.completedEnquiryNo || entry.onlineRefNo || entry.id;
+          const entryNo = entry.completedEnquiryNo || entry.onlineRefNo || `ENQ-2026-${entry.dailyTokenNo || entry.id}`;
+          const tokenKey = entry.dailyTokenNo ? `token-${entry.dailyTokenNo}` : "";
+
+          const alreadyExists = (entryId && existingKeys.has(entryId.toLowerCase())) ||
+                                (entryNo && existingKeys.has(entryNo.toLowerCase())) ||
+                                (tokenKey && existingKeys.has(tokenKey)) ||
+                                filtered.some(e => 
+                                  (e.studentName && entry.studentName && e.studentName.trim().toLowerCase() === entry.studentName.trim().toLowerCase() &&
+                                   e.contactNo && entry.contactNo && e.contactNo === entry.contactNo)
+                                );
+          if (!alreadyExists) {
+            const counsellorNorm = normalizeCounsellorIdentity(entry.claimedByName || entry.claimedBy);
+            const synthesized: CounsellingEnquiry = {
+              id: entryId,
+              enquiryNo: entryNo,
+              date: entry.entryDate || entry.formattedDate || new Date().toISOString().split('T')[0],
+              studentName: entry.studentName || "Walk-in Parent",
+              applyingForClass: entry.applyingForClass || "Grade 1",
+              academicYear: entry.academicYear || "2026-2027",
+              dateOfBirth: entry.dateOfBirth || "",
+              gender: entry.gender || "Male",
+              fatherName: entry.fatherName || "",
+              motherName: entry.motherName || "",
+              contactNo: entry.contactNo || "",
+              whatsappNo: entry.whatsappNo || entry.contactNo || "",
+              previousSchool: entry.previousSchool || "",
+              previousClass: entry.previousClass || "",
+              residentialAddress: entry.residentialAddress || "",
+              heardAboutSchool: Array.isArray(entry.heardAboutSchool) ? entry.heardAboutSchool : ["Walk-in"],
+              reasonForChoosing: entry.reasonForChoosing || "",
+              preferredContact: entry.preferredContact || "Call",
+              bestTimeToContact: "",
+              academicPerformance: "",
+              studentInterests: "",
+              strengths: "",
+              areasNeedingSupport: "",
+              transportRequired: Boolean(entry.transportRequired),
+              hostelRequired: false,
+              specialLearningSupport: Boolean(entry.specialLearningSupport),
+              specialLearningDetails: "",
+              pointsDiscussed: "",
+              counsellorObservations: "",
+              explainedSchoolFacilities: false,
+              explainedAcademicProgramme: false,
+              explainedFeeStructure: false,
+              explainedTransportDetails: false,
+              explainedSchoolRules: false,
+              explainedActivitiesSports: false,
+              admissionStatus: "Follow-up Required",
+              followUpDate: "",
+              counsellorId: counsellorNorm.id,
+              counsellorName: entry.claimedByName || counsellorNorm.name,
+              parentSignatureRecorded: false,
+              walkInTokenNo: entry.dailyTokenNo,
+              createdAt: entry.submittedAt || entry.claimedAt || new Date().toLocaleString(),
+              updatedAt: new Date().toLocaleDateString()
+            };
+            synthesizedFromClaimedTokens.push(synthesized);
+          }
+        }
+      });
+    }
+
+    const combinedList = [...filtered, ...synthesizedFromClaimedTokens];
+
     // Audio map by enquiry number & ID for fast linked sibling resolution
     const audioMap = new Map<string, any>();
-    filtered.forEach(e => {
+    combinedList.forEach(e => {
       if (e.audioRecording && (
         e.audioRecording.audioData || 
         e.audioRecording.storageKey || 
@@ -455,7 +540,7 @@ export default function CounsellingPortal({
     });
 
     // Ensure linked sibling admissions share the parent meeting audio recording seamlessly
-    return filtered.map(e => {
+    return combinedList.map(e => {
       const hasDirectAudio = Boolean(
         e.audioRecording && (
           e.audioRecording.audioData || 
@@ -476,7 +561,7 @@ export default function CounsellingPortal({
       let sharedAudio = sibKey ? audioMap.get(sibKey) : null;
 
       if (!sharedAudio && (e.isSibling || e.siblingStudentName)) {
-        const linkedOther = filtered.find(o =>
+        const linkedOther = combinedList.find(o =>
           o !== e && (
             (o.siblingEnquiryNo && o.siblingEnquiryNo.trim().toLowerCase() === (e.enquiryNo || "").trim().toLowerCase()) ||
             (o.contactNo && o.contactNo === e.contactNo && o.fatherName === e.fatherName && o.audioRecording)
@@ -503,7 +588,7 @@ export default function CounsellingPortal({
 
       return e;
     });
-  }, [enquiries]);
+  }, [enquiries, parentSelfEntries]);
 
 
   // Counsellor Accounts State (Loaded from Main App / Storage)
@@ -678,7 +763,6 @@ export default function CounsellingPortal({
   const [accountModalMode, setAccountModalMode] = useState<"create" | "edit">("create");
 
   // Parent Self Registration Kiosk State & Realtime Queue
-  const [parentSelfEntries, setParentSelfEntries] = useState<ParentSelfEntry[]>(() => loadParentSelfEntries());
   const [isParentKioskModalOpen, setIsParentKioskModalOpen] = useState(false);
   const [parentKioskDefaultMode, setParentKioskDefaultMode] = useState<"register" | "print_qr">("register");
   const [isReceptionQueueModalOpen, setIsReceptionQueueModalOpen] = useState(false);

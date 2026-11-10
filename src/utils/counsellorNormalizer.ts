@@ -117,8 +117,13 @@ export function normalizeCounsellorIdentity(inputName?: string, inputId?: string
     };
   }
 
-  // 5. Test
-  if (combined.includes("test") || rawId.toUpperCase() === "COUNSELLOR-05") {
+  // 5. Test (Strict match to prevent false-positive remapping of active counsellors)
+  if (
+    rawId.toUpperCase() === "COUNSELLOR-05" ||
+    rawName.toLowerCase() === "test" ||
+    rawName.toLowerCase() === "testing" ||
+    rawName.toLowerCase() === "counsellor-05"
+  ) {
     return {
       id: CANONICAL_COUNSELLORS.TESTING.id,
       name: CANONICAL_COUNSELLORS.TESTING.name,
