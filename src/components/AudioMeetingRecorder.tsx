@@ -1567,6 +1567,9 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
         const recordingId = fileName;
         
         await saveAudioRecordingBlob(recordingId, audioBlob);
+        if (enquiryNo) await saveAudioRecordingBlob(enquiryNo.trim(), audioBlob);
+        if (enquiryNo) await saveAudioRecordingBlob(`audio-${enquiryNo.trim()}`, audioBlob);
+        if (studentName) await saveAudioRecordingBlob(`audio-${studentName.toLowerCase().replace(/\s+/g, "_")}`, audioBlob);
         
         const activeTurns = dialogueTurnsRef.current;
         const liveTurnsText = activeTurns.length > 0
@@ -3051,29 +3054,27 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
             </div>
           )}
 
-          {/* QUICK COMMIT ADMISSION ACTION BANNER */}
-          {onRequestSaveAdmission && (
-            <div className="p-3.5 bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-700 text-white rounded-xl flex flex-col sm:flex-row items-center justify-between gap-3 shadow-md">
+          {/* AUTO-ATTACHED AUDIO RECORDING STATUS BADGE */}
+          {(recordedAudioUrl || existingAudio?.audioUrl || existingAudio?.driveFileUrl || existingAudio?.id) && (
+            <div className="p-3.5 bg-gradient-to-r from-emerald-500/15 via-teal-500/10 to-indigo-500/15 border border-emerald-500/30 text-emerald-900 dark:text-emerald-200 rounded-xl flex items-center justify-between gap-3 shadow-sm">
               <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center text-lg shrink-0">
-                  💾
+                <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center text-base font-black shrink-0">
+                  ✓
                 </div>
                 <div>
-                  <p className="text-xs font-black uppercase tracking-wider">
-                    Audio Attached • Ready to Save Admission Enquiry
+                  <p className="text-xs font-black uppercase tracking-wider text-emerald-700 dark:text-emerald-300">
+                    Audio Recorded & Auto-Attached to Form
                   </p>
-                  <p className="text-[11px] text-emerald-100">
-                    Click button to officially commit this enquiry to Counsellor &amp; Management Portals!
+                  <p className="text-[11px] text-slate-600 dark:text-slate-400 font-medium">
+                    Meeting voice recording is safely saved and synced to your enquiry form automatically.
                   </p>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={onRequestSaveAdmission}
-                className="w-full sm:w-auto px-4 py-2 bg-white text-emerald-900 hover:bg-emerald-50 active:scale-95 rounded-lg text-xs font-black shadow transition-all cursor-pointer flex items-center justify-center gap-1.5 shrink-0"
-              >
-                <span>💾 Save Entire Enquiry Now</span>
-              </button>
+              <div className="hidden sm:flex items-center gap-2">
+                <span className="px-2.5 py-1 bg-emerald-600 text-white text-[10px] font-black rounded-lg uppercase tracking-wider">
+                  Auto-Synced
+                </span>
+              </div>
             </div>
           )}
 

@@ -106,7 +106,8 @@ import {
   loadDismissedParentEntries,
   removeDismissedParentEntryFromArchive,
   unmarkDeletedEnquiryId,
-  getDeletedEnquiryIds
+  getDeletedEnquiryIds,
+  deduplicateEnquiries
 } from "../utils/storage";
 import { deleteAudioRecordingBlob, formatAudioDuration } from "../utils/audioStorage";
 import { isFirebaseConfigured, syncCollection, saveDocument, deleteDocument, getNextDailyTokenNo } from "../utils/firebase";
@@ -519,7 +520,7 @@ export default function CounsellingPortal({
       });
     }
 
-    const combinedList = [...filtered, ...synthesizedFromClaimedTokens];
+    const combinedList = deduplicateEnquiries([...filtered, ...synthesizedFromClaimedTokens]);
 
     // Audio map by enquiry number & ID for fast linked sibling resolution
     const audioMap = new Map<string, any>();
@@ -5593,7 +5594,7 @@ Warm regards,
                         {filteredMetricEnquiries.map((item, idx) => {
                           const statusConf = STATUS_CONFIG[item.admissionStatus] || STATUS_CONFIG["Interested"];
                           return (
-                            <tr key={item.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
+                            <tr key={`metric-enquiry-${item.id || item.enquiryNo || idx}-${idx}`} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors">
                               {/* S.No */}
                               <td className="px-3 py-3 text-center font-mono font-bold text-slate-500 text-xs">
                                 #{idx + 1}
@@ -6125,7 +6126,7 @@ Warm regards,
                     const isSelected = selectedEnquiryIds.includes(enquiry.id);
 
                     return (
-                      <tr key={enquiry.id} className={`hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors ${isSelected ? "bg-orange-50/80 dark:bg-orange-950/30" : ""}`}>
+                      <tr key={`enquiry-row-${enquiry.id || enquiry.enquiryNo || idx}-${idx}`} className={`hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors ${isSelected ? "bg-orange-50/80 dark:bg-orange-950/30" : ""}`}>
                         {/* Serial Number & Multi-Select Checkbox */}
                         <td className="px-3 py-3.5 align-top text-center">
                           <div className="flex items-center justify-center gap-2">
@@ -8493,43 +8494,42 @@ Warm regards,
                 counsellorName={formData.counsellorName || (activeCounsellor?.name || "Admissions Counsellor")}
                 existingAudio={formData.audioRecording}
                 onSaveAudio={(audioRec) => {
-                  setFormData(prev => {
-                    const finalCounsellor = activeCounsellor || localAccounts.find(c => c.id === prev.counsellorId) || localAccounts[0];
-                    const assignedCounsellorId = userRole === "Counsellor" && activeCounsellor ? activeCounsellor.id : (prev.counsellorId || finalCounsellor.id);
-                    const assignedCounsellorName = userRole === "Counsellor" && activeCounsellor ? activeCounsellor.name : (prev.counsellorName || finalCounsellor.name);
+                  const finalCounsellor = activeCounsellor || localAccounts.find(c => c.id === formData.counsellorId) || localAccounts[0];
+                  const assignedCounsellorId = userRole === "Counsellor" && activeCounsellor ? activeCounsellor.id : (formData.counsellorId || finalCounsellor.id);
+                  const assignedCounsellorName = userRole === "Counsellor" && activeCounsellor ? activeCounsellor.name : (formData.counsellorName || finalCounsellor.name);
 
-                    const updated: CounsellingEnquiry = {
-                      ...prev,
-                      counsellorId: assignedCounsellorId,
-                      counsellorName: assignedCounsellorName,
-                      audioRecording: audioRec,
-                      conversationLanguageNotes: audioRec.conversationLanguageNotes || prev.conversationLanguageNotes,
-                      pointsDiscussed: prev.pointsDiscussed && prev.pointsDiscussed.trim()
-                        ? prev.pointsDiscussed
-                        : (audioRec.meetingTextSummary || prev.pointsDiscussed)
+                  const updated: CounsellingEnquiry = {
+                    ...formData,
+                    counsellorId: assignedCounsellorId,
+                    counsellorName: assignedCounsellorName,
+                    audioRecording: audioRec,
+                    conversationLanguageNotes: audioRec.conversationLanguageNotes || formData.conversationLanguageNotes,
+                    pointsDiscussed: formData.pointsDiscussed && formData.pointsDiscussed.trim()
+                      ? formData.pointsDiscussed
+                      : (audioRec.meetingTextSummary || formData.pointsDiscussed)
+                  };
+
+                  setFormData(updated);
+                  onSaveEnquiry(updated);
+
+                  if (isJointSiblingMode && siblingFormData) {
+                    const sibUpdated: CounsellingEnquiry = {
+                      ...siblingFormData,
+                      audioRecording: {
+                        ...audioRec,
+                        id: `${audioRec.id}-SIB`,
+                        enquiryNo: siblingFormData.enquiryNo || "",
+                        studentName: siblingFormData.studentName || "Sibling",
+                        isJointSiblingSession: true,
+                        jointSiblingNames: `${formData.studentName} & ${siblingFormData.studentName}`
+                      },
+                      conversationLanguageNotes: audioRec.conversationLanguageNotes || siblingFormData.conversationLanguageNotes,
+                      pointsDiscussed: siblingFormData.pointsDiscussed && siblingFormData.pointsDiscussed.trim()
+                        ? siblingFormData.pointsDiscussed
+                        : (audioRec.meetingTextSummary || siblingFormData.pointsDiscussed)
                     };
-                    return updated;
-                  });
-
-                  if (isJointSiblingMode) {
-                    setSiblingFormData(prev => {
-                      if (!prev) return null;
-                      return {
-                        ...prev,
-                        audioRecording: {
-                          ...audioRec,
-                          id: `${audioRec.id}-SIB`,
-                          enquiryNo: prev.enquiryNo || "",
-                          studentName: prev.studentName || "Sibling",
-                          isJointSiblingSession: true,
-                          jointSiblingNames: `${formData.studentName} & ${prev.studentName}`
-                        },
-                        conversationLanguageNotes: audioRec.conversationLanguageNotes || prev.conversationLanguageNotes,
-                        pointsDiscussed: prev.pointsDiscussed && prev.pointsDiscussed.trim()
-                          ? prev.pointsDiscussed
-                          : (audioRec.meetingTextSummary || prev.pointsDiscussed)
-                      };
-                    });
+                    setSiblingFormData(sibUpdated);
+                    onSaveEnquiry(sibUpdated);
                   }
                 }}
                 onRemoveAudio={() => {
