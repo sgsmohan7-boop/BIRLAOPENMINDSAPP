@@ -572,7 +572,7 @@ export default function ManagementAdmissionDesk({
                     <td className="py-3.5 px-4 text-center">
                       {enq.audioRecording ? (
                         <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-200">
-                          🎙️ Recorded ({enq.audioRecording.durationFormatted || "Audited"})
+                          🎙️ Recorded {enq.audioRecording.durationFormatted ? `(${enq.audioRecording.durationFormatted})` : (enq.audioRecording.durationSeconds ? `(${Math.floor(enq.audioRecording.durationSeconds / 60)}:${String(Math.floor(enq.audioRecording.durationSeconds % 60)).padStart(2, '0')})` : "")}
                         </span>
                       ) : (
                         <span className="text-[10px] text-slate-400">No audio</span>

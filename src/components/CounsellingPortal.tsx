@@ -460,14 +460,20 @@ export default function CounsellingPortal({
           const entryNo = entry.completedEnquiryNo || entry.onlineRefNo || `ENQ-2026-${entry.dailyTokenNo || entry.id}`;
           const tokenKey = entry.dailyTokenNo ? `token-${entry.dailyTokenNo}` : "";
 
+          // Never synthesize a dummy record if the entry is already completed, dismissed, or represents a sibling token that has already been registered
+          const hasSiblingRecord = entry.hasSibling && entry.siblingDetails;
+          const cleanPhone = (entry.contactNo || "").replace(/\D/g, "");
           const alreadyExists = (entryId && existingKeys.has(entryId.toLowerCase())) ||
                                 (entryNo && existingKeys.has(entryNo.toLowerCase())) ||
                                 (tokenKey && existingKeys.has(tokenKey)) ||
-                                filtered.some(e => 
-                                  (e.studentName && entry.studentName && e.studentName.trim().toLowerCase() === entry.studentName.trim().toLowerCase() &&
-                                   e.contactNo && entry.contactNo && e.contactNo === entry.contactNo)
-                                );
-          if (!alreadyExists) {
+                                filtered.some(e => {
+                                  const ePhone = (e.contactNo || "").replace(/\D/g, "");
+                                  const matchStudent = e.studentName && entry.studentName && e.studentName.trim().toLowerCase() === entry.studentName.trim().toLowerCase();
+                                  const matchSibling = hasSiblingRecord && e.studentName && entry.siblingDetails?.studentName && e.studentName.trim().toLowerCase() === entry.siblingDetails.studentName.trim().toLowerCase();
+                                  const matchPhone = cleanPhone && ePhone && cleanPhone === ePhone;
+                                  return (matchStudent || matchSibling) && (matchPhone || !cleanPhone);
+                                });
+          if (!alreadyExists && entry.status === "claimed") {
             const counsellorNorm = normalizeCounsellorIdentity(entry.claimedByName || entry.claimedBy);
             const synthesized: CounsellingEnquiry = {
               id: entryId,
@@ -1509,6 +1515,7 @@ export default function CounsellingPortal({
       counsellorId: currentCounsellorId,
       counsellorName: currentCounsellorName,
       parentSignatureRecorded: true,
+      walkInTokenNo: entry.dailyTokenNo,
       createdAt: `${new Date().toLocaleDateString("en-GB").replace(/\//g, "-")} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
       updatedAt: new Date().toLocaleDateString()
     };
