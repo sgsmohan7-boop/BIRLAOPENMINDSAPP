@@ -490,16 +490,31 @@ export const deduplicateEnquiries = (items: CounsellingEnquiry[]): CounsellingEn
 
     if (existingIndex >= 0) {
       const existing = result[existingIndex];
+      const itemTs = Number(item.updatedAtTimestamp || 0);
+      const existingTs = Number(existing.updatedAtTimestamp || 0);
+      // First item in list (e.g. live Firestore snapshot / saved record) is authoritative unless fallback has a strictly newer updatedAtTimestamp
+      const primary = (itemTs > 0 && itemTs > existingTs) ? item : existing;
+      const secondary = primary === existing ? item : existing;
+
+      const mergedAudio = (primary.audioRecording || secondary.audioRecording)
+        ? ({
+            ...(secondary.audioRecording || {}),
+            ...(primary.audioRecording || {}),
+            audioData: primary.audioRecording?.audioData || secondary.audioRecording?.audioData,
+            translatedAudioData: primary.audioRecording?.translatedAudioData || secondary.audioRecording?.translatedAudioData
+          } as any)
+        : undefined;
+
       const merged: CounsellingEnquiry = {
-        ...existing,
-        ...item,
-        audioRecording: item.audioRecording || existing.audioRecording
+        ...secondary,
+        ...primary,
+        audioRecording: primary.removeAudio ? undefined : mergedAudio
       };
-      if (!merged.id || (item.id && item.id.length >= existing.id.length)) {
-        merged.id = item.id || existing.id;
+      if (!merged.id) {
+        merged.id = primary.id || secondary.id;
       }
       if (!merged.enquiryNo) {
-        merged.enquiryNo = item.enquiryNo || existing.enquiryNo;
+        merged.enquiryNo = primary.enquiryNo || secondary.enquiryNo;
       }
       result[existingIndex] = merged;
     } else {

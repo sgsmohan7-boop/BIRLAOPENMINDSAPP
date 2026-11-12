@@ -110,28 +110,49 @@ import {
   deduplicateEnquiries
 } from "../utils/storage";
 import { deleteAudioRecordingBlob, formatAudioDuration } from "../utils/audioStorage";
-import { isFirebaseConfigured, syncCollection, saveDocument, deleteDocument, getNextDailyTokenNo } from "../utils/firebase";
+import { isFirebaseConfigured, syncCollection, fetchCollectionDocs, saveDocument, deleteDocument, getNextDailyTokenNo } from "../utils/firebase";
 import { printOfficialAdmissionForm } from "../utils/printAdmissionForm";
 import { normalizeCounsellorIdentity } from "../utils/counsellorNormalizer";
 
+function getParentEntryStatusRank(status?: string): number {
+  if (status === "dismissed") return 3;
+  if (status === "completed") return 2;
+  if (status === "claimed") return 1;
+  return 0;
+}
+
 function deduplicateParentEntries(entries: ParentSelfEntry[]): ParentSelfEntry[] {
-  const dismissedSet = new Set(getDismissedParentEntryIds());
+  const globalDismissedSet = new Set(getDismissedParentEntryIds());
   const map = new Map<string, ParentSelfEntry>();
-  for (const item of entries) {
-    if (!item || !item.id) continue;
-    // If this item was previously dismissed by counsellor, permanently enforce status: "dismissed"
-    if (dismissedSet.has(item.id)) {
-      item.status = "dismissed";
-    }
+  for (const rawItem of entries) {
+    if (!rawItem || !rawItem.id) continue;
+    // Never mutate source objects in place; enforce global dismissed state cleanly
+    const item: ParentSelfEntry = globalDismissedSet.has(rawItem.id)
+      ? { ...rawItem, status: "dismissed" }
+      : { ...rawItem };
+
     if (!map.has(item.id)) {
-      map.set(item.id, { ...item });
+      map.set(item.id, item);
     } else {
+      // `existing` comes first (authoritative Firestore entry when called as [...firestoreEntries, ...localPrev])
       const existing = map.get(item.id)!;
-      // If either has been dismissed or claimed, preserve that state so old snapshots don't revive it
-      if (item.status === "dismissed" || existing.status === "dismissed") {
-        map.set(item.id, { ...existing, ...item, status: "dismissed" });
-      } else if (item.status === "claimed" || (item.claimedAt && !existing.claimedAt)) {
-        map.set(item.id, { ...existing, ...item });
+      const existingRank = getParentEntryStatusRank(existing.status);
+      const itemRank = getParentEntryStatusRank(item.status);
+
+      if (itemRank > existingRank) {
+        // Local/secondary item has a strictly more advanced lifecycle state (e.g. completed or dismissed)
+        map.set(item.id, {
+          ...existing,
+          ...item,
+          status: item.status
+        });
+      } else {
+        // Keep authoritative Firestore fields on top, without ever downgrading completed/dismissed back to claimed/pending
+        map.set(item.id, {
+          ...item,
+          ...existing,
+          status: existing.status
+        });
       }
     }
   }
@@ -440,13 +461,16 @@ export default function CounsellingPortal({
       return (!eId || !deletedSet.has(eId)) && (!eNo || !deletedSet.has(eNo));
     });
 
-    // Build set of existing enquiry keys so we don't duplicate
+    // Build set of existing enquiry keys so we don't duplicate (date-scoped for daily walk-in tokens)
     const existingKeys = new Set<string>();
     filtered.forEach(e => {
       if (e.id) existingKeys.add(e.id.toLowerCase());
       if (e.enquiryNo) existingKeys.add(e.enquiryNo.toLowerCase());
       if (e.onlineRefNo) existingKeys.add(e.onlineRefNo.toLowerCase());
-      if (e.walkInTokenNo) existingKeys.add(`token-${e.walkInTokenNo}`);
+      if (e.walkInTokenNo) {
+        const eDateYmd = parseEnquiryDateInfo(e.date || "").ymd || (e.date || "").trim() || "legacy";
+        existingKeys.add(`token-${eDateYmd}-${e.walkInTokenNo}`);
+      }
     });
 
     // Synthesize claimed kiosk walk-in tokens from parentSelfEntries if missing from enquiries list
@@ -454,11 +478,13 @@ export default function CounsellingPortal({
     if (Array.isArray(parentSelfEntries)) {
       parentSelfEntries.forEach(entry => {
         if (!entry) return;
-        const isClaimedOrCompleted = entry.status === "claimed" || entry.status === "completed" || Boolean(entry.claimedBy);
-        if (isClaimedOrCompleted && entry.status !== "dismissed") {
-          const entryId = entry.completedEnquiryNo || entry.onlineRefNo || entry.id;
-          const entryNo = entry.completedEnquiryNo || entry.onlineRefNo || `ENQ-2026-${entry.dailyTokenNo || entry.id}`;
-          const tokenKey = entry.dailyTokenNo ? `token-${entry.dailyTokenNo}` : "";
+        const isClaimedActive = entry.status === "claimed" && !entry.completedEnquiryNo;
+        if (isClaimedActive) {
+          const entryId = entry.onlineRefNo || entry.id;
+          const entryNo = entry.onlineRefNo || `ENQ-2026-${entry.dailyTokenNo || entry.id}`;
+          const rawEntryDate = entry.dateKey || entry.entryDate || (entry.formattedDate ? entry.formattedDate.split(" ")[0] : "");
+          const entryDateYmd = parseEnquiryDateInfo(rawEntryDate).ymd || rawEntryDate.trim() || "legacy";
+          const tokenKey = entry.dailyTokenNo ? `token-${entryDateYmd}-${entry.dailyTokenNo}` : "";
 
           // Never synthesize a dummy record if the entry is already completed, dismissed, or represents a sibling token that has already been registered
           const hasSiblingRecord = entry.hasSibling && entry.siblingDetails;
@@ -473,7 +499,7 @@ export default function CounsellingPortal({
                                   const matchPhone = cleanPhone && ePhone && cleanPhone === ePhone;
                                   return (matchStudent || matchSibling) && (matchPhone || !cleanPhone);
                                 });
-          if (!alreadyExists && entry.status === "claimed") {
+          if (!alreadyExists) {
             const counsellorNorm = normalizeCounsellorIdentity(entry.claimedByName || entry.claimedBy);
             const synthesized: CounsellingEnquiry = {
               id: entryId,
@@ -880,17 +906,68 @@ export default function CounsellingPortal({
   };
 
   const [isRefreshingDept, setIsRefreshingDept] = useState(false);
+  const backfilledParentEntriesRef = React.useRef<Set<string>>(new Set());
+
+  const pushUnsyncedParentEntriesToCloud = React.useCallback((cloudItems: ParentSelfEntry[], localItems: ParentSelfEntry[]) => {
+    if (!isFirebaseConfigured() || !Array.isArray(localItems) || localItems.length === 0) return;
+    const cloudMap = new Map<string, ParentSelfEntry>();
+    (cloudItems || []).forEach(c => {
+      if (c && c.id) cloudMap.set(c.id, c);
+    });
+    const globalDismissedSet = new Set(getDismissedParentEntryIds());
+
+    localItems.forEach(localEntry => {
+      if (!localEntry || !localEntry.id) return;
+      const effectiveLocal: ParentSelfEntry = globalDismissedSet.has(localEntry.id)
+        ? { ...localEntry, status: "dismissed" }
+        : localEntry;
+      const cloudEntry = cloudMap.get(effectiveLocal.id);
+      const localRank = getParentEntryStatusRank(effectiveLocal.status);
+      const cloudRank = getParentEntryStatusRank(cloudEntry?.status);
+
+      if (!cloudEntry || localRank > cloudRank) {
+        const sig = `${effectiveLocal.id}:${effectiveLocal.status || "pending"}`;
+        if (!backfilledParentEntriesRef.current.has(sig)) {
+          backfilledParentEntriesRef.current.add(sig);
+          saveDocument("parent_self_entries", effectiveLocal.id, effectiveLocal)
+            .then(ok => {
+              if (!ok) backfilledParentEntriesRef.current.delete(sig);
+            })
+            .catch(() => {
+              backfilledParentEntriesRef.current.delete(sig);
+            });
+        }
+      }
+    });
+  }, []);
 
   const handleRefreshDept = async () => {
     setIsRefreshingDept(true);
 
+    // 1. Direct Live Firestore pull for parent_self_entries (works on Vercel static & all cloud deployments)
+    if (isFirebaseConfigured()) {
+      try {
+        const cloudEntries = await fetchCollectionDocs<ParentSelfEntry>("parent_self_entries");
+        if (Array.isArray(cloudEntries)) {
+          setParentSelfEntries(prev => {
+            const currentLocal = prev || [];
+            pushUnsyncedParentEntriesToCloud(cloudEntries, currentLocal);
+            const combined = deduplicateParentEntries([...cloudEntries, ...currentLocal]);
+            saveParentSelfEntries(combined);
+            return combined;
+          });
+        }
+      } catch {}
+    }
+
+    // 2. Fallback Express API check (for local dev environment)
     try {
       const res = await fetch("/api/parent-self-entry");
       if (res.ok) {
         const json = await res.json();
         if (json.success && Array.isArray(json.entries)) {
           setParentSelfEntries(prev => {
-            const combined = deduplicateParentEntries([...json.entries, ...(prev || [])]);
+            const combined = deduplicateParentEntries([...(prev || []), ...json.entries]);
             saveParentSelfEntries(combined);
             return combined;
           });
@@ -957,7 +1034,7 @@ export default function CounsellingPortal({
           const json = await res.json();
           if (json.success && Array.isArray(json.entries)) {
             setParentSelfEntries(prev => {
-              const combined = deduplicateParentEntries([...json.entries, ...(prev || [])]);
+              const combined = deduplicateParentEntries([...(prev || []), ...json.entries]);
               saveParentSelfEntries(combined);
               return combined;
             });
@@ -968,7 +1045,7 @@ export default function CounsellingPortal({
 
     fetchServerEntries();
 
-    // Real-time Firestore subscription so any phone scan instantly updates across all devices
+    // Real-time Firestore subscription so any phone scan or status transition instantly updates across all devices
     if (isFirebaseConfigured()) {
       try {
         unsubscribeFirestore = syncCollection(
@@ -976,7 +1053,9 @@ export default function CounsellingPortal({
           (firestoreEntries: any[]) => {
             if (Array.isArray(firestoreEntries)) {
               setParentSelfEntries(prev => {
-                const combined = deduplicateParentEntries([...firestoreEntries, ...(prev || [])]);
+                const currentLocal = prev || [];
+                pushUnsyncedParentEntriesToCloud(firestoreEntries, currentLocal);
+                const combined = deduplicateParentEntries([...firestoreEntries, ...currentLocal]);
                 saveParentSelfEntries(combined);
                 return combined;
               });
@@ -1031,19 +1110,26 @@ export default function CounsellingPortal({
       .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
   }, [parentSelfEntries, activeCounsellor, counsellorDismissVersion]);
 
-  // 3. Dismissed Leads & Tokens Archive (Preserves all dismissed entries across counsellors)
+  // 3. Dismissed Leads & Tokens Archive (Synced globally via Firestore + isolated per-counsellor for personal skips)
   const dismissedParentEntries = useMemo(() => {
     const counsellorId = activeCounsellor ? activeCounsellor.id : undefined;
+    const counsellorIdLower = (counsellorId || "").trim().toLowerCase();
     const dismissedIds = new Set(getDismissedParentEntryIds(counsellorId));
+    const globalDismissedIds = new Set(getDismissedParentEntryIds());
     const archivedFromDisk = loadDismissedParentEntries();
     const map = new Map<string, ParentSelfEntry>();
 
-    // Seed from archived
+    // Seed from archived disk entries without leaking another counsellor's personal skip on shared browsers
     archivedFromDisk.forEach(e => {
-      if (e && e.id) map.set(e.id, { ...e, status: "dismissed" });
+      if (!e || !e.id) return;
+      const isGlobalDismiss = e.status === "dismissed" || globalDismissedIds.has(e.id);
+      const isOwnSkip = !counsellorIdLower || dismissedIds.has(e.id) || (e.dismissedById || "").trim().toLowerCase() === counsellorIdLower;
+      if (isGlobalDismiss || isOwnSkip) {
+        map.set(e.id, { ...e, status: "dismissed" });
+      }
     });
 
-    // Seed from active parentSelfEntries with dismissed status or in dismissedIds
+    // Seed from Firestore-synced parentSelfEntries with global dismissed status or personal skip
     (parentSelfEntries || []).forEach(e => {
       if (e && e.id && (e.status === "dismissed" || dismissedIds.has(e.id))) {
         map.set(e.id, { ...e, status: "dismissed" });
@@ -2582,13 +2668,15 @@ export default function CounsellingPortal({
     // Clean canonical ID strictly matching enquiryNo: NO messy timestamps in document ID
     const nextId = nextEnquiryNo;
 
+    const nowTs = Date.now();
     const updated: CounsellingEnquiry = {
       ...formData,
       id: nextId,
       enquiryNo: nextEnquiryNo,
       counsellorId: assignedCounsellorId,
       counsellorName: assignedCounsellorName,
-      updatedAt: new Date().toLocaleDateString()
+      updatedAt: new Date().toLocaleDateString(),
+      updatedAtTimestamp: nowTs
     };
 
     if (updated.audioRecording) {
@@ -2692,7 +2780,8 @@ export default function CounsellingPortal({
           jointSiblingEnquiries: jointEnqs,
           jointSiblingNames: jointNames
         } : undefined,
-        updatedAt: new Date().toLocaleDateString()
+        updatedAt: new Date().toLocaleDateString(),
+        updatedAtTimestamp: nowTs
       };
 
       unmarkDeletedEnquiryId(sibUpdated.id, sibUpdated.enquiryNo);
@@ -2897,8 +2986,12 @@ export default function CounsellingPortal({
         item.studentName?.toLowerCase().includes(q) ||
         item.enquiryNo?.toLowerCase().includes(q) ||
         item.fatherName?.toLowerCase().includes(q) ||
+        item.motherName?.toLowerCase().includes(q) ||
         item.contactNo?.includes(q) ||
-        item.applyingForClass?.toLowerCase().includes(q);
+        item.whatsappNo?.includes(q) ||
+        item.applyingForClass?.toLowerCase().includes(q) ||
+        item.previousSchool?.toLowerCase().includes(q) ||
+        (item.walkInTokenNo && String(item.walkInTokenNo).includes(q));
 
       const matchStatus = filterStatus === "ALL" || item.admissionStatus === filterStatus;
       const matchClass = filterClass === "ALL" || item.applyingForClass === filterClass;

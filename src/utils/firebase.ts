@@ -18,6 +18,7 @@ import {
   setDoc, 
   deleteDoc, 
   getDocs,
+  getDocsFromServer,
   getDoc,
   getDocFromServer,
   writeBatch,
@@ -25,7 +26,7 @@ import {
   enableNetwork
 } from "firebase/firestore";
 import firebaseConfig from "../../firebase-applet-config.json";
-import { Ticket, InventoryItem, Room, EmployeeAllocation, WarrantyContract } from "../types";
+import { Ticket, InventoryItem, Room, EmployeeAllocation, WarrantyContract, CounsellingEnquiry } from "../types";
 import { app, db, auth } from "../lib/firebase";
 
 // Initialize Firebase Auth Provider
@@ -366,12 +367,82 @@ export function cleanForFirestore<T>(data: T): T {
   return data;
 }
 
+// Safely prepare a CounsellingEnquiry payload so it NEVER exceeds Firestore's 1MB document limit
+export function prepareEnquiryForFirestore(targetEnquiry: CounsellingEnquiry): any {
+  const firestoreEnquiry: any = JSON.parse(JSON.stringify(targetEnquiry));
+  if (firestoreEnquiry.audioRecording) {
+    // Strip large translated TTS base64 audio
+    if (
+      typeof firestoreEnquiry.audioRecording.translatedAudioData === "string" &&
+      firestoreEnquiry.audioRecording.translatedAudioData.length > 80 * 1024
+    ) {
+      delete firestoreEnquiry.audioRecording.translatedAudioData;
+    }
+    // Strip large raw audioData (>120KB); full audio lives in Cloudflare R2 & IndexedDB
+    if (
+      typeof firestoreEnquiry.audioRecording.audioData === "string" &&
+      firestoreEnquiry.audioRecording.audioData.length > 120 * 1024
+    ) {
+      delete firestoreEnquiry.audioRecording.audioData;
+    }
+  }
+
+  // Final strict volumetric guard (< 750KB) to prevent any Firestore 1MiB rejection
+  try {
+    const serialized = JSON.stringify(firestoreEnquiry);
+    if (serialized.length > 750 * 1024) {
+      if (firestoreEnquiry.audioRecording) {
+        delete firestoreEnquiry.audioRecording.audioData;
+        delete firestoreEnquiry.audioRecording.translatedAudioData;
+      }
+    }
+  } catch {}
+
+  return firestoreEnquiry;
+}
+
+// Fetch authoritative live documents directly from Firestore Server (with cache fallback)
+export async function fetchCollectionDocs<T>(collectionName: string): Promise<T[] | null> {
+  if (!isFirebaseConfigured()) return null;
+  const colRef = collection(db, collectionName);
+  try {
+    try {
+      enableNetwork(db).catch(() => {});
+    } catch {}
+    const snap = await getDocsFromServer(colRef);
+    const items: T[] = [];
+    snap.forEach((d) => {
+      items.push({ id: d.id, ...d.data() } as T);
+    });
+    return items;
+  } catch (serverErr: any) {
+    try {
+      const snap = await getDocs(colRef);
+      const items: T[] = [];
+      snap.forEach((d) => {
+        items.push({ id: d.id, ...d.data() } as T);
+      });
+      return items;
+    } catch (fallbackErr: any) {
+      const msg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr || "");
+      if (
+        msg.includes("resource-exhausted") ||
+        msg.includes("Quota limit exceeded") ||
+        msg.includes("quota metric") ||
+        fallbackErr?.code === "resource-exhausted"
+      ) {
+        markQuotaExhausted();
+      }
+      return null;
+    }
+  }
+}
+
 // Global Single Item Save and Overwrite Helpers
-export async function saveDocument(collectionName: string, id: string, data: any) {
-  if (!isFirebaseConfigured()) return;
-  // If quota was exhausted recently, attempt write but reset if quota is normal
+export async function saveDocument(collectionName: string, id: string, data: any): Promise<boolean> {
+  if (!isFirebaseConfigured()) return false;
+  // If quota was exhausted recently, attempt write and clear stale block if quota has reset
   if (isFirestoreQuotaExhausted()) {
-    // Clear quota block on user save attempt to retry write
     if (typeof window !== "undefined") {
       sessionStorage.removeItem(QUOTA_STORAGE_KEY);
       localStorage.removeItem(QUOTA_STORAGE_KEY);
@@ -380,11 +451,13 @@ export async function saveDocument(collectionName: string, id: string, data: any
       } catch {}
     }
   }
-  const docId = id && String(id).trim() ? String(id).trim() : `doc_${Date.now()}`;
+  const rawId = id && String(id).trim() ? String(id).trim() : `doc_${Date.now()}`;
+  const docId = rawId.replace(/\//g, "_");
   const path = `${collectionName}/${docId}`;
   try {
     const sanitized = cleanForFirestore(data);
     await setDoc(doc(db, collectionName, docId), sanitized, { merge: true });
+    return true;
   } catch (error: any) {
     const msg = error instanceof Error ? error.message : String(error || "");
     if (
@@ -394,17 +467,19 @@ export async function saveDocument(collectionName: string, id: string, data: any
       error?.code === "resource-exhausted"
     ) {
       markQuotaExhausted();
-      return;
+      return false;
     }
     console.error(`Firestore saveDocument error [${path}]:`, error);
     handleFirestoreError(error, OperationType.WRITE, path);
+    return false;
   }
 }
 
 export async function deleteDocument(collectionName: string, id: string) {
   if (!isFirebaseConfigured() || isFirestoreQuotaExhausted()) return;
-  const docId = id && String(id).trim() ? String(id).trim() : "";
-  if (!docId) return;
+  const rawId = id && String(id).trim() ? String(id).trim() : "";
+  if (!rawId) return;
+  const docId = rawId.replace(/\//g, "_");
   const path = `${collectionName}/${docId}`;
   try {
     await deleteDoc(doc(db, collectionName, docId));

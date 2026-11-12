@@ -64,7 +64,8 @@ import {
   getAllowCounsellorMultiDelete, 
   setAllowCounsellorMultiDelete,
   loadDismissedParentEntries,
-  removeDismissedParentEntryFromArchive
+  removeDismissedParentEntryFromArchive,
+  getDeletedEnquiryIds
 } from "../utils/storage";
 import { normalizeCounsellorIdentity, cleanAndNormalizeCounsellorAccounts } from "../utils/counsellorNormalizer";
 import ManagementAudioDesk from "./ManagementAudioDesk";
@@ -724,9 +725,16 @@ export default function ManagementPortal({
     setTimeout(() => setCopiedCounsellorId(null), 3000);
   };
 
-  // Safe enquiries source with linked sibling audio hydration
+  // Safe enquiries source with deleted IDs filtered out & linked sibling audio hydration
   const safeEnquiries = useMemo(() => {
-    const list = Array.isArray(enquiries) ? enquiries : [];
+    const rawList = Array.isArray(enquiries) ? enquiries : [];
+    const deletedSet = new Set(getDeletedEnquiryIds().map(x => x.toLowerCase()));
+    const list = rawList.filter(e => {
+      if (!e) return false;
+      const eId = (e.id || "").toLowerCase();
+      const eNo = (e.enquiryNo || "").toLowerCase();
+      return (!eId || !deletedSet.has(eId)) && (!eNo || !deletedSet.has(eNo));
+    });
     
     // Audio map by enquiry number & ID for fast linked sibling resolution
     const audioMap = new Map<string, any>();

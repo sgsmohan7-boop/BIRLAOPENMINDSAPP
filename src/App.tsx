@@ -61,7 +61,7 @@ import PortalErrorBoundary from "./components/PortalErrorBoundary";
 
 
 import { loadData, saveData, calculateExpiryDate, resetToDefaults, clearAllData, loadCounselling, saveCounselling, deduplicateEnquiries, loadCounsellorAccounts, saveCounsellorAccounts, mergeWithDemoEnquiries, mergeWithDefaultCounsellorAccounts, recordDeletedCounsellorAccountId, unrecordDeletedCounsellorAccountId, recordDeletedCounsellorAccountIds, recordDeletedEnquiryId, recordDeletedEnquiryIds, getDeletedEnquiryIds, unmarkDeletedEnquiryId, mergeWithDefaultITStaffAccounts, saveITStaffAccounts, loadITStaffAccounts, recordDeletedITStaffAccountId } from "./utils/storage";
-import { isObsoleteOrDuplicateCounsellorAccount, cleanAndNormalizeCounsellorAccounts, normalizeAllEnquiries } from "./utils/counsellorNormalizer";
+import { isObsoleteOrDuplicateCounsellorAccount, cleanAndNormalizeCounsellorAccounts, normalizeAllEnquiries, normalizeEnquiryCounsellor } from "./utils/counsellorNormalizer";
 import { AlertTriangle, X, Bell, ArrowRight, RefreshCw, Share2, Smartphone } from "lucide-react";
 import { Ticket, InventoryItem, Room, EmployeeAllocation, WarrantyContract, SchoolBranch, getNextTicketId, getNowFormatted, CounsellingEnquiry, CounsellorAccount, ManagementAccount, loadManagementAccounts, saveManagementAccounts, recordDeletedManagementAccountId, unrecordDeletedManagementAccountId, mergeWithDefaultManagementAccounts, ITStaffAccount } from "./types";
 import { motion, AnimatePresence } from "motion/react";
@@ -73,7 +73,9 @@ import {
   syncBulkArrayToFirebase, 
   testFirestoreConnection,
   purgeAllCollectionsFromFirebase,
-  isFirestoreQuotaExhausted
+  isFirestoreQuotaExhausted,
+  fetchCollectionDocs,
+  prepareEnquiryForFirestore
 } from "./utils/firebase";
 import { checkBackupStatus, syncAllToMongoBackup, fetchFromMongoBackup, saveToMongoBackup, deleteFromMongoBackup } from "./utils/backupClient";
 import { loadR2Credentials, uploadToR2Direct } from "./utils/cloudflareR2Client";
@@ -339,7 +341,8 @@ export default function App() {
                 const eNo = (e.enquiryNo || "").toLowerCase();
                 return (!eId || !deletedSet.has(eId)) && (!eNo || !deletedSet.has(eNo));
               });
-              const combined = isFirebaseConfigured() ? prevFiltered : deduplicateEnquiries([...serverEnquiries, ...prevFiltered]);
+              // Always merge server records with local memory so cross-device sync is 100% complete
+              const combined = deduplicateEnquiries([...serverEnquiries, ...prevFiltered]);
               saveCounselling(combined);
               return combined;
             });
@@ -373,10 +376,71 @@ export default function App() {
     return () => window.removeEventListener("firestore-quota-exhausted", handleQuota);
   }, []);
 
+  const deletedFormsLoadedRef = React.useRef<boolean>(false);
+  const backfilledIdsRef = React.useRef<Set<string>>(new Set());
+  const normalizedMigratedIdsRef = React.useRef<Set<string>>(new Set());
+
+  // Automatically push any local-only unsynced enquiries (or newer local edits) up to Firestore so all laptops stay 100% identical
+  const pushUnsyncedLocalEnquiriesToCloud = React.useCallback(
+    (firestoreItems: CounsellingEnquiry[], localItems: CounsellingEnquiry[], deletedSet: Set<string>) => {
+      if (!isFirebaseConfigured() || !Array.isArray(localItems) || localItems.length === 0) return;
+
+      const firestoreByKey = new Map<string, CounsellingEnquiry>();
+      (firestoreItems || []).forEach((fItem) => {
+        if (!fItem) return;
+        const fId = (fItem.id || "").trim().toLowerCase();
+        const fNo = (fItem.enquiryNo || "").trim().toLowerCase();
+        if (fId) firestoreByKey.set(fId, fItem);
+        if (fNo) firestoreByKey.set(fNo, fItem);
+      });
+
+      localItems.forEach((localItem) => {
+        if (!localItem || (!localItem.id && !localItem.enquiryNo)) return;
+        if (!localItem.studentName || !localItem.studentName.trim()) return;
+
+        const targetDocId = (localItem.enquiryNo || localItem.id).trim();
+        const idLower = (localItem.id || "").trim().toLowerCase();
+        const noLower = (localItem.enquiryNo || "").trim().toLowerCase();
+
+        if ((idLower && deletedSet.has(idLower)) || (noLower && deletedSet.has(noLower))) {
+          return;
+        }
+
+        const cloudMatch = (noLower && firestoreByKey.get(noLower)) || (idLower && firestoreByKey.get(idLower));
+        const localTs = Number(localItem.updatedAtTimestamp || 0);
+        const cloudTs = Number(cloudMatch?.updatedAtTimestamp || 0);
+
+        const isMissingInCloud = !cloudMatch;
+        const isNewerLocally = Boolean(cloudMatch && localTs > 0 && localTs > cloudTs);
+
+        if (isMissingInCloud || isNewerLocally) {
+          const syncSig = `${targetDocId.toLowerCase()}:${localTs}`;
+          if (!backfilledIdsRef.current.has(syncSig)) {
+            backfilledIdsRef.current.add(syncSig);
+            const { normalized } = normalizeEnquiryCounsellor({
+              ...localItem,
+              id: targetDocId,
+              enquiryNo: localItem.enquiryNo || targetDocId
+            });
+            const safePayload = prepareEnquiryForFirestore(normalized);
+            saveDocument("counselling_forms", targetDocId, safePayload)
+              .then((ok) => {
+                if (!ok) backfilledIdsRef.current.delete(syncSig);
+              })
+              .catch(() => {
+                backfilledIdsRef.current.delete(syncSig);
+              });
+          }
+        }
+      });
+    },
+    []
+  );
+
   const handleSyncRefresh = async () => {
     setIsSyncRefreshing(true);
     try {
-      // Re-trigger loadData and set state to emulate a fresh load
+      // 1. Load cached state first
       const localData = loadData();
       setTickets(localData.tickets);
       setHistory(localData.history);
@@ -384,11 +448,93 @@ export default function App() {
       setRooms(localData.rooms);
       setAllocations(localData.allocations);
       setWarranty(localData.warranty);
-      setCounsellingEnquiries(loadCounselling());
+      const currentLocalEnquiries = loadCounselling();
+      setCounsellingEnquiries(currentLocalEnquiries);
       setCounsellorAccounts(loadCounsellorAccounts());
 
-      // Settle time for any background listeners and allow beautiful loading visual to settle
-      await new Promise((resolve) => setTimeout(resolve, 1200));
+      // 2. Direct Live Firestore Pull + Bidirectional Unsynced Backfill (Works on Vercel & all Cloud deployments)
+      if (isFirebaseConfigured()) {
+        try {
+          const [cloudDeletedDocs, cloudEnquiries, cloudAccounts] = await Promise.all([
+            fetchCollectionDocs<{ id: string; enquiryNo?: string }>("deleted_counselling_forms"),
+            fetchCollectionDocs<CounsellingEnquiry>("counselling_forms"),
+            fetchCollectionDocs<CounsellorAccount>("counsellor_accounts")
+          ]);
+
+          if (Array.isArray(cloudDeletedDocs)) {
+            const delIds = cloudDeletedDocs.flatMap(d => [d.id, d.enquiryNo]).filter(Boolean) as string[];
+            if (delIds.length > 0) recordDeletedEnquiryIds(delIds);
+            deletedFormsLoadedRef.current = true;
+          }
+
+          if (Array.isArray(cloudEnquiries)) {
+            const deletedSet = new Set(getDeletedEnquiryIds().map(x => x.toLowerCase()));
+            const activeCloudItems = cloudEnquiries
+              .filter(e => e && (!e.id || !deletedSet.has(e.id.toLowerCase())) && (!e.enquiryNo || !deletedSet.has(e.enquiryNo.toLowerCase())))
+              .map(e => ({ ...e, id: e.enquiryNo || e.id }));
+
+            setCounsellingEnquiries(prev => {
+              const baseLocal = (prev && prev.length > 0 ? prev : currentLocalEnquiries).filter(e =>
+                e && (!e.id || !deletedSet.has(e.id.toLowerCase())) && (!e.enquiryNo || !deletedSet.has(e.enquiryNo.toLowerCase()))
+              );
+              if (deletedFormsLoadedRef.current) {
+                pushUnsyncedLocalEnquiriesToCloud(activeCloudItems, baseLocal, deletedSet);
+              }
+              const merged = deduplicateEnquiries([...activeCloudItems, ...baseLocal]);
+              const { enquiries: normalized } = normalizeAllEnquiries(merged);
+              saveCounselling(normalized);
+              return normalized;
+            });
+          }
+
+          if (Array.isArray(cloudAccounts) && cloudAccounts.length > 0) {
+            const mergedAccs = mergeWithDefaultCounsellorAccounts(cloudAccounts);
+            setCounsellorAccounts(mergedAccs);
+            saveCounsellorAccounts(mergedAccs);
+          }
+        } catch (_) {}
+      }
+
+      // 3. Also pull from Express Server API when running in local/Node environments
+      try {
+        const cRes = await fetch("/api/counselling");
+        if (cRes.ok) {
+          const cJson = await cRes.json();
+          if (cJson.success && Array.isArray(cJson.enquiries)) {
+            if (Array.isArray(cJson.deletedIds) && cJson.deletedIds.length > 0) {
+              recordDeletedEnquiryIds(cJson.deletedIds);
+            }
+            const deletedSet = new Set(getDeletedEnquiryIds().map(x => x.toLowerCase()));
+            const serverItems = cJson.enquiries.filter((e: any) => {
+              if (!e) return false;
+              const eId = (e.id || "").toLowerCase();
+              const eNo = (e.enquiryNo || "").toLowerCase();
+              return (!eId || !deletedSet.has(eId)) && (!eNo || !deletedSet.has(eNo));
+            });
+            setCounsellingEnquiries(prev => {
+              const combined = deduplicateEnquiries([...(prev || []), ...serverItems]);
+              saveCounselling(combined);
+              return combined;
+            });
+          }
+        }
+      } catch (_) {}
+
+      try {
+        const aRes = await fetch("/api/accounts");
+        if (aRes.ok) {
+          const aJson = await aRes.json();
+          if (aJson.success && aJson.accounts && Array.isArray(aJson.accounts.counsellors)) {
+            const extraDeleted = Array.isArray(aJson.accounts.deletedCounsellors) ? aJson.accounts.deletedCounsellors : [];
+            const merged = mergeWithDefaultCounsellorAccounts(aJson.accounts.counsellors, extraDeleted);
+            setCounsellorAccounts(merged);
+            saveCounsellorAccounts(merged);
+          }
+        }
+      } catch (_) {}
+
+      // Settle time for background listeners
+      await new Promise((resolve) => setTimeout(resolve, 600));
     } catch (err) {
       console.error("Sync state refresh failed:", err);
     } finally {
@@ -629,21 +775,24 @@ export default function App() {
         }, localData.warranty),
 
         syncCollection<{ id: string; enquiryNo?: string }>("deleted_counselling_forms", (deletedDocs) => {
-          if (deletedDocs && deletedDocs.length > 0) {
-            const rawIds = deletedDocs.flatMap(d => [d.id, d.enquiryNo]).filter(Boolean) as string[];
-            recordDeletedEnquiryIds(rawIds);
-            const delSet = new Set(rawIds.map(x => x.toLowerCase()));
-            setCounsellingEnquiries((prev) => {
-              const current = prev || [];
-              const filtered = current.filter((e) => {
-                if (!e) return false;
-                const eId = (e.id || "").toLowerCase();
-                const eNo = (e.enquiryNo || "").toLowerCase();
-                return (!eId || !delSet.has(eId)) && (!eNo || !delSet.has(eNo));
+          if (Array.isArray(deletedDocs)) {
+            deletedFormsLoadedRef.current = true;
+            if (deletedDocs.length > 0) {
+              const rawIds = deletedDocs.flatMap(d => [d.id, d.enquiryNo]).filter(Boolean) as string[];
+              recordDeletedEnquiryIds(rawIds);
+              const delSet = new Set(rawIds.map(x => x.toLowerCase()));
+              setCounsellingEnquiries((prev) => {
+                const current = prev || [];
+                const filtered = current.filter((e) => {
+                  if (!e) return false;
+                  const eId = (e.id || "").toLowerCase();
+                  const eNo = (e.enquiryNo || "").toLowerCase();
+                  return (!eId || !delSet.has(eId)) && (!eNo || !delSet.has(eNo));
+                });
+                saveCounselling(filtered);
+                return filtered;
               });
-              saveCounselling(filtered);
-              return filtered;
-            });
+            }
           }
         }, []),
 
@@ -656,7 +805,6 @@ export default function App() {
           if (!items) return;
 
           if (items.length === 0) {
-            // Only wipe if user explicitly triggered a complete database wipe
             if (localStorage.getItem("sgs_wiping_database") === "true") {
               setCounsellingEnquiries([]);
               saveCounselling([]);
@@ -671,33 +819,31 @@ export default function App() {
             return;
           }
 
-          // Automatically purge deleted or duplicate documents from Firestore
+          // Clean up any legacy timestamp-suffixed or explicitly deleted documents in Firestore
           items.forEach(item => {
             if (item.id && /_(\d{10,})$/.test(item.id)) {
               deleteDocument("counselling_forms", item.id);
-              deleteDocument("counselling", item.id);
             }
             const eId = (item.id || "").toLowerCase();
             const eNo = (item.enquiryNo || "").toLowerCase();
             if ((eId && deletedSet.has(eId)) || (eNo && deletedSet.has(eNo))) {
-              if (item.id) {
-                deleteDocument("counselling_forms", item.id);
-                deleteDocument("counselling", item.id);
-              }
-              if (item.enquiryNo) {
-                deleteDocument("counselling_forms", item.enquiryNo);
-                deleteDocument("counselling", item.enquiryNo);
-              }
+              if (item.id) deleteDocument("counselling_forms", item.id);
+              if (item.enquiryNo) deleteDocument("counselling_forms", item.enquiryNo);
             }
           });
 
-          // Standardize ID strictly to canonical enquiryNo and exclude deleted items
+          // Standardize ID strictly to canonical enquiryNo, exclude deleted items, and migrate only genuinely un-normalized cloud docs
           const nonDeletedItems = items
             .filter(e => e && (!e.id || !deletedSet.has(e.id.toLowerCase())) && (!e.enquiryNo || !deletedSet.has(e.enquiryNo.toLowerCase())))
-            .map(e => ({
-              ...e,
-              id: e.enquiryNo || e.id
-            }));
+            .map(e => {
+              const base = { ...e, id: e.enquiryNo || e.id };
+              const { normalized, wasChanged } = normalizeEnquiryCounsellor(base);
+              if (wasChanged && normalized.id && !normalizedMigratedIdsRef.current.has(normalized.id)) {
+                normalizedMigratedIdsRef.current.add(normalized.id);
+                saveDocument("counselling_forms", normalized.id, prepareEnquiryForFirestore(normalized)).catch(() => {});
+              }
+              return normalized;
+            });
 
           setCounsellingEnquiries((prev) => {
             const prevFiltered = (prev || []).filter((e: any) => {
@@ -706,14 +852,29 @@ export default function App() {
               const eNo = (e.enquiryNo || "").toLowerCase();
               return (!eId || !deletedSet.has(eId)) && (!eNo || !deletedSet.has(eNo));
             });
-            const deduped = deduplicateEnquiries([...nonDeletedItems, ...prevFiltered]);
-            const { enquiries: normalizedEnquiries, changedCount } = normalizeAllEnquiries(deduped);
-            saveCounselling(normalizedEnquiries);
-            if (changedCount > 0 && isFirebaseConfigured()) {
-              normalizedEnquiries.forEach(item => {
-                saveDocument("counselling_forms", item.id, item).catch(() => {});
-              });
+
+            // Auto-backfill any local-only unsynced enquiries (e.g. saved during offline/quota window) up to Firestore
+            if (deletedFormsLoadedRef.current) {
+              pushUnsyncedLocalEnquiriesToCloud(nonDeletedItems, prevFiltered, deletedSet);
+            } else {
+              fetchCollectionDocs<{ id: string; enquiryNo?: string }>("deleted_counselling_forms")
+                .then((delDocs) => {
+                  if (Array.isArray(delDocs)) {
+                    const extraIds = delDocs.flatMap(d => [d.id, d.enquiryNo]).filter(Boolean) as string[];
+                    if (extraIds.length > 0) recordDeletedEnquiryIds(extraIds);
+                    deletedFormsLoadedRef.current = true;
+                    const freshDeletedSet = new Set(getDeletedEnquiryIds().map(x => x.toLowerCase()));
+                    pushUnsyncedLocalEnquiriesToCloud(nonDeletedItems, prevFiltered, freshDeletedSet);
+                  }
+                })
+                .catch(() => {});
             }
+
+            // Authoritative Firestore items first, local unsynced items second
+            const deduped = deduplicateEnquiries([...nonDeletedItems, ...prevFiltered]);
+            const { enquiries: normalizedEnquiries } = normalizeAllEnquiries(deduped);
+            saveCounselling(normalizedEnquiries);
+
             fetch("/api/counselling", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -932,10 +1093,12 @@ export default function App() {
   };
 
   const handleSaveCounselling = (enquiry: CounsellingEnquiry) => {
-    // Canonical ID normalization: strictly enforce id === enquiryNo
+    const saveTimestamp = Date.now();
+    // Canonical ID normalization: strictly enforce id === enquiryNo + authoritative millisecond timestamp
     const cleanEnquiry: CounsellingEnquiry = {
       ...enquiry,
-      id: enquiry.enquiryNo || enquiry.id
+      id: enquiry.enquiryNo || enquiry.id,
+      updatedAtTimestamp: saveTimestamp
     };
 
     // Unmark from deleted records in localStorage and Firestore so newly created/updated enquiries are never hidden
@@ -946,6 +1109,29 @@ export default function App() {
         deleteDocument("deleted_counselling_forms", cleanEnquiry.enquiryNo.toLowerCase());
       }
     }
+
+    // Helper function to persist to Firestore safely without exceeding 1MB doc size
+    const saveToFirestore = (targetEnquiry: CounsellingEnquiry) => {
+      if (!isFirebaseConfigured()) return;
+      const firestoreEnquiry = prepareEnquiryForFirestore(targetEnquiry);
+      const targetDocId = (targetEnquiry.enquiryNo || targetEnquiry.id || `ENQ-${Date.now()}`).trim();
+      const syncSig = `${targetDocId.toLowerCase()}:${targetEnquiry.updatedAtTimestamp || saveTimestamp}`;
+      backfilledIdsRef.current.add(syncSig);
+
+      // Strictly save 1 document per form into canonical counselling_forms collection
+      saveDocument("counselling_forms", targetDocId, firestoreEnquiry)
+        .then((ok) => {
+          if (!ok) backfilledIdsRef.current.delete(syncSig);
+        })
+        .catch(() => {
+          backfilledIdsRef.current.delete(syncSig);
+        });
+
+      // Clean up legacy document if targetEnquiry previously had a timestamp-suffixed ID
+      if (enquiry.id && enquiry.id !== targetDocId && /_(\d{10,})$/.test(enquiry.id)) {
+        deleteDocument("counselling_forms", enquiry.id);
+      }
+    };
 
     // 1. Immediately persist synchronously to LocalStorage & update state
     setCounsellingEnquiries((prev) => {
@@ -967,47 +1153,26 @@ export default function App() {
           )
         );
         if (sibIdx >= 0 && !nextList[sibIdx].audioRecording) {
-          const linkedSib = nextList[sibIdx];
-          nextList[sibIdx] = {
-            ...linkedSib,
+          const linkedSib: CounsellingEnquiry = {
+            ...nextList[sibIdx],
+            updatedAtTimestamp: saveTimestamp,
             audioRecording: {
               ...cleanEnquiry.audioRecording,
-              id: `${cleanEnquiry.audioRecording.id || linkedSib.id || linkedSib.enquiryNo}-SIB`,
-              enquiryNo: linkedSib.enquiryNo || linkedSib.id,
-              studentName: linkedSib.studentName,
+              id: `${cleanEnquiry.audioRecording.id || nextList[sibIdx].id || nextList[sibIdx].enquiryNo}-SIB`,
+              enquiryNo: nextList[sibIdx].enquiryNo || nextList[sibIdx].id,
+              studentName: nextList[sibIdx].studentName,
               isJointSiblingSession: true,
-              jointSiblingNames: cleanEnquiry.audioRecording.jointSiblingNames || `${cleanEnquiry.studentName} & ${linkedSib.studentName}`
+              jointSiblingNames: cleanEnquiry.audioRecording.jointSiblingNames || `${cleanEnquiry.studentName} & ${nextList[sibIdx].studentName}`
             }
           };
+          nextList[sibIdx] = linkedSib;
+          saveToFirestore(linkedSib);
         }
       }
 
       saveCounselling(nextList);
       return nextList;
     });
-
-    // Helper function to persist to Firestore safely without exceeding doc size
-    const saveToFirestore = (targetEnquiry: CounsellingEnquiry) => {
-      if (!isFirebaseConfigured()) return;
-      const firestoreEnquiry: any = JSON.parse(JSON.stringify(targetEnquiry));
-      // Only delete audioData if it exceeds 350KB to preserve instant cross-device playback
-      if (firestoreEnquiry.audioRecording && firestoreEnquiry.audioRecording.audioData) {
-        if (typeof firestoreEnquiry.audioRecording.audioData === "string" && firestoreEnquiry.audioRecording.audioData.length > 350 * 1024) {
-          delete firestoreEnquiry.audioRecording.audioData;
-        }
-      }
-      const targetDocId = targetEnquiry.enquiryNo || targetEnquiry.id || `ENQ-${Date.now()}`;
-      
-      // Clean single-document sync: strictly save 1 document per form
-      saveDocument("counselling_forms", targetDocId, firestoreEnquiry);
-      saveDocument("counselling", targetDocId, firestoreEnquiry);
-
-      // Clean up legacy document if targetEnquiry previously had a timestamp-suffixed ID
-      if (enquiry.id && enquiry.id !== targetDocId && /_(\d{10,})$/.test(enquiry.id)) {
-        deleteDocument("counselling_forms", enquiry.id);
-        deleteDocument("counselling", enquiry.id);
-      }
-    };
 
     // 2. Save to Firestore
     saveToFirestore(cleanEnquiry);
@@ -1105,14 +1270,11 @@ export default function App() {
 
       if (isFirebaseConfigured()) {
         deleteDocument("counselling_forms", id);
-        deleteDocument("counselling", id);
         if (target?.id) {
           deleteDocument("counselling_forms", target.id);
-          deleteDocument("counselling", target.id);
         }
         if (target?.enquiryNo) {
           deleteDocument("counselling_forms", target.enquiryNo);
-          deleteDocument("counselling", target.enquiryNo);
         }
 
         const delId = (target?.id || id).toLowerCase();
@@ -1141,10 +1303,8 @@ export default function App() {
 
           if (isFirebaseConfigured()) {
             deleteDocument("counselling_forms", e.id);
-            deleteDocument("counselling", e.id);
             if (e.enquiryNo) {
               deleteDocument("counselling_forms", e.enquiryNo);
-              deleteDocument("counselling", e.enquiryNo);
             }
 
             const delId = e.id.toLowerCase();
@@ -1164,7 +1324,6 @@ export default function App() {
         } catch (_) {}
         if (isFirebaseConfigured()) {
           deleteDocument("counselling_forms", id);
-          deleteDocument("counselling", id);
           const delId = id.toLowerCase();
           saveDocument("deleted_counselling_forms", delId, {
             id: delId,

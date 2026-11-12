@@ -345,6 +345,7 @@ export interface CounsellingEnquiry {
 
   createdAt: string;
   updatedAt: string;
+  updatedAtTimestamp?: number;
 }
 
 export type EnquiryType = "walkin" | "online";
