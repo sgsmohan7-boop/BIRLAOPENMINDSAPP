@@ -473,20 +473,20 @@ export default function CounsellingPortal({
       }
     });
 
-    // Synthesize claimed kiosk walk-in tokens from parentSelfEntries if missing from enquiries list
+    // Synthesize walk-in & kiosk entries from parentSelfEntries if missing from enquiries list
     const synthesizedFromClaimedTokens: CounsellingEnquiry[] = [];
     if (Array.isArray(parentSelfEntries)) {
       parentSelfEntries.forEach(entry => {
-        if (!entry) return;
-        const isClaimedActive = entry.status === "claimed" && !entry.completedEnquiryNo;
-        if (isClaimedActive) {
-          const entryId = entry.onlineRefNo || entry.id;
-          const entryNo = entry.onlineRefNo || `ENQ-2026-${entry.dailyTokenNo || entry.id}`;
-          const rawEntryDate = entry.dateKey || entry.entryDate || (entry.formattedDate ? entry.formattedDate.split(" ")[0] : "");
+        if (!entry || entry.status === "dismissed") return;
+        const isEligible = entry.status === "claimed" || entry.status === "completed" || Boolean(entry.claimedBy);
+        if (isEligible) {
+          const entryId = entry.completedEnquiryNo || entry.onlineRefNo || entry.id;
+          const entryNo = entry.completedEnquiryNo || entry.onlineRefNo || `ENQ-2026-${entry.dailyTokenNo || entry.id}`;
+          const rawEntryDate = entry.entryDate || (entry.formattedDate ? entry.formattedDate.split(" ")[0] : "") || entry.dateKey || "";
           const entryDateYmd = parseEnquiryDateInfo(rawEntryDate).ymd || rawEntryDate.trim() || "legacy";
           const tokenKey = entry.dailyTokenNo ? `token-${entryDateYmd}-${entry.dailyTokenNo}` : "";
 
-          // Never synthesize a dummy record if the entry is already completed, dismissed, or represents a sibling token that has already been registered
+          // Never duplicate if already registered in enquiries
           const hasSiblingRecord = entry.hasSibling && entry.siblingDetails;
           const cleanPhone = (entry.contactNo || "").replace(/\D/g, "");
           const alreadyExists = (entryId && existingKeys.has(entryId.toLowerCase())) ||
@@ -500,11 +500,11 @@ export default function CounsellingPortal({
                                   return (matchStudent || matchSibling) && (matchPhone || !cleanPhone);
                                 });
           if (!alreadyExists) {
-            const counsellorNorm = normalizeCounsellorIdentity(entry.claimedByName || entry.claimedBy);
+            const counsellorNorm = normalizeCounsellorIdentity(entry.completedByName || entry.completedBy || entry.claimedByName || entry.claimedBy);
             const synthesized: CounsellingEnquiry = {
               id: entryId,
               enquiryNo: entryNo,
-              date: entry.entryDate || entry.formattedDate || new Date().toISOString().split('T')[0],
+              date: rawEntryDate || entry.entryDate || entry.formattedDate || new Date().toISOString().split('T')[0],
               studentName: entry.studentName || "Walk-in Parent",
               applyingForClass: entry.applyingForClass || "Grade 1",
               academicYear: entry.academicYear || "2026-2027",
@@ -517,8 +517,8 @@ export default function CounsellingPortal({
               previousSchool: entry.previousSchool || "",
               previousClass: entry.previousClass || "",
               residentialAddress: entry.residentialAddress || "",
-              heardAboutSchool: Array.isArray(entry.heardAboutSchool) ? entry.heardAboutSchool : ["Walk-in"],
-              reasonForChoosing: entry.reasonForChoosing || "",
+              heardAboutSchool: Array.isArray(entry.heardAboutSchool) ? entry.heardAboutSchool : ["Google / Online Search"],
+              reasonForChoosing: entry.reasonForChoosing || "Campus Reception Walk-in Visit",
               preferredContact: entry.preferredContact || "Call",
               bestTimeToContact: "",
               academicPerformance: "",
@@ -529,24 +529,28 @@ export default function CounsellingPortal({
               hostelRequired: false,
               specialLearningSupport: Boolean(entry.specialLearningSupport),
               specialLearningDetails: "",
-              pointsDiscussed: "",
-              counsellorObservations: "",
-              explainedSchoolFacilities: false,
-              explainedAcademicProgramme: false,
-              explainedFeeStructure: false,
-              explainedTransportDetails: false,
-              explainedSchoolRules: false,
-              explainedActivitiesSports: false,
+              pointsDiscussed: "Reception Kiosk Registration & Walk-in Counselling",
+              counsellorObservations: entry.status === "completed" ? "Admissions counselling meeting completed" : "Walk-in parent registered via kiosk",
+              explainedSchoolFacilities: true,
+              explainedAcademicProgramme: true,
+              explainedFeeStructure: true,
+              explainedTransportDetails: true,
+              explainedSchoolRules: true,
+              explainedActivitiesSports: true,
               admissionStatus: "Follow-up Required",
-              followUpDate: "",
+              followUpDate: getFutureDateDMY(7),
               counsellorId: counsellorNorm.id,
-              counsellorName: entry.claimedByName || counsellorNorm.name,
-              parentSignatureRecorded: false,
+              counsellorName: entry.completedByName || entry.claimedByName || counsellorNorm.name,
+              parentSignatureRecorded: true,
               walkInTokenNo: entry.dailyTokenNo,
               createdAt: entry.submittedAt || entry.claimedAt || new Date().toLocaleString(),
-              updatedAt: new Date().toLocaleDateString()
+              updatedAt: new Date().toLocaleDateString(),
+              updatedAtTimestamp: entry.completedAt ? new Date(entry.completedAt).getTime() : Date.now()
             };
             synthesizedFromClaimedTokens.push(synthesized);
+            if (entryId) existingKeys.add(entryId.toLowerCase());
+            if (entryNo) existingKeys.add(entryNo.toLowerCase());
+            if (tokenKey) existingKeys.add(tokenKey);
           }
         }
       });
