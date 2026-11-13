@@ -40,17 +40,12 @@ function lazyWithRetry<T extends React.ComponentType<any>>(
 // Lazy-load portals and modals to keep initial bundle ultra-light and boot instantly (<500ms)
 const CounsellingPortal = lazyWithRetry(() => import("./components/CounsellingPortal"), "CounsellingPortal");
 const ManagementPortal = lazyWithRetry(() => import("./components/ManagementPortal"), "ManagementPortal");
-const SchoolStoreHub = lazyWithRetry(() => import("./components/SchoolStoreHub"), "SchoolStoreHub");
 const WarrantyTracker = lazyWithRetry(() => import("./components/WarrantyTracker"), "WarrantyTracker");
 const RaiseTicket = lazyWithRetry(() => import("./components/RaiseTicket"), "RaiseTicket");
-const NetworkSpeed = lazyWithRetry(() => import("./components/NetworkSpeed"), "NetworkSpeed");
 const SettingsView = lazyWithRetry(() => import("./components/Settings"), "Settings");
 const Analytics = lazyWithRetry(() => import("./components/Analytics"), "Analytics");
 const TeacherPortal = lazyWithRetry(() => import("./components/TeacherPortal"), "TeacherPortal");
 const AiAssistant = lazyWithRetry(() => import("./components/AiAssistant"), "AiAssistant");
-const CctvMonitor = lazyWithRetry(() => import("./components/CctvMonitor"), "CctvMonitor");
-const TransportDashboard = lazyWithRetry(() => import("./components/TransportDashboard"), "TransportDashboard");
-const DriverPortal = lazyWithRetry(() => import("./components/DriverPortal"), "DriverPortal");
 const StudentPortal = lazyWithRetry(() => import("./components/StudentPortal"), "StudentPortal");
 const GoogleDriveManager = lazyWithRetry(() => import("./components/GoogleDriveManager"), "GoogleDriveManager");
 const CctvNvrStorageModal = lazyWithRetry(() => import("./components/CctvNvrStorageModal"), "CctvNvrStorageModal");
@@ -75,7 +70,6 @@ import {
   purgeAllCollectionsFromFirebase,
   isFirestoreQuotaExhausted,
   clearQuotaExhausted,
-  getFirestoreUpgradeUrl,
   fetchCollectionDocs,
   prepareEnquiryForFirestore
 } from "./utils/firebase";
@@ -159,7 +153,6 @@ export default function App() {
       if (path === "counselling" || path === "counsellor") return "counselling";
       if (path === "management") return "management";
       if (path === "teacher" || path === "teachers") return "teacher-desk";
-      if (path === "driver" || path === "drivers") return "transport-dashboard";
       if (path === "admin" || path === "superadmin") return "dashboard";
 
       // 4. Check custom domain hostname: e.g. birlaopenmindscounselling.com
@@ -322,42 +315,29 @@ export default function App() {
     fetchServerAccounts();
 
     const fetchInitialCounselling = async () => {
-      // 1. Live Firestore initial pull (Works on Vercel & all Cloud environments)
+      // 1. Synthesize any completed/claimed walk-in parent entries from parent_self_entries (core counselling collections stream live via syncCollection below)
       if (isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
         try {
-          const [cloudDeletedDocs, cloudEnquiries, cloudAccounts, cloudParentEntries] = await Promise.all([
-            fetchCollectionDocs<{ id: string; enquiryNo?: string }>("deleted_counselling_forms"),
-            fetchCollectionDocs<CounsellingEnquiry>("counselling_forms"),
-            fetchCollectionDocs<CounsellorAccount>("counsellor_accounts"),
-            fetchCollectionDocs<ParentSelfEntry>("parent_self_entries")
-          ]);
+          const cloudParentEntries = await fetchCollectionDocs<ParentSelfEntry>("parent_self_entries");
+          if (Array.isArray(cloudParentEntries) && cloudParentEntries.length > 0 && active) {
+            setCounsellingEnquiries(prev => {
+              const deletedSet = new Set(getDeletedEnquiryIds().map(x => x.toLowerCase()));
+              const baseLocal = (prev || []).filter(e =>
+                e && (!e.id || !deletedSet.has(e.id.toLowerCase())) && (!e.enquiryNo || !deletedSet.has(e.enquiryNo.toLowerCase()))
+              );
+              const existingKeys = new Set<string>();
+              baseLocal.forEach(e => {
+                if (e.id) existingKeys.add(e.id.toLowerCase());
+                if (e.enquiryNo) existingKeys.add(e.enquiryNo.toLowerCase());
+              });
 
-          if (Array.isArray(cloudDeletedDocs) && active) {
-            const delIds = cloudDeletedDocs.flatMap(d => [d.id, d.enquiryNo]).filter(Boolean) as string[];
-            if (delIds.length > 0) recordDeletedEnquiryIds(delIds);
-            deletedFormsLoadedRef.current = true;
-          }
-
-          if (active) {
-            const deletedSet = new Set(getDeletedEnquiryIds().map(x => x.toLowerCase()));
-            const activeCloudItems = (Array.isArray(cloudEnquiries) ? cloudEnquiries : [])
-              .filter(e => e && (!e.id || !deletedSet.has(e.id.toLowerCase())) && (!e.enquiryNo || !deletedSet.has(e.enquiryNo.toLowerCase())))
-              .map(e => ({ ...e, id: e.enquiryNo || e.id }));
-
-            const existingKeys = new Set<string>();
-            activeCloudItems.forEach(e => {
-              if (e.id) existingKeys.add(e.id.toLowerCase());
-              if (e.enquiryNo) existingKeys.add(e.enquiryNo.toLowerCase());
-            });
-
-            // Synthesize any missing completed or claimed entries from parent_self_entries
-            const synthesizedParentEnquiries: CounsellingEnquiry[] = [];
-            if (Array.isArray(cloudParentEntries)) {
+              const synthesizedParentEnquiries: CounsellingEnquiry[] = [];
               cloudParentEntries.forEach(p => {
                 if (!p || p.status === "dismissed") return;
                 if (p.status === "completed" || p.status === "claimed" || Boolean(p.claimedBy)) {
                   const enqNo = p.completedEnquiryNo || p.onlineRefNo || `ENQ-2026-${p.dailyTokenNo || p.id}`;
                   const docId = enqNo;
+                  if (deletedSet.has(docId.toLowerCase()) || deletedSet.has(enqNo.toLowerCase())) return;
                   if (!existingKeys.has(docId.toLowerCase()) && !existingKeys.has(enqNo.toLowerCase())) {
                     const rawDate = p.entryDate || (p.formattedDate ? p.formattedDate.split(" ")[0] : "") || p.dateKey || "11-11-2026";
                     const counsellorNorm = normalizeCounsellorIdentity(p.completedByName || p.completedBy || p.claimedByName || p.claimedBy);
@@ -412,28 +392,13 @@ export default function App() {
                   }
                 }
               });
-            }
 
-            const totalCloudPool = [...activeCloudItems, ...synthesizedParentEnquiries];
-
-            setCounsellingEnquiries(prev => {
-              const baseLocal = (prev || []).filter(e =>
-                e && (!e.id || !deletedSet.has(e.id.toLowerCase())) && (!e.enquiryNo || !deletedSet.has(e.enquiryNo.toLowerCase()))
-              );
-              if (deletedFormsLoadedRef.current) {
-                pushUnsyncedLocalEnquiriesToCloud(totalCloudPool, baseLocal, deletedSet);
-              }
-              const merged = deduplicateEnquiries([...totalCloudPool, ...baseLocal]);
+              if (synthesizedParentEnquiries.length === 0) return baseLocal;
+              const merged = deduplicateEnquiries([...synthesizedParentEnquiries, ...baseLocal]);
               const { enquiries: normalized } = normalizeAllEnquiries(merged);
               saveCounselling(normalized);
               return normalized;
             });
-          }
-
-          if (Array.isArray(cloudAccounts) && cloudAccounts.length > 0 && active) {
-            const mergedAccs = mergeWithDefaultCounsellorAccounts(cloudAccounts);
-            setCounsellorAccounts(mergedAccs);
-            saveCounsellorAccounts(mergedAccs);
           }
         } catch (_) {}
       }
@@ -479,17 +444,9 @@ export default function App() {
   // Expiring Warranty states
   const [expiringWarranties, setExpiringWarranties] = useState<WarrantyContract[]>([]);
   const [showWarrantyBanner, setShowWarrantyBanner] = useState(false);
-  const [showQuotaBanner, setShowQuotaBanner] = useState(() => isFirestoreQuotaExhausted());
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [isWiping, setIsWiping] = useState(false);
   const [isSyncRefreshing, setIsSyncRefreshing] = useState(false);
-
-  useEffect(() => {
-    setShowQuotaBanner(isFirestoreQuotaExhausted());
-    const handleQuota = () => setShowQuotaBanner(true);
-    window.addEventListener("firestore-quota-exhausted", handleQuota);
-    return () => window.removeEventListener("firestore-quota-exhausted", handleQuota);
-  }, []);
 
   const deletedFormsLoadedRef = React.useRef<boolean>(false);
   const backfilledIdsRef = React.useRef<Set<string>>(new Set());
@@ -577,9 +534,6 @@ export default function App() {
             fetchCollectionDocs<CounsellorAccount>("counsellor_accounts", true),
             fetchCollectionDocs<ParentSelfEntry>("parent_self_entries", true)
           ]);
-          if (Array.isArray(cloudEnquiries) || Array.isArray(cloudParentEntries)) {
-            setShowQuotaBanner(false);
-          }
 
           if (Array.isArray(cloudDeletedDocs)) {
             const delIds = cloudDeletedDocs.flatMap(d => [d.id, d.enquiryNo]).filter(Boolean) as string[];
@@ -794,7 +748,7 @@ export default function App() {
     }
 
     const pathStr = (window.location.pathname || "").toLowerCase();
-    if (["counselling", "management", "teacher", "driver", "student", "counsellor"].some(p => pathStr.includes(p))) {
+    if (["counselling", "management", "teacher", "student", "counsellor"].some(p => pathStr.includes(p))) {
       return;
     }
 
@@ -890,11 +844,11 @@ export default function App() {
   useEffect(() => {
     if (isParentKioskMode || !isLoggedIn) return;
     const isFb = isFirebaseConfigured();
-    if (isFb && !isFirestoreQuotaExhausted()) {
+    if (isFb) {
       const localData = loadData();
-      const isCounsellingDesk = userRole === "Counsellor" || currentTab === "counselling" || currentTab === "counselling-dept" || (typeof window !== "undefined" && (window.location.search.includes("portal=counselling") || window.location.search.includes("counsellor=")));
+      const isCounsellingOnlyRole = userRole === "Counsellor";
 
-      const itUnsubs = isCounsellingDesk ? [] : [
+      const itUnsubs = isCounsellingOnlyRole ? [] : [
         syncCollection<Ticket>("tickets", (items) => {
           if (localStorage.getItem("sgs_wiping_database") === "true") {
             setTickets([]);
@@ -1125,7 +1079,7 @@ export default function App() {
         }, []),
       ];
 
-      const itAccountUnsubs = isCounsellingDesk ? [] : [
+      const itAccountUnsubs = isCounsellingOnlyRole ? [] : [
         syncCollection<{ id: string; username?: string }>("deleted_it_staff_accounts", (deletedDocs) => {
           if (deletedDocs && deletedDocs.length > 0) {
             const ids = deletedDocs.map(d => d.id || d.username || "").filter(Boolean);
@@ -1167,7 +1121,7 @@ export default function App() {
         unsubs.forEach((unsub) => unsub());
       };
     }
-  }, [isLoggedIn, isParentKioskMode, userRole, currentTab]);
+  }, [isLoggedIn, isParentKioskMode, userRole]);
 
   // Sync utility to update documents on Firestore and process deletions with MongoDB dual-write
   const syncUpdates = <T extends { id: string }>(
@@ -1902,9 +1856,6 @@ export default function App() {
             jumpToTab={setCurrentTab}
           />
         );
-      case "school-store":
-      case "store-master":
-        return <SchoolStoreHub />;
       case "inventory":
         return (
           <InventoryMaster
@@ -1946,12 +1897,8 @@ export default function App() {
             updateWarranty={handleUpdateWarranty}
           />
         );
-      case "network-speed":
-        return <NetworkSpeed />;
       case "ai-assistant":
         return <AiAssistant tickets={tickets} />;
-      case "cctv-watchdog":
-        return <CctvMonitor />;
       case "management":
       case "management-desk":
       case "management-portal":
@@ -1997,8 +1944,6 @@ export default function App() {
             />
           </div>
         );
-      case "transport-dashboard":
-        return <TransportDashboard />;
       case "google-drive":
         return (
           <div className="h-full w-full overflow-y-auto custom-scrollbar">
@@ -2126,18 +2071,6 @@ export default function App() {
     );
   }
 
-  if (userRole === "Driver") {
-    return (
-      <React.Suspense fallback={<div className="flex h-screen w-screen items-center justify-center bg-slate-900"><AnimatedLoading size="w-16 h-16" /></div>}>
-        <div className="min-h-screen w-full overflow-y-auto bg-slate-900 custom-scrollbar">
-          <PortalErrorBoundary sectionName="Driver & Transport Portal">
-            <DriverPortal onLogout={handleLogout} />
-          </PortalErrorBoundary>
-        </div>
-      </React.Suspense>
-    );
-  }
-
   if (userRole === "Student") {
     return (
       <React.Suspense fallback={<div className="flex h-screen w-screen items-center justify-center bg-slate-900"><AnimatedLoading size="w-16 h-16" /></div>}>
@@ -2255,7 +2188,6 @@ export default function App() {
           <div className="flex items-center gap-2 min-w-0">
             <h2 className="text-xs md:text-sm font-black uppercase tracking-wider text-[#3B1505] truncate">
               {currentTab === "portal-links" ? "Staff Department Portal Links Directory" :
-               currentTab === "school-store" ? "School Store & Material Dispatch Hub" :
                currentTab === "counselling" ? "Parent Counselling & Admission Department" :
                currentTab === "management" ? "Executive Management Portal" :
                currentTab === "inventory-master" ? "Inventory & IT Asset Master" :
@@ -2263,12 +2195,9 @@ export default function App() {
                currentTab === "employee-master" ? "Employee & Staff Master" :
                currentTab === "warranty-tracker" ? "Warranty & Service Contracts" :
                currentTab === "raise-ticket" ? "Service Ticket Management" :
-               currentTab === "transport-dashboard" ? "Transport & Vehicle Management" :
                currentTab === "google-drive" ? "Google Drive Cloud Storage" :
-               currentTab === "cctv-watchdog" ? "CCTV Surveillance Watchdog" :
                currentTab === "analytics" ? "System Analytics & Performance" :
                currentTab === "settings" ? "System Configuration & Settings" :
-               currentTab === "network-speed" ? "Network Speed & Connectivity" :
                "IT Support Dashboard"}
             </h2>
           </div>
@@ -2287,32 +2216,6 @@ export default function App() {
             </button>
           </div>
         </div>
-
-        {/* Firestore Free Quota Notice Banner */}
-        {showQuotaBanner && (
-          <div className="bg-amber-50 dark:bg-amber-950/60 border-b border-amber-300 dark:border-amber-800 px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-slate-800 dark:text-slate-200 text-xs shadow-sm relative z-40 shrink-0">
-            <div className="flex items-center gap-2.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse shrink-0"></span>
-              <p className="font-medium text-slate-800 dark:text-amber-100">
-                <span className="font-bold text-amber-800 dark:text-amber-300">Firestore Free-Tier Daily Quota Reached:</span> Even with a billing account linked, this database stays on free quota until upgraded. Remote phone QR tokens cannot sync across servers until upgraded or daily reset.{" "}
-                <a
-                  href={getFirestoreUpgradeUrl()}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="font-bold underline text-orange-700 dark:text-amber-300 hover:text-orange-900"
-                >
-                  Upgrade Firestore Database →
-                </a>
-              </p>
-            </div>
-            <button
-              onClick={() => setShowQuotaBanner(false)}
-              className="px-2.5 py-1 hover:bg-amber-100 dark:hover:bg-slate-800 rounded text-slate-600 hover:text-slate-900 dark:text-amber-200 dark:hover:text-white transition text-xs font-semibold shrink-0 cursor-pointer"
-            >
-              Dismiss
-            </button>
-          </div>
-        )}
 
         {/* Prominent Warranty Expiration Banner */}
         {showWarrantyBanner && expiringWarranties.length > 0 && (

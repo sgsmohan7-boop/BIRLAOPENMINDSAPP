@@ -23,9 +23,6 @@ const SIDEBAR_FEATURES_CATALOG = [
   { id: "room-master", label: "Room Master", icon: "🏫", desc: "Classroom Hardware Infrastructure", group: "Asset Management" },
   { id: "analytics", label: "Analytics", icon: "📈", desc: "SLA Resolution & Performance Reports", group: "Core IT Operations" },
   { id: "warranty-tracker", label: "Warranty & AMC", icon: "🛡️", desc: "Vendor Warranty & AMC Ledger", group: "Asset Management" },
-  { id: "network-speed", label: "Network Speed", icon: "⚡", desc: "Network Bandwidth Diagnostics", group: "Diagnostics & CCTV" },
-  { id: "cctv-watchdog", label: "CCTV Watchdog Hub", icon: "📹", desc: "CCTV Cameras & NVR Storage", group: "Diagnostics & CCTV" },
-  { id: "transport-dashboard", label: "GPS Transport", icon: "🚚", desc: "Bus Tracking & Driver Routes", group: "Portals & Access" },
   { id: "settings", label: "Settings", icon: "⚙️", desc: "System Configuration & Backups", group: "System Administration" }
 ];
 

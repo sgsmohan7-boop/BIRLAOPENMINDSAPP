@@ -111,7 +111,7 @@ import {
   deduplicateEnquiries
 } from "../utils/storage";
 import { deleteAudioRecordingBlob, formatAudioDuration } from "../utils/audioStorage";
-import { isFirebaseConfigured, syncCollection, fetchCollectionDocs, fetchPendingParentEntriesFromFirestore, saveDocument, deleteDocument, getNextDailyTokenNo, isFirestoreQuotaExhausted, clearQuotaExhausted, getFirestoreUpgradeUrl } from "../utils/firebase";
+import { isFirebaseConfigured, syncCollection, fetchCollectionDocs, fetchPendingParentEntriesFromFirestore, saveDocument, deleteDocument, getNextDailyTokenNo, isFirestoreQuotaExhausted, clearQuotaExhausted } from "../utils/firebase";
 import { printOfficialAdmissionForm } from "../utils/printAdmissionForm";
 import { normalizeCounsellorIdentity } from "../utils/counsellorNormalizer";
 
@@ -911,7 +911,6 @@ export default function CounsellingPortal({
   };
 
   const [isRefreshingDept, setIsRefreshingDept] = useState(false);
-  const [firestoreQuotaExceeded, setFirestoreQuotaExceeded] = useState<boolean>(() => isFirestoreQuotaExhausted());
   const backfilledParentEntriesRef = React.useRef<Set<string>>(new Set());
 
   const pushUnsyncedParentEntriesToCloud = React.useCallback((cloudItems: ParentSelfEntry[], localItems: ParentSelfEntry[]) => {
@@ -956,7 +955,6 @@ export default function CounsellingPortal({
       try {
         const cloudEntries = await fetchCollectionDocs<ParentSelfEntry>("parent_self_entries", true);
         if (Array.isArray(cloudEntries)) {
-          setFirestoreQuotaExceeded(false);
           setParentSelfEntries(prev => {
             const currentLocal = prev || [];
             pushUnsyncedParentEntriesToCloud(cloudEntries, currentLocal);
@@ -964,12 +962,8 @@ export default function CounsellingPortal({
             saveParentSelfEntries(combined);
             return combined;
           });
-        } else {
-          setFirestoreQuotaExceeded(isFirestoreQuotaExhausted());
         }
-      } catch {
-        setFirestoreQuotaExceeded(isFirestoreQuotaExhausted());
-      }
+      } catch {}
     }
 
     // 2. Fallback Express API check (for local dev environment)
@@ -1040,13 +1034,12 @@ export default function CounsellingPortal({
 
     const attachFirestoreListener = () => {
       if (unsubscribeFirestore) return;
-      if (isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
+      if (isFirebaseConfigured()) {
         try {
           unsubscribeFirestore = syncCollection(
             "parent_self_entries",
             (firestoreEntries: any[]) => {
               if (Array.isArray(firestoreEntries)) {
-                setFirestoreQuotaExceeded(false);
                 setParentSelfEntries(prev => {
                   const currentLocal = prev || [];
                   pushUnsyncedParentEntriesToCloud(firestoreEntries, currentLocal);
@@ -1064,28 +1057,27 @@ export default function CounsellingPortal({
       }
     };
 
-    const fetchServerEntries = async () => {
+    const fetchServerEntries = async (includeFirestoreCheck = false) => {
       if (typeof document !== "undefined" && document.hidden) return;
 
-      // 1. Lightweight scoped Firestore pending query (ensures cross-device phone QR tokens appear even if onSnapshot missed/restarted)
-      if (isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
+      // 1. Ensure self-healing real-time onSnapshot listener is attached; only run one-off Firestore query when explicitly requested
+      if (isFirebaseConfigured()) {
         attachFirestoreListener();
-        try {
-          const pendingCloud = await fetchPendingParentEntriesFromFirestore<ParentSelfEntry>();
-          if (Array.isArray(pendingCloud)) {
-            setFirestoreQuotaExceeded(false);
-            if (pendingCloud.length > 0) {
+        if (includeFirestoreCheck && !isFirestoreQuotaExhausted()) {
+          try {
+            const pendingCloud = await fetchPendingParentEntriesFromFirestore<ParentSelfEntry>();
+            if (Array.isArray(pendingCloud) && pendingCloud.length > 0) {
               setParentSelfEntries(prev => {
                 const combined = deduplicateParentEntries([...pendingCloud, ...(prev || [])]);
                 saveParentSelfEntries(combined);
                 return combined;
               });
             }
-          }
-        } catch {}
+          } catch {}
+        }
       }
 
-      // 2. Fallback Express API check (for local container / offline fallback)
+      // 2. Express API check (0 Firestore reads — syncs entries submitted on the same server)
       try {
         const res = await fetch("/api/parent-self-entry");
         if (res.ok) {
@@ -1102,11 +1094,10 @@ export default function CounsellingPortal({
     };
 
     attachFirestoreListener();
-    fetchServerEntries();
+    fetchServerEntries(false);
 
-    // Fast polling fallback (5s when Firestore quota is exhausted, 12s otherwise)
-    const pollMs = isFirestoreQuotaExhausted() ? 5000 : 12000;
-    const interval = setInterval(fetchServerEntries, pollMs);
+    // Express server poll fallback (zero Firestore read cost)
+    const interval = setInterval(() => fetchServerEntries(false), 12000);
 
     const handleRealtimeEntry = (evt?: any) => {
       const localStored = loadParentSelfEntries();
@@ -1120,22 +1111,24 @@ export default function CounsellingPortal({
           return combined;
         });
       }
-      fetchServerEntries();
     };
 
-    const handleQuotaEvent = () => {
-      setFirestoreQuotaExceeded(true);
+    const handleStorageSync = (evt: StorageEvent) => {
+      if (evt.key && evt.key !== "sgs_parent_self_entries") return;
+      const localStored = loadParentSelfEntries();
+      if (localStored.length > 0) {
+        setParentSelfEntries(prev => deduplicateParentEntries([...(prev || []), ...localStored]));
+      }
     };
 
     const handleQuotaCleared = () => {
-      setFirestoreQuotaExceeded(false);
       attachFirestoreListener();
-      fetchServerEntries();
+      fetchServerEntries(true);
     };
 
     const handleVisibilityChange = () => {
       if (typeof document !== "undefined" && !document.hidden) {
-        fetchServerEntries();
+        fetchServerEntries(false);
       }
     };
 
@@ -1152,8 +1145,7 @@ export default function CounsellingPortal({
     }
 
     window.addEventListener("parent_self_entry_added", handleRealtimeEntry);
-    window.addEventListener("storage", handleRealtimeEntry);
-    window.addEventListener("firestore-quota-exhausted", handleQuotaEvent);
+    window.addEventListener("storage", handleStorageSync);
     window.addEventListener("firestore-quota-cleared", handleQuotaCleared);
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
@@ -1162,8 +1154,7 @@ export default function CounsellingPortal({
       if (unsubscribeFirestore) unsubscribeFirestore();
       if (bc) bc.close();
       window.removeEventListener("parent_self_entry_added", handleRealtimeEntry);
-      window.removeEventListener("storage", handleRealtimeEntry);
-      window.removeEventListener("firestore-quota-exhausted", handleQuotaEvent);
+      window.removeEventListener("storage", handleStorageSync);
       window.removeEventListener("firestore-quota-cleared", handleQuotaCleared);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
@@ -4586,40 +4577,6 @@ Warm regards,
               })()}
             </div>
           )}
-        </div>
-      )}
-
-      {/* Firestore Free-Tier Quota Alert for Live Reception Tokens */}
-      {firestoreQuotaExceeded && (
-        <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/60 border-2 border-amber-400 dark:border-amber-700 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-start gap-2.5">
-            <AlertTriangle size={18} className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-            <div className="text-xs space-y-0.5">
-              <p className="font-black text-amber-950 dark:text-amber-200">
-                Firestore Cloud Sync Paused — Free-Tier Daily Read Quota Exceeded (429)
-              </p>
-              <p className="text-amber-800 dark:text-amber-300 font-medium leading-relaxed">
-                Even if billing funds were added, the free-tier database requires clicking Upgrade in Firebase Console before cross-device QR tokens from mobile phones sync live. Until upgraded or daily reset, open the Counsellor Desk on the same Shared App URL (<code className="px-1 py-0.5 bg-amber-200/60 dark:bg-amber-900 rounded font-mono">ais-pre-...</code>) used by the QR code.
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <a
-              href={getFirestoreUpgradeUrl()}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-3 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-black shadow-xs transition-all whitespace-nowrap"
-            >
-              Upgrade Firestore →
-            </a>
-            <button
-              type="button"
-              onClick={handleRefreshDept}
-              className="px-3 py-2 bg-white dark:bg-slate-800 hover:bg-amber-100 dark:hover:bg-slate-700 text-amber-900 dark:text-amber-200 border border-amber-300 dark:border-amber-700 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap"
-            >
-              Retry Sync
-            </button>
-          </div>
         </div>
       )}
 

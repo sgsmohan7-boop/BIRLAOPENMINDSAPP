@@ -8,7 +8,6 @@ import {
   BarChart3, 
   FileText, 
   ShieldAlert, 
-  Zap, 
   Settings, 
   LogOut,
   Download,
@@ -24,8 +23,6 @@ import {
   Sun,
   Moon,
   Sparkles,
-  Video,
-  Truck,
   GraduationCap,
   Award,
   HardDrive,
@@ -36,8 +33,7 @@ import {
   KeyRound,
   Lock,
   Eye,
-  EyeOff,
-  Store
+  EyeOff
 } from "lucide-react";
 import { motion } from "motion/react";
 import AppInstallModal from "./AppInstallModal";
@@ -240,15 +236,11 @@ export default function Sidebar({
     { id: "google-drive", label: "Google Drive (5 TB)", icon: <HardDrive size={18} />, color: "#2563EB", allowed: ["Super Admin", "IT Admin", "Management", "Viewer", "Counsellor"], badge: "5 TB" },
     { id: "cloudflare-r2", label: "Cloudflare R2 Storage", icon: <Cloud size={18} />, color: "#F97316", allowed: ["Super Admin", "IT Admin", "Management", "Viewer", "Counsellor"], badge: "10GB R2" },
     { id: "raise-ticket", label: "Raise Ticket", icon: <PlusCircle size={18} />, color: "#38A169", allowed: ["Super Admin", "IT Admin"] },
-    { id: "school-store", label: "School Store & Dispatches", icon: <Store size={18} />, color: "#DD6B20", allowed: ["Super Admin", "IT Admin"], badge: "Store Master" },
     { id: "inventory", label: "IT & Asset Inventory", icon: <Package size={18} />, color: "#3182CE", allowed: ["Super Admin", "IT Admin"], badge: "IT Assets" },
     { id: "emp-assets", label: "Emp Assets", icon: <Users size={18} />, color: "#3182CE", allowed: ["Super Admin", "IT Admin"] },
     { id: "room-master", label: "Room Master", icon: <School size={18} />, color: "#D69E2E", allowed: ["Super Admin", "IT Admin"] },
     { id: "analytics", label: "Analytics", icon: <BarChart3 size={18} />, color: "#E53E3E", allowed: ["Super Admin", "IT Admin"] },
     { id: "warranty-tracker", label: "Warranty & AMC", icon: <ShieldAlert size={18} />, color: "#D53F8C", allowed: ["Super Admin", "IT Admin"] },
-    { id: "network-speed", label: "Network Speed", icon: <Zap size={18} />, color: "#805AD5", allowed: ["Super Admin", "IT Admin", "Viewer"] },
-    { id: "cctv-watchdog", label: "CCTV Watchdog Hub", icon: <Video size={18} />, color: "#EC4899", allowed: ["Super Admin"] },
-    { id: "transport-dashboard", label: "GPS Transport", icon: <Truck size={18} />, color: "#3182CE", allowed: ["Super Admin", "IT Admin", "Viewer"] },
     { id: "settings", label: "Settings", icon: <Settings size={18} />, color: "#4A5568", allowed: ["Super Admin", "IT Admin", "Viewer"] }
   ];
 

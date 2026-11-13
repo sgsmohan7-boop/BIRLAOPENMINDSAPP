@@ -1223,7 +1223,10 @@ export function loadParentSelfEntries(counsellorId?: string): any[] {
 export function saveParentSelfEntries(entries: any[]): void {
   if (typeof window === "undefined" || !Array.isArray(entries)) return;
   try {
-    localStorage.setItem("sgs_parent_self_entries", JSON.stringify(entries));
+    const serialized = JSON.stringify(entries);
+    if (localStorage.getItem("sgs_parent_self_entries") !== serialized) {
+      localStorage.setItem("sgs_parent_self_entries", serialized);
+    }
   } catch {}
 }
 

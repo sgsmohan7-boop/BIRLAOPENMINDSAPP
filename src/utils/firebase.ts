@@ -271,7 +271,56 @@ export async function signInAsDesktopUser(displayName: string): Promise<Firebase
   }
 }
 
-// Real-Time Syncing Helpers
+const QUOTA_STORAGE_KEY = "sgs_firestore_quota_exhausted";
+const QUOTA_PROJECT_KEY = "sgs_firestore_quota_project";
+
+// Short in-memory-only transient backoff (never persisted in localStorage/sessionStorage)
+let transientBackoffUntil = 0;
+
+// Immediately clear any legacy browser pause flags on load and connect Firestore directly
+if (typeof window !== "undefined") {
+  try {
+    sessionStorage.removeItem(QUOTA_STORAGE_KEY);
+    localStorage.removeItem(QUOTA_STORAGE_KEY);
+    sessionStorage.removeItem(QUOTA_PROJECT_KEY);
+    localStorage.removeItem(QUOTA_PROJECT_KEY);
+    enableNetwork(db).catch(() => {});
+  } catch {}
+}
+
+export function getFirestoreUpgradeUrl(): string {
+  return `https://console.firebase.google.com/project/${firebaseConfig.projectId}/firestore/databases/${firebaseConfig.firestoreDatabaseId}/data?openUpgradeDialog=true`;
+}
+
+export function isFirestoreQuotaExhausted(): boolean {
+  if (transientBackoffUntil > 0 && Date.now() >= transientBackoffUntil) {
+    transientBackoffUntil = 0;
+  }
+  return transientBackoffUntil > Date.now();
+}
+
+export function clearQuotaExhausted() {
+  const wasPaused = transientBackoffUntil > 0;
+  transientBackoffUntil = 0;
+  if (typeof window !== "undefined") {
+    try {
+      sessionStorage.removeItem(QUOTA_STORAGE_KEY);
+      localStorage.removeItem(QUOTA_STORAGE_KEY);
+      sessionStorage.removeItem(QUOTA_PROJECT_KEY);
+      localStorage.removeItem(QUOTA_PROJECT_KEY);
+      if (wasPaused) {
+        window.dispatchEvent(new CustomEvent("firestore-quota-cleared"));
+      }
+    } catch {}
+  }
+}
+
+export function markQuotaExhausted() {
+  // Brief 15s in-memory breather before automatic background reconnect
+  transientBackoffUntil = Date.now() + 15000;
+}
+
+// Real-Time Syncing Helpers with Automatic Background Self-Healing (No Manual Retry Needed)
 export function syncCollection<T>(
   collectionName: string,
   onUpdate: (data: T[]) => void,
@@ -282,98 +331,91 @@ export function syncCollection<T>(
     onUpdate(fallbackData);
   }
 
-  if (!isFirebaseConfigured() || isFirestoreQuotaExhausted()) {
+  if (!isFirebaseConfigured()) {
     return () => {};
   }
 
-  const colRef = collection(db, collectionName);
-  return onSnapshot(
-    colRef,
-    (snapshot) => {
-      const items: T[] = [];
-      snapshot.forEach((d) => {
-        items.push({ id: d.id, ...d.data() } as T);
-      });
-      // Deliver authoritative live updates from Firestore
-      onUpdate(items);
-    },
-    (error) => {
-      const msg = error instanceof Error ? error.message : String(error || "");
-      if (
-        msg.includes("resource-exhausted") ||
-        msg.includes("Quota limit exceeded") ||
-        msg.includes("quota metric") ||
-        (error as any)?.code === "resource-exhausted"
-      ) {
-        markQuotaExhausted();
+  let disposed = false;
+  let activeUnsub: (() => void) | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const scheduleReconnect = (delayMs: number) => {
+    if (disposed || reconnectTimer) return;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      attach();
+    }, delayMs);
+  };
+
+  const attach = () => {
+    if (disposed) return;
+    if (isFirestoreQuotaExhausted()) {
+      const waitMs = Math.max(2000, transientBackoffUntil - Date.now() + 250);
+      scheduleReconnect(waitMs);
+      return;
+    }
+
+    if (activeUnsub) {
+      try {
+        activeUnsub();
+      } catch {}
+      activeUnsub = null;
+    }
+
+    const colRef = collection(db, collectionName);
+    activeUnsub = onSnapshot(
+      colRef,
+      (snapshot) => {
+        if (disposed) return;
+        clearQuotaExhausted();
+        const items: T[] = [];
+        snapshot.forEach((d) => {
+          items.push({ id: d.id, ...d.data() } as T);
+        });
+        // Deliver authoritative live updates from Firestore
+        onUpdate(items);
+      },
+      (error) => {
+        if (disposed) return;
+        const msg = error instanceof Error ? error.message : String(error || "");
+        if (
+          msg.includes("resource-exhausted") ||
+          msg.includes("Quota limit exceeded") ||
+          msg.includes("quota metric") ||
+          (error as any)?.code === "resource-exhausted"
+        ) {
+          markQuotaExhausted();
+        }
+        if (activeUnsub) {
+          try {
+            activeUnsub();
+          } catch {}
+          activeUnsub = null;
+        }
+        if (fallbackData && fallbackData.length > 0) {
+          onUpdate(fallbackData);
+        }
+        // Automatically reconnect silently in background without requiring manual Retry Sync
+        scheduleReconnect(20000);
       }
-      if (fallbackData && fallbackData.length > 0) {
-        onUpdate(fallbackData);
-      }
+    );
+  };
+
+  attach();
+
+  return () => {
+    disposed = true;
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
     }
-  );
-}
-
-const QUOTA_STORAGE_KEY = "sgs_firestore_quota_exhausted";
-const QUOTA_PROJECT_KEY = "sgs_firestore_quota_project";
-
-export function getFirestoreUpgradeUrl(): string {
-  return `https://console.firebase.google.com/project/${firebaseConfig.projectId}/firestore/databases/${firebaseConfig.firestoreDatabaseId}/data?openUpgradeDialog=true`;
-}
-
-export function isFirestoreQuotaExhausted(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    const raw = sessionStorage.getItem(QUOTA_STORAGE_KEY) || localStorage.getItem(QUOTA_STORAGE_KEY);
-    if (!raw) return false;
-    const storedProject = sessionStorage.getItem(QUOTA_PROJECT_KEY) || localStorage.getItem(QUOTA_PROJECT_KEY);
-    if (storedProject !== firebaseConfig.projectId) {
-      sessionStorage.removeItem(QUOTA_STORAGE_KEY);
-      localStorage.removeItem(QUOTA_STORAGE_KEY);
-      sessionStorage.removeItem(QUOTA_PROJECT_KEY);
-      localStorage.removeItem(QUOTA_PROJECT_KEY);
-      return false;
+    if (activeUnsub) {
+      try {
+        activeUnsub();
+      } catch {}
+      activeUnsub = null;
     }
-    const timestamp = parseInt(raw, 10);
-    // Quota re-check cooldown: 5 minutes
-    if (Date.now() - timestamp > 5 * 60 * 1000) {
-      sessionStorage.removeItem(QUOTA_STORAGE_KEY);
-      localStorage.removeItem(QUOTA_STORAGE_KEY);
-      return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function clearQuotaExhausted() {
-  if (typeof window === "undefined") return;
-  try {
-    sessionStorage.removeItem(QUOTA_STORAGE_KEY);
-    localStorage.removeItem(QUOTA_STORAGE_KEY);
-    sessionStorage.removeItem(QUOTA_PROJECT_KEY);
-    localStorage.removeItem(QUOTA_PROJECT_KEY);
-    window.dispatchEvent(new CustomEvent("firestore-quota-cleared"));
-  } catch {}
-}
-
-export function markQuotaExhausted() {
-  if (typeof window === "undefined") return;
-  try {
-    sessionStorage.setItem(QUOTA_STORAGE_KEY, String(Date.now()));
-    localStorage.setItem(QUOTA_STORAGE_KEY, String(Date.now()));
-    sessionStorage.setItem(QUOTA_PROJECT_KEY, firebaseConfig.projectId);
-    localStorage.setItem(QUOTA_PROJECT_KEY, firebaseConfig.projectId);
-    window.dispatchEvent(new CustomEvent("firestore-quota-exhausted"));
-  } catch {}
-}
-
-// Ensure Firestore network is connected on startup
-if (typeof window !== "undefined") {
-  try {
-    enableNetwork(db).catch(() => {});
-  } catch {}
+  };
 }
 
 // Clean undefined values so Firestore setDoc never throws 'Unsupported field value: undefined'
@@ -429,7 +471,7 @@ export function prepareEnquiryForFirestore(targetEnquiry: CounsellingEnquiry): a
   return firestoreEnquiry;
 }
 
-// Fetch authoritative live documents directly from Firestore Server (with cache fallback)
+// Fetch documents from Firestore (uses smart SDK cache+live connection by default; forceRetry forces server fetch)
 export async function fetchCollectionDocs<T>(collectionName: string, forceRetry = false): Promise<T[] | null> {
   if (!isFirebaseConfigured()) return null;
   if (!forceRetry && isFirestoreQuotaExhausted()) return null;
@@ -438,7 +480,8 @@ export async function fetchCollectionDocs<T>(collectionName: string, forceRetry 
     try {
       enableNetwork(db).catch(() => {});
     } catch {}
-    const snap = await getDocsFromServer(colRef);
+    const snap = forceRetry ? await getDocsFromServer(colRef) : await getDocs(colRef);
+    clearQuotaExhausted();
     const items: T[] = [];
     snap.forEach((d) => {
       items.push({ id: d.id, ...d.data() } as T);
@@ -455,25 +498,19 @@ export async function fetchCollectionDocs<T>(collectionName: string, forceRetry 
       markQuotaExhausted();
       return null;
     }
-    try {
-      const snap = await getDocs(colRef);
-      const items: T[] = [];
-      snap.forEach((d) => {
-        items.push({ id: d.id, ...d.data() } as T);
-      });
-      return items;
-    } catch (fallbackErr: any) {
-      const msg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr || "");
-      if (
-        msg.includes("resource-exhausted") ||
-        msg.includes("Quota limit exceeded") ||
-        msg.includes("quota metric") ||
-        fallbackErr?.code === "resource-exhausted"
-      ) {
-        markQuotaExhausted();
+    if (forceRetry) {
+      try {
+        const snap = await getDocs(colRef);
+        const items: T[] = [];
+        snap.forEach((d) => {
+          items.push({ id: d.id, ...d.data() } as T);
+        });
+        return items;
+      } catch {
+        return null;
       }
-      return null;
     }
+    return null;
   }
 }
 
@@ -483,22 +520,8 @@ export async function fetchPendingParentEntriesFromFirestore<T>(): Promise<T[] |
   try {
     const colRef = collection(db, "parent_self_entries");
     const pendingQuery = query(colRef, where("status", "==", "pending"));
-    let snap;
-    try {
-      snap = await getDocsFromServer(pendingQuery);
-    } catch (serverErr: any) {
-      const srvMsg = serverErr instanceof Error ? serverErr.message : String(serverErr || "");
-      if (
-        srvMsg.includes("resource-exhausted") ||
-        srvMsg.includes("Quota limit exceeded") ||
-        srvMsg.includes("quota metric") ||
-        serverErr?.code === "resource-exhausted"
-      ) {
-        markQuotaExhausted();
-        return null;
-      }
-      snap = await getDocs(pendingQuery);
-    }
+    const snap = await getDocs(pendingQuery);
+    clearQuotaExhausted();
     const items: T[] = [];
     snap.forEach((d) => {
       items.push({ id: d.id, ...d.data() } as T);
@@ -521,19 +544,8 @@ export async function fetchPendingParentEntriesFromFirestore<T>(): Promise<T[] |
 // Global Single Item Save and Overwrite Helpers
 export async function saveDocument(collectionName: string, id: string, data: any): Promise<boolean> {
   if (!isFirebaseConfigured()) return false;
-  // Probe Firestore on write only if at least 15s has elapsed since last 429 error
   if (isFirestoreQuotaExhausted()) {
-    try {
-      const raw = sessionStorage.getItem(QUOTA_STORAGE_KEY) || localStorage.getItem(QUOTA_STORAGE_KEY);
-      const ts = raw ? parseInt(raw, 10) : 0;
-      if (Date.now() - ts < 15000) {
-        return false;
-      }
-      clearQuotaExhausted();
-      enableNetwork(db).catch(() => {});
-    } catch {
-      return false;
-    }
+    return false;
   }
   const rawId = id && String(id).trim() ? String(id).trim() : `doc_${Date.now()}`;
   const docId = rawId.replace(/\//g, "_");
@@ -541,6 +553,7 @@ export async function saveDocument(collectionName: string, id: string, data: any
   try {
     const sanitized = cleanForFirestore(data);
     await setDoc(doc(db, collectionName, docId), sanitized, { merge: true });
+    clearQuotaExhausted();
     return true;
   } catch (error: any) {
     const msg = error instanceof Error ? error.message : String(error || "");
@@ -567,6 +580,7 @@ export async function deleteDocument(collectionName: string, id: string) {
   const path = `${collectionName}/${docId}`;
   try {
     await deleteDoc(doc(db, collectionName, docId));
+    clearQuotaExhausted();
   } catch (error: any) {
     const msg = error instanceof Error ? error.message : String(error || "");
     if (

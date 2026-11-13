@@ -18,7 +18,6 @@ import {
   ExternalLink,
   Info,
   X,
-  Bus,
   User,
   HeartHandshake,
   KeyRound,
@@ -50,7 +49,7 @@ interface LoginProps {
 
 export default function Login({ onLogin, theme = "light", toggleTheme, counsellorAccounts, managementAccounts, onOpenParentKiosk }: LoginProps) {
   // Check if URL explicitly locks to a specific department portal (e.g. ?portal=management, /counselling, ?portal=it, or custom domain)
-  const lockedPortal = React.useMemo<"teacher" | "admin" | "driver" | "student" | "counsellor" | "management" | "it" | null>(() => {
+  const lockedPortal = React.useMemo<"teacher" | "admin" | "student" | "counsellor" | "management" | "it" | null>(() => {
     if (typeof window === "undefined") return null;
     const params = new URLSearchParams(window.location.search);
     const p = (params.get("portal") || params.get("mode") || "").toLowerCase();
@@ -62,7 +61,6 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
     if (p === "counsellor" || p === "counselling") return "counsellor";
     if (p === "it" || p === "it-person" || p === "itstaff" || p === "itdesk" || p === "it-desk") return "it";
     if (p === "teacher" || params.get("teacher") === "true") return "teacher";
-    if (p === "driver") return "driver";
     if (p === "student" || p === "parent") return "student";
     if (p === "admin" || p === "superadmin") return "admin";
 
@@ -71,7 +69,6 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
     if (path === "counselling" || path === "counsellor") return "counsellor";
     if (path === "it" || path === "it-person" || path === "itstaff") return "it";
     if (path === "teacher" || path === "teachers") return "teacher";
-    if (path === "driver" || path === "drivers") return "driver";
     if (path === "student" || path === "parent" || path === "students") return "student";
     if (path === "admin" || path === "superadmin") return "admin";
 
@@ -79,7 +76,6 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
     if (host.includes("counselling") || host.startsWith("counsellor")) return "counsellor";
     if (host.includes("management")) return "management";
     if (host.includes("teacher")) return "teacher";
-    if (host.includes("driver")) return "driver";
     if (host.includes("student") || host.includes("parent")) return "student";
     if (host.includes("admin")) return "admin";
 
@@ -90,7 +86,7 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
   const isTeacherLocked = lockedPortal === "teacher";
 
   const [branch, setBranch] = useState<SchoolBranch>("Birla Open Minds International School");
-  const [portalRole, setPortalRole] = useState<"teacher" | "admin" | "driver" | "student" | "counsellor" | "management" | "it">(() => {
+  const [portalRole, setPortalRole] = useState<"teacher" | "admin" | "student" | "counsellor" | "management" | "it">(() => {
     if (lockedPortal) return lockedPortal;
     // Default to Parent Counselling Desk for general public visitors instead of exposing Admin
     return "counsellor";
@@ -1101,19 +1097,6 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
           ],
           type: "teacher"
         };
-      case "driver":
-        return {
-          badgeTitle: "BIRLA SUPPORT",
-          subtitle: "Birla IT Solutions",
-          title: "Transport & Fleet Desk",
-          bullets: [
-            "Live Google Maps Bus Tracking",
-            "Vehicle GPS & Route Logs",
-            "Emergency Transport Support",
-            "Speed & Driver Alerts"
-          ],
-          type: "driver"
-        };
       case "student":
         return {
           badgeTitle: "BIRLA SUPPORT",
@@ -1216,7 +1199,7 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
 
             {/* 3D Isometric Illustration Graphic */}
             <div className="pt-2 flex justify-center">
-              {panelContent.type === "driver" || panelContent.type === "student" ? (
+              {panelContent.type === "student" ? (
                 <svg className="w-full h-44 max-w-[250px] drop-shadow-2xl" viewBox="0 0 300 220" fill="none">
                   <path d="M150 20 L280 85 L150 150 L20 85 Z" fill="url(#isoGrid1)" opacity="0.4" />
                   <path d="M90 120 L160 85 L210 110 L140 145 Z" fill="#2563EB" />
@@ -1289,7 +1272,7 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
         <div className="md:w-1/2 p-10 flex flex-col justify-center dark:text-slate-100">
           
           {/* CASE 1: Locked Portal Mode (When opened via dedicated link) */}
-          {isPortalLocked && !["management", "counsellor", "teacher", "driver", "student", "it"].includes(portalRole) && (
+          {isPortalLocked && !["management", "counsellor", "teacher", "student", "it"].includes(portalRole) && (
             <div className="mb-5 p-3 bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 rounded-xl flex items-center justify-between gap-3 shadow-xs">
               <div className="flex items-center gap-2.5 min-w-0">
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
@@ -1301,7 +1284,6 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
                     {portalRole === "management" ? "Executive Management & Leadership Only" :
                      portalRole === "counsellor" ? "Parent Admissions & Counselling Only" :
                      portalRole === "teacher" ? "Classroom Teacher Support Only" :
-                     portalRole === "driver" ? "Bus Driver Fleet GPS Only" :
                      portalRole === "student" ? "Parent & Student Tracking Only" : "IT Administrator Access"} • Locked Single Sign-On
                   </p>
                 </div>
@@ -1439,22 +1421,6 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
                   <button
                     type="button"
                     onClick={() => {
-                      setPortalRole("driver");
-                      setError("");
-                    }}
-                    className={`flex-1 min-w-[60px] flex items-center justify-center gap-1.5 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                      portalRole === "driver"
-                        ? "bg-[#2563EB] text-white shadow-md font-sans"
-                        : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/60"
-                    }`}
-                  >
-                    <Bus size={15} />
-                    <span>Driver</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
                       setPortalRole("student");
                       setError("");
                     }}
@@ -1499,7 +1465,6 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
               <h2 className="text-xl md:text-2xl font-black text-[#0F172A]">
                 {portalRole === "teacher" 
                   ? "Teacher support access window" 
-                  : portalRole === "driver" ? "Transport Fleet Login" 
                   : portalRole === "student" ? "Parent / Student Portal"
                   : portalRole === "counsellor" ? "Parent Counselling & Admissions Desk"
                   : portalRole === "it" ? "IT Person Workspace Portal"
@@ -1508,7 +1473,6 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
               <p className="text-xs font-semibold text-[#475569] mt-1">
                 {portalRole === "teacher"
                   ? "Enter your name and choose branch to report issues."
-                  : portalRole === "driver" ? "Enter your ID to start live GPS tracking."
                   : portalRole === "student" ? "Track your child's bus and get proximity alerts."
                   : portalRole === "counsellor" ? "Authorized Staff Login. Enter the username and password created by Admin in the Main App."
                   : portalRole === "it" ? "Authorized IT Personnel Single Sign-On. Enter your system credentials."
@@ -1844,35 +1808,6 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
                   ) : (
                     <>👩‍🏫 ENTER SUPPORT DESK APP</>
                   )}
-                </button>
-              </div>
-            </form>
-          ) : portalRole === "driver" ? (
-            <form onSubmit={(e) => {
-              e.preventDefault();
-              if (!teacherName.trim()) { setError("Please enter your name"); return; }
-              onLogin(branch, `driver_${teacherName.trim().replace(/\s+/g, '_')}@school.com`, "Driver");
-            }} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1">
-                  Driver Name
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={teacherName}
-                  onChange={(e) => setTeacherName(e.target.value)}
-                  placeholder="E.g. Ramesh"
-                  className="w-full py-2.5 px-3 border border-slate-200 dark:border-slate-800 rounded-lg text-sm bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-[#F6AD55]"
-                />
-              </div>
-              <div className="pt-2">
-                <button
-                  type="submit"
-                  disabled={isLoading}
-                  className="w-full py-3 bg-[#F6AD55] hover:bg-[#ED8936] disabled:bg-slate-400 text-white rounded-lg text-sm font-bold tracking-wide transition-all flex items-center justify-center gap-2 shadow cursor-pointer"
-                >
-                  <Bus size={18} /> OPEN GPS TRACKER
                 </button>
               </div>
             </form>

@@ -7,7 +7,6 @@ import {
   Award, 
   HeartHandshake, 
   GraduationCap, 
-  Bus, 
   User, 
   ShieldCheck, 
   Sparkles,
@@ -89,8 +88,8 @@ export default function PortalLinksModal({ isOpen, onClose, theme = "light", isE
       customSubdomain: `admin.${customBaseDomain.trim() || 'birlaopenminds.com'}`,
       shortUrlSuggestion: "bit.ly/birla-admin",
       roleDesc: "Super Admin & IT System Administrators",
-      securityNote: "👑 Master Control Hub: Has access to ALL portals, audit tools, 5TB Google Drive, CCTV Watchdog, and can generate links.",
-      features: ["Full Control of All 5 Department Portals", "Google Drive 5TB & Cloudflare R2 Management", "CCTV Surveillance Watchdog & Warranty AMC Master"]
+      securityNote: "👑 Master Control Hub: Has access to ALL portals, audit tools, 5TB Google Drive, Cloudflare R2, and can generate links.",
+      features: ["Full Control of All Department Portals", "Google Drive 5TB & Cloudflare R2 Management", "Warranty AMC Master & Asset Inventory"]
     },
     {
       id: "management",
@@ -106,7 +105,7 @@ export default function PortalLinksModal({ isOpen, onClose, theme = "light", isE
       customSubdomain: `management.${customBaseDomain.trim() || 'birlaopenminds.com'}`,
       shortUrlSuggestion: "bit.ly/birla-management",
       roleDesc: "Managing Director, Principal, Audit Lead & Leadership Committee",
-      securityNote: "🔒 Locked to Management Only: Switcher tabs and other portals are completely hidden. Users cannot enter Admin or Driver portals.",
+      securityNote: "🔒 Locked to Management Only: Switcher tabs and other portals are completely hidden. Users cannot enter Admin or Counsellor portals.",
       features: ["Parent Meeting Voice Audits & Audio Playback", "Auto-Generated .txt Minutes & DIARIZED Transcripts", "Counsellor Performance & Conversion Board"]
     },
     {
@@ -142,23 +141,6 @@ export default function PortalLinksModal({ isOpen, onClose, theme = "light", isE
       roleDesc: "Teaching Staff & Classroom Coordinators",
       securityNote: "🔒 Locked to Teacher Only: Passwordless ticket reporting. No access to sensitive school assets or admin tools.",
       features: ["1-Click Classroom Issue Ticket Raising", "Live Ticket Status & Technician Updates", "Mobile-Optimized PWA Friendly"]
-    },
-    {
-      id: "driver",
-      title: "Transport Fleet & Driver Portal",
-      departmentLabel: "Transport Fleet Operations",
-      icon: <Bus className="w-5 h-5 text-amber-600 dark:text-amber-400" />,
-      color: "from-amber-600 to-yellow-600",
-      border: "border-amber-200 dark:border-amber-900/50",
-      bg: "bg-amber-50/60 dark:bg-amber-950/20",
-      path: "/driver",
-      queryParam: "?portal=driver",
-      customSingleDomain: "birlaopenmindsbus.com",
-      customSubdomain: `bus.${customBaseDomain.trim() || 'birlaopenminds.com'}`,
-      shortUrlSuggestion: "bit.ly/birla-bus",
-      roleDesc: "School Bus Drivers & Transport Coordinators",
-      securityNote: "🔒 Locked to Driver Only: Driver location transmitter only. No other departments visible.",
-      features: ["Real-time Bus GPS Coordinate Streaming", "Route Checkpoints & Speed Alerts", "Instant Parent Arrival Notification Trigger"]
     },
     {
       id: "student",
