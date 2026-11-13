@@ -324,16 +324,16 @@ export function getFirestoreUpgradeUrl(): string {
 export function isFirestoreQuotaExhausted(): boolean {
   if (typeof window === "undefined") return false;
   try {
+    const raw = sessionStorage.getItem(QUOTA_STORAGE_KEY) || localStorage.getItem(QUOTA_STORAGE_KEY);
+    if (!raw) return false;
     const storedProject = sessionStorage.getItem(QUOTA_PROJECT_KEY) || localStorage.getItem(QUOTA_PROJECT_KEY);
-    if (storedProject && storedProject !== firebaseConfig.projectId) {
+    if (storedProject !== firebaseConfig.projectId) {
       sessionStorage.removeItem(QUOTA_STORAGE_KEY);
       localStorage.removeItem(QUOTA_STORAGE_KEY);
       sessionStorage.removeItem(QUOTA_PROJECT_KEY);
       localStorage.removeItem(QUOTA_PROJECT_KEY);
       return false;
     }
-    const raw = sessionStorage.getItem(QUOTA_STORAGE_KEY) || localStorage.getItem(QUOTA_STORAGE_KEY);
-    if (!raw) return false;
     const timestamp = parseInt(raw, 10);
     // Quota re-check cooldown: 5 minutes
     if (Date.now() - timestamp > 5 * 60 * 1000) {
@@ -354,6 +354,7 @@ export function clearQuotaExhausted() {
     localStorage.removeItem(QUOTA_STORAGE_KEY);
     sessionStorage.removeItem(QUOTA_PROJECT_KEY);
     localStorage.removeItem(QUOTA_PROJECT_KEY);
+    window.dispatchEvent(new CustomEvent("firestore-quota-cleared"));
   } catch {}
 }
 
@@ -473,6 +474,47 @@ export async function fetchCollectionDocs<T>(collectionName: string, forceRetry 
       }
       return null;
     }
+  }
+}
+
+// Fetch only pending reception/online parent tokens from Firestore (minimal read units)
+export async function fetchPendingParentEntriesFromFirestore<T>(): Promise<T[] | null> {
+  if (!isFirebaseConfigured() || isFirestoreQuotaExhausted()) return null;
+  try {
+    const colRef = collection(db, "parent_self_entries");
+    const pendingQuery = query(colRef, where("status", "==", "pending"));
+    let snap;
+    try {
+      snap = await getDocsFromServer(pendingQuery);
+    } catch (serverErr: any) {
+      const srvMsg = serverErr instanceof Error ? serverErr.message : String(serverErr || "");
+      if (
+        srvMsg.includes("resource-exhausted") ||
+        srvMsg.includes("Quota limit exceeded") ||
+        srvMsg.includes("quota metric") ||
+        serverErr?.code === "resource-exhausted"
+      ) {
+        markQuotaExhausted();
+        return null;
+      }
+      snap = await getDocs(pendingQuery);
+    }
+    const items: T[] = [];
+    snap.forEach((d) => {
+      items.push({ id: d.id, ...d.data() } as T);
+    });
+    return items;
+  } catch (err: any) {
+    const msg = err instanceof Error ? err.message : String(err || "");
+    if (
+      msg.includes("resource-exhausted") ||
+      msg.includes("Quota limit exceeded") ||
+      msg.includes("quota metric") ||
+      err?.code === "resource-exhausted"
+    ) {
+      markQuotaExhausted();
+    }
+    return null;
   }
 }
 

@@ -111,7 +111,7 @@ import {
   deduplicateEnquiries
 } from "../utils/storage";
 import { deleteAudioRecordingBlob, formatAudioDuration } from "../utils/audioStorage";
-import { isFirebaseConfigured, syncCollection, fetchCollectionDocs, saveDocument, deleteDocument, getNextDailyTokenNo, isFirestoreQuotaExhausted, clearQuotaExhausted, getFirestoreUpgradeUrl } from "../utils/firebase";
+import { isFirebaseConfigured, syncCollection, fetchCollectionDocs, fetchPendingParentEntriesFromFirestore, saveDocument, deleteDocument, getNextDailyTokenNo, isFirestoreQuotaExhausted, clearQuotaExhausted, getFirestoreUpgradeUrl } from "../utils/firebase";
 import { printOfficialAdmissionForm } from "../utils/printAdmissionForm";
 import { normalizeCounsellorIdentity } from "../utils/counsellorNormalizer";
 
@@ -1038,8 +1038,54 @@ export default function CounsellingPortal({
   React.useEffect(() => {
     let unsubscribeFirestore: (() => void) | undefined;
 
+    const attachFirestoreListener = () => {
+      if (unsubscribeFirestore) return;
+      if (isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
+        try {
+          unsubscribeFirestore = syncCollection(
+            "parent_self_entries",
+            (firestoreEntries: any[]) => {
+              if (Array.isArray(firestoreEntries)) {
+                setFirestoreQuotaExceeded(false);
+                setParentSelfEntries(prev => {
+                  const currentLocal = prev || [];
+                  pushUnsyncedParentEntriesToCloud(firestoreEntries, currentLocal);
+                  const combined = deduplicateParentEntries([...firestoreEntries, ...currentLocal]);
+                  saveParentSelfEntries(combined);
+                  return combined;
+                });
+              }
+            },
+            []
+          );
+        } catch (err) {
+          console.warn("Firestore parent_self_entries sync notice:", err);
+        }
+      }
+    };
+
     const fetchServerEntries = async () => {
       if (typeof document !== "undefined" && document.hidden) return;
+
+      // 1. Lightweight scoped Firestore pending query (ensures cross-device phone QR tokens appear even if onSnapshot missed/restarted)
+      if (isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
+        attachFirestoreListener();
+        try {
+          const pendingCloud = await fetchPendingParentEntriesFromFirestore<ParentSelfEntry>();
+          if (Array.isArray(pendingCloud)) {
+            setFirestoreQuotaExceeded(false);
+            if (pendingCloud.length > 0) {
+              setParentSelfEntries(prev => {
+                const combined = deduplicateParentEntries([...pendingCloud, ...(prev || [])]);
+                saveParentSelfEntries(combined);
+                return combined;
+              });
+            }
+          }
+        } catch {}
+      }
+
+      // 2. Fallback Express API check (for local container / offline fallback)
       try {
         const res = await fetch("/api/parent-self-entry");
         if (res.ok) {
@@ -1055,34 +1101,11 @@ export default function CounsellingPortal({
       } catch {}
     };
 
+    attachFirestoreListener();
     fetchServerEntries();
 
-    // Real-time Firestore subscription so any phone scan or status transition instantly updates across all devices
-    if (isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
-      try {
-        unsubscribeFirestore = syncCollection(
-          "parent_self_entries",
-          (firestoreEntries: any[]) => {
-            if (Array.isArray(firestoreEntries)) {
-              setFirestoreQuotaExceeded(false);
-              setParentSelfEntries(prev => {
-                const currentLocal = prev || [];
-                pushUnsyncedParentEntriesToCloud(firestoreEntries, currentLocal);
-                const combined = deduplicateParentEntries([...firestoreEntries, ...currentLocal]);
-                saveParentSelfEntries(combined);
-                return combined;
-              });
-            }
-          },
-          []
-        );
-      } catch (err) {
-        console.warn("Firestore parent_self_entries sync notice:", err);
-      }
-    }
-
-    // Fast polling fallback (5s when Firestore quota is exhausted, 15s otherwise)
-    const pollMs = isFirestoreQuotaExhausted() ? 5000 : 15000;
+    // Fast polling fallback (5s when Firestore quota is exhausted, 12s otherwise)
+    const pollMs = isFirestoreQuotaExhausted() ? 5000 : 12000;
     const interval = setInterval(fetchServerEntries, pollMs);
 
     const handleRealtimeEntry = (evt?: any) => {
@@ -1104,6 +1127,18 @@ export default function CounsellingPortal({
       setFirestoreQuotaExceeded(true);
     };
 
+    const handleQuotaCleared = () => {
+      setFirestoreQuotaExceeded(false);
+      attachFirestoreListener();
+      fetchServerEntries();
+    };
+
+    const handleVisibilityChange = () => {
+      if (typeof document !== "undefined" && !document.hidden) {
+        fetchServerEntries();
+      }
+    };
+
     let bc: BroadcastChannel | null = null;
     if (typeof BroadcastChannel !== "undefined") {
       try {
@@ -1119,6 +1154,8 @@ export default function CounsellingPortal({
     window.addEventListener("parent_self_entry_added", handleRealtimeEntry);
     window.addEventListener("storage", handleRealtimeEntry);
     window.addEventListener("firestore-quota-exhausted", handleQuotaEvent);
+    window.addEventListener("firestore-quota-cleared", handleQuotaCleared);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       clearInterval(interval);
@@ -1127,6 +1164,8 @@ export default function CounsellingPortal({
       window.removeEventListener("parent_self_entry_added", handleRealtimeEntry);
       window.removeEventListener("storage", handleRealtimeEntry);
       window.removeEventListener("firestore-quota-exhausted", handleQuotaEvent);
+      window.removeEventListener("firestore-quota-cleared", handleQuotaCleared);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, []);
 
