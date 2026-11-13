@@ -10,7 +10,8 @@
   },
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build",
+    "build": "node scripts/patch-firestore.cjs && vite build",
+    "postinstall": "node scripts/patch-firestore.cjs",
     "start": "node server.ts",
     "lint": "tsc --noEmit"
   },

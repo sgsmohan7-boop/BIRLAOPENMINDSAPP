@@ -248,7 +248,7 @@ export default function GoogleDriveManager({
         setDomainAuthError({
           show: true,
           domain,
-          projectId: "project-0a48d5bf-f17b-4b14-8c2",
+          projectId: "gen-lang-client-0696149135",
           message: err.message || "Domain is not authorized in Firebase Console"
         });
       } else if (err.code !== 'auth/popup-closed-by-user') {

@@ -25,6 +25,7 @@ export default defineConfig(() => {
     },
     plugins: [react(), tailwindcss()],
     optimizeDeps: {
+      force: true,
       include: [
         'react',
         'react-dom',

@@ -74,6 +74,8 @@ import {
   testFirestoreConnection,
   purgeAllCollectionsFromFirebase,
   isFirestoreQuotaExhausted,
+  clearQuotaExhausted,
+  getFirestoreUpgradeUrl,
   fetchCollectionDocs,
   prepareEnquiryForFirestore
 } from "./utils/firebase";
@@ -278,8 +280,9 @@ export default function App() {
   const [isPortalLinksModalOpen, setIsPortalLinksModalOpen] = useState(false);
   const [isAppInstallModalOpen, setIsAppInstallModalOpen] = useState(false);
 
-  // Real-time server pull for accounts on load
+  // Real-time server pull for accounts and counselling data on authenticated load (never on Parent Kiosk mobile QR form)
   useEffect(() => {
+    if (isParentKioskMode || !isLoggedIn) return;
     let active = true;
     const fetchServerAccounts = async () => {
       try {
@@ -320,7 +323,7 @@ export default function App() {
 
     const fetchInitialCounselling = async () => {
       // 1. Live Firestore initial pull (Works on Vercel & all Cloud environments)
-      if (isFirebaseConfigured()) {
+      if (isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
         try {
           const [cloudDeletedDocs, cloudEnquiries, cloudAccounts, cloudParentEntries] = await Promise.all([
             fetchCollectionDocs<{ id: string; enquiryNo?: string }>("deleted_counselling_forms"),
@@ -471,22 +474,18 @@ export default function App() {
     fetchInitialCounselling();
 
     return () => { active = false; };
-  }, []);
+  }, [isLoggedIn, isParentKioskMode]);
 
   // Expiring Warranty states
   const [expiringWarranties, setExpiringWarranties] = useState<WarrantyContract[]>([]);
   const [showWarrantyBanner, setShowWarrantyBanner] = useState(false);
-  const [showQuotaBanner, setShowQuotaBanner] = useState(false);
+  const [showQuotaBanner, setShowQuotaBanner] = useState(() => isFirestoreQuotaExhausted());
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [isWiping, setIsWiping] = useState(false);
   const [isSyncRefreshing, setIsSyncRefreshing] = useState(false);
 
   useEffect(() => {
-    // Reset any stale quota block from previous sessions
-    if (typeof window !== "undefined") {
-      sessionStorage.removeItem("sgs_firestore_quota_exhausted");
-      localStorage.removeItem("sgs_firestore_quota_exhausted");
-    }
+    setShowQuotaBanner(isFirestoreQuotaExhausted());
     const handleQuota = () => setShowQuotaBanner(true);
     window.addEventListener("firestore-quota-exhausted", handleQuota);
     return () => window.removeEventListener("firestore-quota-exhausted", handleQuota);
@@ -570,13 +569,17 @@ export default function App() {
 
       // 2. Direct Live Firestore Pull + Bidirectional Unsynced Backfill (Works on Vercel & all Cloud deployments)
       if (isFirebaseConfigured()) {
+        clearQuotaExhausted();
         try {
           const [cloudDeletedDocs, cloudEnquiries, cloudAccounts, cloudParentEntries] = await Promise.all([
-            fetchCollectionDocs<{ id: string; enquiryNo?: string }>("deleted_counselling_forms"),
-            fetchCollectionDocs<CounsellingEnquiry>("counselling_forms"),
-            fetchCollectionDocs<CounsellorAccount>("counsellor_accounts"),
-            fetchCollectionDocs<ParentSelfEntry>("parent_self_entries")
+            fetchCollectionDocs<{ id: string; enquiryNo?: string }>("deleted_counselling_forms", true),
+            fetchCollectionDocs<CounsellingEnquiry>("counselling_forms", true),
+            fetchCollectionDocs<CounsellorAccount>("counsellor_accounts", true),
+            fetchCollectionDocs<ParentSelfEntry>("parent_self_entries", true)
           ]);
+          if (Array.isArray(cloudEnquiries) || Array.isArray(cloudParentEntries)) {
+            setShowQuotaBanner(false);
+          }
 
           if (Array.isArray(cloudDeletedDocs)) {
             const delIds = cloudDeletedDocs.flatMap(d => [d.id, d.enquiryNo]).filter(Boolean) as string[];
@@ -883,12 +886,15 @@ export default function App() {
   }, [isLoggedIn, userRole, userEmail, currentTab, tickets, history, inventory, rooms, allocations, warranty]);
 
 
-  // Google Cloud Data Server Real-Time Synchronization (Always Active On App Open)
+  // Google Cloud Data Server Real-Time Synchronization (Active only for authenticated staff portals)
   useEffect(() => {
+    if (isParentKioskMode || !isLoggedIn) return;
     const isFb = isFirebaseConfigured();
-    if (isFb) {
+    if (isFb && !isFirestoreQuotaExhausted()) {
       const localData = loadData();
-      const unsubs = [
+      const isCounsellingDesk = userRole === "Counsellor" || currentTab === "counselling" || currentTab === "counselling-dept" || (typeof window !== "undefined" && (window.location.search.includes("portal=counselling") || window.location.search.includes("counsellor=")));
+
+      const itUnsubs = isCounsellingDesk ? [] : [
         syncCollection<Ticket>("tickets", (items) => {
           if (localStorage.getItem("sgs_wiping_database") === "true") {
             setTickets([]);
@@ -959,8 +965,10 @@ export default function App() {
             saveData({ warranty: items });
             localStorage.setItem("sgs_last_sync_warranty", new Date().toISOString());
           }
-        }, localData.warranty),
+        }, localData.warranty)
+      ];
 
+      const counsellingUnsubs = [
         syncCollection<{ id: string; enquiryNo?: string }>("deleted_counselling_forms", (deletedDocs) => {
           if (Array.isArray(deletedDocs)) {
             deletedFormsLoadedRef.current = true;
@@ -1097,6 +1105,27 @@ export default function App() {
           saveCounsellorAccounts(cleaned);
         }, loadCounsellorAccounts()),
 
+        syncCollection<{ id: string; lastWipedAt?: number }>("system_metadata", (items) => {
+          const statusDoc = items.find(i => i.id === "status");
+          if (statusDoc?.lastWipedAt) {
+            const localLastWipe = localStorage.getItem("sgs_local_last_wiped") 
+              ? parseInt(localStorage.getItem("sgs_local_last_wiped")!, 10) 
+              : 0;
+            if (statusDoc.lastWipedAt > localLastWipe) {
+              localStorage.setItem("sgs_local_last_wiped", String(statusDoc.lastWipedAt));
+              clearAllData();
+              setTickets([]);
+              setHistory([]);
+              setInventory([]);
+              setRooms([]);
+              setAllocations([]);
+              setWarranty([]);
+            }
+          }
+        }, []),
+      ];
+
+      const itAccountUnsubs = isCounsellingDesk ? [] : [
         syncCollection<{ id: string; username?: string }>("deleted_it_staff_accounts", (deletedDocs) => {
           if (deletedDocs && deletedDocs.length > 0) {
             const ids = deletedDocs.map(d => d.id || d.username || "").filter(Boolean);
@@ -1130,32 +1159,15 @@ export default function App() {
           setManagementAccounts(merged);
           saveManagementAccounts(merged);
         }, loadManagementAccounts()),
-
-        syncCollection<{ id: string; lastWipedAt?: number }>("system_metadata", (items) => {
-          const statusDoc = items.find(i => i.id === "status");
-          if (statusDoc?.lastWipedAt) {
-            const localLastWipe = localStorage.getItem("sgs_local_last_wiped") 
-              ? parseInt(localStorage.getItem("sgs_local_last_wiped")!, 10) 
-              : 0;
-            if (statusDoc.lastWipedAt > localLastWipe) {
-              localStorage.setItem("sgs_local_last_wiped", String(statusDoc.lastWipedAt));
-              clearAllData();
-              setTickets([]);
-              setHistory([]);
-              setInventory([]);
-              setRooms([]);
-              setAllocations([]);
-              setWarranty([]);
-            }
-          }
-        }, []),
       ];
+
+      const unsubs = [...itUnsubs, ...counsellingUnsubs, ...itAccountUnsubs];
 
       return () => {
         unsubs.forEach((unsub) => unsub());
       };
     }
-  }, []);
+  }, [isLoggedIn, isParentKioskMode, userRole, currentTab]);
 
   // Sync utility to update documents on Firestore and process deletions with MongoDB dual-write
   const syncUpdates = <T extends { id: string }>(
@@ -2278,16 +2290,24 @@ export default function App() {
 
         {/* Firestore Free Quota Notice Banner */}
         {showQuotaBanner && (
-          <div className="bg-sky-50 dark:bg-slate-900 border-b border-sky-200 dark:border-sky-800/60 px-4 py-2.5 flex items-center justify-between text-slate-800 dark:text-slate-200 text-xs shadow-sm relative z-40 shrink-0">
+          <div className="bg-amber-50 dark:bg-amber-950/60 border-b border-amber-300 dark:border-amber-800 px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-slate-800 dark:text-slate-200 text-xs shadow-sm relative z-40 shrink-0">
             <div className="flex items-center gap-2.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
-              <p className="font-medium text-slate-700 dark:text-slate-300">
-                <span className="font-semibold text-sky-700 dark:text-sky-400">Cloud Sync Active:</span> Google Cloud Firestore free daily write limit (20,000 writes/day) reached. The app is automatically persisting all tickets, records, and forms to High-Speed Local & Server Storage without any data loss.
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse shrink-0"></span>
+              <p className="font-medium text-slate-800 dark:text-amber-100">
+                <span className="font-bold text-amber-800 dark:text-amber-300">Firestore Free-Tier Daily Quota Reached:</span> Even with a billing account linked, this database stays on free quota until upgraded. Remote phone QR tokens cannot sync across servers until upgraded or daily reset.{" "}
+                <a
+                  href={getFirestoreUpgradeUrl()}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-bold underline text-orange-700 dark:text-amber-300 hover:text-orange-900"
+                >
+                  Upgrade Firestore Database →
+                </a>
               </p>
             </div>
             <button
               onClick={() => setShowQuotaBanner(false)}
-              className="px-2.5 py-1 hover:bg-sky-100 dark:hover:bg-slate-800 rounded text-slate-500 hover:text-slate-800 dark:hover:text-white transition text-xs font-semibold shrink-0 cursor-pointer"
+              className="px-2.5 py-1 hover:bg-amber-100 dark:hover:bg-slate-800 rounded text-slate-600 hover:text-slate-900 dark:text-amber-200 dark:hover:text-white transition text-xs font-semibold shrink-0 cursor-pointer"
             >
               Dismiss
             </button>

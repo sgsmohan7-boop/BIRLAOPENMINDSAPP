@@ -23,7 +23,9 @@ import {
   getDocFromServer,
   writeBatch,
   disableNetwork,
-  enableNetwork
+  enableNetwork,
+  query,
+  where
 } from "firebase/firestore";
 import firebaseConfig from "../../firebase-applet-config.json";
 import { Ticket, InventoryItem, Room, EmployeeAllocation, WarrantyContract, CounsellingEnquiry } from "../types";
@@ -280,7 +282,7 @@ export function syncCollection<T>(
     onUpdate(fallbackData);
   }
 
-  if (!isFirebaseConfigured()) {
+  if (!isFirebaseConfigured() || isFirestoreQuotaExhausted()) {
     return () => {};
   }
 
@@ -313,15 +315,28 @@ export function syncCollection<T>(
 }
 
 const QUOTA_STORAGE_KEY = "sgs_firestore_quota_exhausted";
+const QUOTA_PROJECT_KEY = "sgs_firestore_quota_project";
+
+export function getFirestoreUpgradeUrl(): string {
+  return `https://console.firebase.google.com/project/${firebaseConfig.projectId}/firestore/databases/${firebaseConfig.firestoreDatabaseId}/data?openUpgradeDialog=true`;
+}
 
 export function isFirestoreQuotaExhausted(): boolean {
   if (typeof window === "undefined") return false;
   try {
+    const storedProject = sessionStorage.getItem(QUOTA_PROJECT_KEY) || localStorage.getItem(QUOTA_PROJECT_KEY);
+    if (storedProject && storedProject !== firebaseConfig.projectId) {
+      sessionStorage.removeItem(QUOTA_STORAGE_KEY);
+      localStorage.removeItem(QUOTA_STORAGE_KEY);
+      sessionStorage.removeItem(QUOTA_PROJECT_KEY);
+      localStorage.removeItem(QUOTA_PROJECT_KEY);
+      return false;
+    }
     const raw = sessionStorage.getItem(QUOTA_STORAGE_KEY) || localStorage.getItem(QUOTA_STORAGE_KEY);
     if (!raw) return false;
     const timestamp = parseInt(raw, 10);
-    // Quota re-check cooldown: 1 hour
-    if (Date.now() - timestamp > 60 * 60 * 1000) {
+    // Quota re-check cooldown: 5 minutes
+    if (Date.now() - timestamp > 5 * 60 * 1000) {
       sessionStorage.removeItem(QUOTA_STORAGE_KEY);
       localStorage.removeItem(QUOTA_STORAGE_KEY);
       return false;
@@ -332,11 +347,23 @@ export function isFirestoreQuotaExhausted(): boolean {
   }
 }
 
+export function clearQuotaExhausted() {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.removeItem(QUOTA_STORAGE_KEY);
+    localStorage.removeItem(QUOTA_STORAGE_KEY);
+    sessionStorage.removeItem(QUOTA_PROJECT_KEY);
+    localStorage.removeItem(QUOTA_PROJECT_KEY);
+  } catch {}
+}
+
 export function markQuotaExhausted() {
   if (typeof window === "undefined") return;
   try {
     sessionStorage.setItem(QUOTA_STORAGE_KEY, String(Date.now()));
     localStorage.setItem(QUOTA_STORAGE_KEY, String(Date.now()));
+    sessionStorage.setItem(QUOTA_PROJECT_KEY, firebaseConfig.projectId);
+    localStorage.setItem(QUOTA_PROJECT_KEY, firebaseConfig.projectId);
     window.dispatchEvent(new CustomEvent("firestore-quota-exhausted"));
   } catch {}
 }
@@ -402,8 +429,9 @@ export function prepareEnquiryForFirestore(targetEnquiry: CounsellingEnquiry): a
 }
 
 // Fetch authoritative live documents directly from Firestore Server (with cache fallback)
-export async function fetchCollectionDocs<T>(collectionName: string): Promise<T[] | null> {
+export async function fetchCollectionDocs<T>(collectionName: string, forceRetry = false): Promise<T[] | null> {
   if (!isFirebaseConfigured()) return null;
+  if (!forceRetry && isFirestoreQuotaExhausted()) return null;
   const colRef = collection(db, collectionName);
   try {
     try {
@@ -416,6 +444,16 @@ export async function fetchCollectionDocs<T>(collectionName: string): Promise<T[
     });
     return items;
   } catch (serverErr: any) {
+    const srvMsg = serverErr instanceof Error ? serverErr.message : String(serverErr || "");
+    if (
+      srvMsg.includes("resource-exhausted") ||
+      srvMsg.includes("Quota limit exceeded") ||
+      srvMsg.includes("quota metric") ||
+      serverErr?.code === "resource-exhausted"
+    ) {
+      markQuotaExhausted();
+      return null;
+    }
     try {
       const snap = await getDocs(colRef);
       const items: T[] = [];
@@ -441,14 +479,18 @@ export async function fetchCollectionDocs<T>(collectionName: string): Promise<T[
 // Global Single Item Save and Overwrite Helpers
 export async function saveDocument(collectionName: string, id: string, data: any): Promise<boolean> {
   if (!isFirebaseConfigured()) return false;
-  // If quota was exhausted recently, attempt write and clear stale block if quota has reset
+  // Probe Firestore on write only if at least 15s has elapsed since last 429 error
   if (isFirestoreQuotaExhausted()) {
-    if (typeof window !== "undefined") {
-      sessionStorage.removeItem(QUOTA_STORAGE_KEY);
-      localStorage.removeItem(QUOTA_STORAGE_KEY);
-      try {
-        enableNetwork(db).catch(() => {});
-      } catch {}
+    try {
+      const raw = sessionStorage.getItem(QUOTA_STORAGE_KEY) || localStorage.getItem(QUOTA_STORAGE_KEY);
+      const ts = raw ? parseInt(raw, 10) : 0;
+      if (Date.now() - ts < 15000) {
+        return false;
+      }
+      clearQuotaExhausted();
+      enableNetwork(db).catch(() => {});
+    } catch {
+      return false;
     }
   }
   const rawId = id && String(id).trim() ? String(id).trim() : `doc_${Date.now()}`;
@@ -549,30 +591,33 @@ export async function purgeCollectionFromFirebase(collectionName: string) {
 export async function getNextDailyTokenNo(dmy: string, dateKey: string): Promise<number> {
   const tokenSet = new Set<number>();
 
-  // 1. Local Storage check
+  // 1. Local Storage check (check both storage keys)
   try {
-    const raw = localStorage.getItem("parent_self_entries");
-    if (raw) {
-      const list = JSON.parse(raw);
-      if (Array.isArray(list)) {
-        list.forEach((e: any) => {
-          if (e.enquiryType === "online") return; // Online enquiries never consume walk-in daily tokens
-          const itemDate = e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
-          if (itemDate === dmy || e.dateKey === dateKey) {
-            const num = Number(e.dailyTokenNo);
-            if (!isNaN(num) && num > 0) tokenSet.add(num);
-          }
-        });
+    for (const key of ["sgs_parent_self_entries", "parent_self_entries"]) {
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const list = JSON.parse(raw);
+        if (Array.isArray(list)) {
+          list.forEach((e: any) => {
+            if (e.enquiryType === "online") return; // Online enquiries never consume walk-in daily tokens
+            const itemDate = e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
+            if (itemDate === dmy || e.dateKey === dateKey) {
+              const num = Number(e.dailyTokenNo);
+              if (!isNaN(num) && num > 0) tokenSet.add(num);
+            }
+          });
+        }
       }
     }
   } catch {}
 
-  // 2. Firestore query
+  // 2. Firestore query (scoped strictly to today's dateKey to minimize daily read units)
   try {
     if (isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
       const colRef = collection(db, "parent_self_entries");
+      const todayQuery = query(colRef, where("dateKey", "==", dateKey));
       const snapshot = await Promise.race([
-        getDocs(colRef),
+        getDocs(todayQuery),
         new Promise<null>((r) => setTimeout(() => r(null), 2000))
       ]);
       if (snapshot && 'forEach' in snapshot) {
@@ -587,7 +632,17 @@ export async function getNextDailyTokenNo(dmy: string, dateKey: string): Promise
         });
       }
     }
-  } catch {}
+  } catch (err: any) {
+    const msg = err instanceof Error ? err.message : String(err || "");
+    if (
+      msg.includes("resource-exhausted") ||
+      msg.includes("Quota limit exceeded") ||
+      msg.includes("quota metric") ||
+      err?.code === "resource-exhausted"
+    ) {
+      markQuotaExhausted();
+    }
+  }
 
   // 3. Fast Server API endpoint query
   try {

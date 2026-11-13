@@ -59,7 +59,8 @@ import {
   School,
   Globe,
   Zap,
-  FolderArchive
+  FolderArchive,
+  Upload
 } from "lucide-react";
 import AudioMeetingRecorder from "./AudioMeetingRecorder";
 import ManagementAudioDesk from "./ManagementAudioDesk";
@@ -110,7 +111,7 @@ import {
   deduplicateEnquiries
 } from "../utils/storage";
 import { deleteAudioRecordingBlob, formatAudioDuration } from "../utils/audioStorage";
-import { isFirebaseConfigured, syncCollection, fetchCollectionDocs, saveDocument, deleteDocument, getNextDailyTokenNo } from "../utils/firebase";
+import { isFirebaseConfigured, syncCollection, fetchCollectionDocs, saveDocument, deleteDocument, getNextDailyTokenNo, isFirestoreQuotaExhausted, clearQuotaExhausted, getFirestoreUpgradeUrl } from "../utils/firebase";
 import { printOfficialAdmissionForm } from "../utils/printAdmissionForm";
 import { normalizeCounsellorIdentity } from "../utils/counsellorNormalizer";
 
@@ -196,7 +197,7 @@ function deduplicateParentEntries(entries: ParentSelfEntry[]): ParentSelfEntry[]
         item.dailyTokenNo = nextSeq;
         usedTokens.add(nextSeq);
         try {
-          if (isFirebaseConfigured()) {
+          if (isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
             saveDocument("parent_self_entries", item.id, { dailyTokenNo: nextSeq });
           }
         } catch {}
@@ -910,6 +911,7 @@ export default function CounsellingPortal({
   };
 
   const [isRefreshingDept, setIsRefreshingDept] = useState(false);
+  const [firestoreQuotaExceeded, setFirestoreQuotaExceeded] = useState<boolean>(() => isFirestoreQuotaExhausted());
   const backfilledParentEntriesRef = React.useRef<Set<string>>(new Set());
 
   const pushUnsyncedParentEntriesToCloud = React.useCallback((cloudItems: ParentSelfEntry[], localItems: ParentSelfEntry[]) => {
@@ -950,9 +952,11 @@ export default function CounsellingPortal({
 
     // 1. Direct Live Firestore pull for parent_self_entries (works on Vercel static & all cloud deployments)
     if (isFirebaseConfigured()) {
+      clearQuotaExhausted();
       try {
-        const cloudEntries = await fetchCollectionDocs<ParentSelfEntry>("parent_self_entries");
+        const cloudEntries = await fetchCollectionDocs<ParentSelfEntry>("parent_self_entries", true);
         if (Array.isArray(cloudEntries)) {
+          setFirestoreQuotaExceeded(false);
           setParentSelfEntries(prev => {
             const currentLocal = prev || [];
             pushUnsyncedParentEntriesToCloud(cloudEntries, currentLocal);
@@ -960,8 +964,12 @@ export default function CounsellingPortal({
             saveParentSelfEntries(combined);
             return combined;
           });
+        } else {
+          setFirestoreQuotaExceeded(isFirestoreQuotaExhausted());
         }
-      } catch {}
+      } catch {
+        setFirestoreQuotaExceeded(isFirestoreQuotaExhausted());
+      }
     }
 
     // 2. Fallback Express API check (for local dev environment)
@@ -1050,12 +1058,13 @@ export default function CounsellingPortal({
     fetchServerEntries();
 
     // Real-time Firestore subscription so any phone scan or status transition instantly updates across all devices
-    if (isFirebaseConfigured()) {
+    if (isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
       try {
         unsubscribeFirestore = syncCollection(
           "parent_self_entries",
           (firestoreEntries: any[]) => {
             if (Array.isArray(firestoreEntries)) {
+              setFirestoreQuotaExceeded(false);
               setParentSelfEntries(prev => {
                 const currentLocal = prev || [];
                 pushUnsyncedParentEntriesToCloud(firestoreEntries, currentLocal);
@@ -1072,20 +1081,52 @@ export default function CounsellingPortal({
       }
     }
 
-    // Relaxed background check (30s)
-    const interval = setInterval(fetchServerEntries, 30000);
+    // Fast polling fallback (5s when Firestore quota is exhausted, 15s otherwise)
+    const pollMs = isFirestoreQuotaExhausted() ? 5000 : 15000;
+    const interval = setInterval(fetchServerEntries, pollMs);
 
-    const handleRealtimeEntry = () => {
+    const handleRealtimeEntry = (evt?: any) => {
+      const localStored = loadParentSelfEntries();
+      const incoming = evt?.detail || evt?.entry;
+      if (incoming || localStored.length > 0) {
+        setParentSelfEntries(prev => {
+          const pool = [...(prev || []), ...localStored];
+          if (incoming && incoming.id) pool.unshift(incoming);
+          const combined = deduplicateParentEntries(pool);
+          saveParentSelfEntries(combined);
+          return combined;
+        });
+      }
       fetchServerEntries();
     };
+
+    const handleQuotaEvent = () => {
+      setFirestoreQuotaExceeded(true);
+    };
+
+    let bc: BroadcastChannel | null = null;
+    if (typeof BroadcastChannel !== "undefined") {
+      try {
+        bc = new BroadcastChannel("bomis_parent_queue_channel");
+        bc.onmessage = (msg) => {
+          if (msg?.data?.type === "parent_self_entry_added") {
+            handleRealtimeEntry(msg.data);
+          }
+        };
+      } catch {}
+    }
+
     window.addEventListener("parent_self_entry_added", handleRealtimeEntry);
     window.addEventListener("storage", handleRealtimeEntry);
+    window.addEventListener("firestore-quota-exhausted", handleQuotaEvent);
 
     return () => {
       clearInterval(interval);
       if (unsubscribeFirestore) unsubscribeFirestore();
+      if (bc) bc.close();
       window.removeEventListener("parent_self_entry_added", handleRealtimeEntry);
       window.removeEventListener("storage", handleRealtimeEntry);
+      window.removeEventListener("firestore-quota-exhausted", handleQuotaEvent);
     };
   }, []);
 
@@ -1094,7 +1135,7 @@ export default function CounsellingPortal({
     const counsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR";
     const dismissedSet = new Set(getDismissedParentEntryIds(counsellorId));
     return (parentSelfEntries || [])
-      .filter(e => e.status === "pending" && e.enquiryType !== "online" && !dismissedSet.has(e.id))
+      .filter(e => (!e.status || e.status === "pending") && e.enquiryType !== "online" && !dismissedSet.has(e.id))
       .sort((a, b) => {
         const aDate = a.dateKey || a.entryDate || (a.formattedDate ? a.formattedDate.split(" ")[0] : "");
         const bDate = b.dateKey || b.entryDate || (b.formattedDate ? b.formattedDate.split(" ")[0] : "");
@@ -3431,6 +3472,113 @@ Warm regards,
     document.body.removeChild(link);
   };
 
+  const backupRestoreInputRef = React.useRef<HTMLInputElement | null>(null);
+
+  const handleDownloadFullBackup = () => {
+    try {
+      const payload = {
+        app: "BOMIS_Counselling_Portal",
+        version: "1.0",
+        exportedAt: new Date().toISOString(),
+        exportedBy: activeCounsellor?.name || userEmail || userRole,
+        stats: {
+          enquiriesCount: (enquiries || []).length,
+          parentSelfEntriesCount: (parentSelfEntries || []).length,
+          counsellorAccountsCount: (localAccounts || []).length
+        },
+        enquiries: enquiries || [],
+        parentSelfEntries: parentSelfEntries || [],
+        counsellorAccounts: localAccounts || [],
+        dismissedParentEntries: loadDismissedParentEntries()
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `BOMIS_Counselling_Full_Backup_${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      setDeleteToast(`💾 Backup downloaded! (${payload.stats.enquiriesCount} enquiries, ${payload.stats.parentSelfEntriesCount} tokens)`);
+      setTimeout(() => setDeleteToast(null), 4000);
+    } catch (err: any) {
+      alert(`Backup export failed: ${err?.message || err}`);
+    }
+  };
+
+  const handleRestoreFullBackup = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const restoredEnquiries: CounsellingEnquiry[] = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed.enquiries)
+          ? parsed.enquiries
+          : Array.isArray(parsed.counselling)
+            ? parsed.counselling
+            : [];
+      const restoredTokens: ParentSelfEntry[] = Array.isArray(parsed.parentSelfEntries)
+        ? parsed.parentSelfEntries
+        : [];
+      const restoredAccounts: CounsellorAccount[] = Array.isArray(parsed.counsellorAccounts)
+        ? parsed.counsellorAccounts
+        : [];
+
+      if (restoredEnquiries.length === 0 && restoredTokens.length === 0 && restoredAccounts.length === 0) {
+        alert("No valid counselling enquiries or tokens found inside this backup file.");
+        return;
+      }
+
+      if (restoredEnquiries.length > 0) {
+        restoredEnquiries.forEach(enq => {
+          if (enq && (enq.id || enq.enquiryNo)) {
+            onSaveEnquiry(enq);
+          }
+        });
+        fetch("/api/counselling", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(restoredEnquiries)
+        }).catch(() => {});
+      }
+
+      if (restoredTokens.length > 0) {
+        setParentSelfEntries(prev => {
+          const combined = deduplicateParentEntries([...restoredTokens, ...(prev || [])]);
+          saveParentSelfEntries(combined);
+          return combined;
+        });
+        for (const t of restoredTokens) {
+          if (t && t.id) {
+            fetch("/api/parent-self-entry", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(t)
+            }).catch(() => {});
+            if (isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
+              saveDocument("parent_self_entries", t.id, t).catch(() => {});
+            }
+          }
+        }
+      }
+
+      if (restoredAccounts.length > 0 && onSaveCounsellorAccount) {
+        restoredAccounts.forEach(acc => {
+          if (acc && acc.id) onSaveCounsellorAccount(acc);
+        });
+      }
+
+      setDeleteToast(`✅ Restored ${restoredEnquiries.length} enquiries & ${restoredTokens.length} parent tokens from backup!`);
+      setTimeout(() => setDeleteToast(null), 5000);
+    } catch (err: any) {
+      alert(`Invalid backup JSON file: ${err?.message || err}`);
+    }
+  };
+
   const handleGenerateMetricPDF = () => {
     if (!selectedMetricCard || filteredMetricEnquiries.length === 0) {
       alert("No records available to generate PDF report.");
@@ -3918,6 +4066,33 @@ Warm regards,
 
           <button
             type="button"
+            onClick={handleDownloadFullBackup}
+            className="px-4 py-2.5 rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer border bg-sky-600 hover:bg-sky-700 text-white shadow-md active:scale-95 border-sky-400"
+            title="Download complete JSON Backup of all Enquiries, Tokens & Counsellor Data"
+          >
+            <Download size={15} />
+            <span>💾 Backup Data</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => backupRestoreInputRef.current?.click()}
+            className="px-4 py-2.5 rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer border bg-white/15 hover:bg-white/25 text-white shadow-md active:scale-95 border-white/30"
+            title="Restore Enquiries & Tokens from a previously downloaded JSON backup file"
+          >
+            <Upload size={15} />
+            <span>📂 Restore Backup</span>
+          </button>
+          <input
+            ref={backupRestoreInputRef}
+            type="file"
+            accept=".json,application/json"
+            onChange={handleRestoreFullBackup}
+            className="hidden"
+          />
+
+          <button
+            type="button"
             onClick={() => {
               setParentKioskDefaultMode("print_qr");
               setIsParentKioskModalOpen(true);
@@ -4372,6 +4547,40 @@ Warm regards,
               })()}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Firestore Free-Tier Quota Alert for Live Reception Tokens */}
+      {firestoreQuotaExceeded && (
+        <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/60 border-2 border-amber-400 dark:border-amber-700 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle size={18} className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+            <div className="text-xs space-y-0.5">
+              <p className="font-black text-amber-950 dark:text-amber-200">
+                Firestore Cloud Sync Paused — Free-Tier Daily Read Quota Exceeded (429)
+              </p>
+              <p className="text-amber-800 dark:text-amber-300 font-medium leading-relaxed">
+                Even if billing funds were added, the free-tier database requires clicking Upgrade in Firebase Console before cross-device QR tokens from mobile phones sync live. Until upgraded or daily reset, open the Counsellor Desk on the same Shared App URL (<code className="px-1 py-0.5 bg-amber-200/60 dark:bg-amber-900 rounded font-mono">ais-pre-...</code>) used by the QR code.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <a
+              href={getFirestoreUpgradeUrl()}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-black shadow-xs transition-all whitespace-nowrap"
+            >
+              Upgrade Firestore →
+            </a>
+            <button
+              type="button"
+              onClick={handleRefreshDept}
+              className="px-3 py-2 bg-white dark:bg-slate-800 hover:bg-amber-100 dark:hover:bg-slate-700 text-amber-900 dark:text-amber-200 border border-amber-300 dark:border-amber-700 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap"
+            >
+              Retry Sync
+            </button>
+          </div>
         </div>
       )}
 

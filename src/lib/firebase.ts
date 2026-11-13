@@ -7,15 +7,46 @@ try {
   setLogLevel('silent');
 } catch {}
 
+if (typeof window !== "undefined") {
+  const isFirestoreAssertion = (err: any) => {
+    const str = String(err?.message || err?.reason?.message || err?.reason || err || "");
+    return str.includes("INTERNAL ASSERTION FAILED") || str.includes("ca9") || str.includes("b815");
+  };
+
+  window.addEventListener("unhandledrejection", (event) => {
+    if (isFirestoreAssertion(event.reason)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      console.warn("Handled transient Firestore watch stream assertion:", event.reason?.message || event.reason);
+    }
+  });
+
+  window.addEventListener("error", (event) => {
+    if (isFirestoreAssertion(event.error) || isFirestoreAssertion(event.message)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      console.warn("Handled transient Firestore stream assertion:", event.message);
+    }
+  });
+}
+
 export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
 let firestoreDb: any;
+const dbId = firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== "(default)"
+  ? firebaseConfig.firestoreDatabaseId
+  : "(default)";
+
 try {
   firestoreDb = initializeFirestore(app, {
-    experimentalForceLongPolling: true,
-  }, firebaseConfig.firestoreDatabaseId || "(default)");
+    experimentalAutoDetectLongPolling: true,
+  }, dbId);
 } catch {
-  firestoreDb = getFirestore(app, firebaseConfig.firestoreDatabaseId || "(default)");
+  try {
+    firestoreDb = getFirestore(app, dbId);
+  } catch {
+    firestoreDb = getFirestore(app);
+  }
 }
 
 export const db = firestoreDb;

@@ -81,6 +81,8 @@ export default function ParentKioskView({
   const [activeTab, setActiveTab] = useState<"register" | "print_qr">(defaultMode);
   const [isSubmittedSuccess, setIsSubmittedSuccess] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [cloudSyncSuccess, setCloudSyncSuccess] = useState(true);
+  const [serverSyncSuccess, setServerSyncSuccess] = useState(true);
   const [assignedToken, setAssignedToken] = useState<number>(1);
   const [submissionTimestamp, setSubmissionTimestamp] = useState<{ date: string; time: string }>({
     date: "",
@@ -277,6 +279,7 @@ export default function ParentKioskView({
     };
 
     // 1. Post to 24/7 server endpoint to get server-verified unique daily token number
+    let srvOk = false;
     try {
       const serverRes = await fetch("/api/parent-self-entry", {
         method: "POST",
@@ -285,14 +288,18 @@ export default function ParentKioskView({
       });
       if (serverRes.ok) {
         const resData = await serverRes.json();
-        if (resData && resData.entry && resData.entry.dailyTokenNo) {
-          finalEntry1.dailyTokenNo = resData.entry.dailyTokenNo;
-          dailyTokenNo1 = resData.entry.dailyTokenNo;
+        if (resData && resData.success) {
+          srvOk = true;
+          if (resData.entry && resData.entry.dailyTokenNo) {
+            finalEntry1.dailyTokenNo = resData.entry.dailyTokenNo;
+            dailyTokenNo1 = resData.entry.dailyTokenNo;
+          }
         }
       }
     } catch (err) {
       console.warn("Server parent-self-entry post warning:", err);
     }
+    setServerSyncSuccess(srvOk);
 
     setAssignedToken(dailyTokenNo1);
     setSiblingAssignedToken(hasSibling && siblingName.trim() ? dailyTokenNo1 : null);
@@ -303,23 +310,31 @@ export default function ParentKioskView({
     });
 
     // 2. Direct real-time Firebase Firestore save so counsellor sees it immediately
+    let fsOk = false;
     try {
       if (isFirebaseConfigured()) {
-        await saveDocument("parent_self_entries", id1, finalEntry1);
+        fsOk = await saveDocument("parent_self_entries", id1, finalEntry1);
       }
     } catch (fErr) {
       console.warn("Firestore parent entry save warning:", fErr);
     }
+    setCloudSyncSuccess(!isFirebaseConfigured() || fsOk);
 
-    // 3. Save locally for instantaneous offline reactivity
+    // 3. Save locally in BOTH keys for instantaneous offline reactivity across portals
     try {
-      const existingRaw = localStorage.getItem("parent_self_entries");
+      const existingRaw = localStorage.getItem("sgs_parent_self_entries") || localStorage.getItem("parent_self_entries");
       const existing: ParentSelfEntry[] = existingRaw ? JSON.parse(existingRaw) : [];
       let updated = [finalEntry1, ...existing.filter(e => e.id !== id1)];
       localStorage.setItem("parent_self_entries", JSON.stringify(updated));
+      localStorage.setItem("sgs_parent_self_entries", JSON.stringify(updated));
 
-      // Dispatch event to notify open Counsellor tabs
+      // Dispatch event & broadcast to notify open Counsellor tabs
       window.dispatchEvent(new CustomEvent("parent_self_entry_added", { detail: finalEntry1 }));
+      if (typeof BroadcastChannel !== "undefined") {
+        const bc = new BroadcastChannel("bomis_parent_queue_channel");
+        bc.postMessage({ type: "parent_self_entry_added", entry: finalEntry1 });
+        bc.close();
+      }
     } catch (err) {
       console.warn("Local storage parent entry save warning:", err);
     }
@@ -1010,11 +1025,20 @@ export default function ParentKioskView({
                           <span className="inline-block bg-[#800020] text-white font-extrabold px-2.5 py-0.5 rounded-md shadow-xs text-xs sm:text-sm mx-0.5">
                             Token #{assignedToken}
                           </span>{" "}
-                          is live at our Admissions Counsellor's desk.
+                          {cloudSyncSuccess
+                            ? "is live at our Admissions Counsellor's desk."
+                            : serverSyncSuccess
+                              ? "is registered on the reception server."
+                              : "has been generated on this device."}
                         </p>
                         <p className="text-slate-600 text-[11px] sm:text-xs mt-0.5">
                           If you are at school, please relax in our waiting area; you will be called shortly.
                         </p>
+                        {!cloudSyncSuccess && (
+                          <p className="text-amber-800 bg-amber-100 border border-amber-300 rounded-lg px-2.5 py-1.5 text-[11px] font-bold mt-2">
+                            ⚠️ Cloud Sync Quota Reached: Please show this Token #{assignedToken} screen directly at the Admissions Reception Desk if your name is not yet called.
+                          </p>
+                        )}
                       </div>
                     )}
                   </div>

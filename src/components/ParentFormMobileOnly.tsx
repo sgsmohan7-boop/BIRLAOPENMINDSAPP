@@ -66,6 +66,8 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
 
   const [isSubmittedSuccess, setIsSubmittedSuccess] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [cloudSyncSuccess, setCloudSyncSuccess] = useState(true);
+  const [serverSyncSuccess, setServerSyncSuccess] = useState(true);
   const [assignedToken, setAssignedToken] = useState<number>(1);
   const [assignedOnlineRef, setAssignedOnlineRef] = useState<string>("");
   const [siblingAssignedOnlineRef, setSiblingAssignedOnlineRef] = useState<string | null>(null);
@@ -220,6 +222,7 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
     };
 
     // 1. Post to Server
+    let srvOk = false;
     try {
       const res = await fetch("/api/parent-self-entry", {
         method: "POST",
@@ -229,6 +232,7 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
       if (res.ok) {
         const json = await res.json();
         if (json.success && json.entry) {
+          srvOk = true;
           if (enquiryType === "walkin" && json.entry.dailyTokenNo) {
             finalEntry1.dailyTokenNo = json.entry.dailyTokenNo;
             dailyTokenNo1 = json.entry.dailyTokenNo;
@@ -242,6 +246,7 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
     } catch (err) {
       console.warn("Server parent entry post error:", err);
     }
+    setServerSyncSuccess(srvOk);
 
     if (enquiryType === "online") {
       setAssignedOnlineRef(onlineRefNo1);
@@ -257,22 +262,29 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
     });
 
     // 2. Direct real-time Firebase Firestore save so counsellor desk sees it immediately
+    let fsOk = false;
     try {
       if (isFirebaseConfigured()) {
-        await saveDocument("parent_self_entries", finalEntry1.id, finalEntry1);
+        fsOk = await saveDocument("parent_self_entries", finalEntry1.id, finalEntry1);
       }
     } catch (fErr) {
       console.warn("Firestore parent entry save warning:", fErr);
     }
+    setCloudSyncSuccess(!isFirebaseConfigured() || fsOk);
 
-    // 3. Save locally for instantaneous offline updates
+    // 3. Save locally for instantaneous offline updates & cross-tab broadcast
     try {
-      const existingRaw = localStorage.getItem("parent_self_entries") || localStorage.getItem("sgs_parent_self_entries");
+      const existingRaw = localStorage.getItem("sgs_parent_self_entries") || localStorage.getItem("parent_self_entries");
       const existing: ParentSelfEntry[] = existingRaw ? JSON.parse(existingRaw) : [];
       let updated = [finalEntry1, ...existing.filter(e => e.id !== finalEntry1.id && e.id !== id1 && e.id !== id2)];
       localStorage.setItem("parent_self_entries", JSON.stringify(updated));
       localStorage.setItem("sgs_parent_self_entries", JSON.stringify(updated));
       window.dispatchEvent(new CustomEvent("parent_self_entry_added", { detail: finalEntry1 }));
+      if (typeof BroadcastChannel !== "undefined") {
+        const bc = new BroadcastChannel("bomis_parent_queue_channel");
+        bc.postMessage({ type: "parent_self_entry_added", entry: finalEntry1 });
+        bc.close();
+      }
     } catch (err) {
       console.warn("Local storage save error:", err);
     }
@@ -776,11 +788,20 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
                             <span className="inline-block bg-[#800020] text-white font-extrabold px-2.5 py-0.5 rounded-md shadow-xs text-xs sm:text-sm mx-0.5">
                               Token #{assignedToken}
                             </span>{" "}
-                            is live at our Admissions Counsellor's desk.
+                            {cloudSyncSuccess
+                              ? "is live at our Admissions Counsellor's desk."
+                              : serverSyncSuccess
+                                ? "is registered on the reception server."
+                                : "has been generated on your device."}
                           </p>
                           <p className="text-slate-600 text-[11px] sm:text-xs mt-0.5">
                             If you are at school, please relax in our waiting area; you will be called shortly.
                           </p>
+                          {!cloudSyncSuccess && (
+                            <p className="text-amber-800 bg-amber-100 border border-amber-300 rounded-lg px-2.5 py-1.5 text-[11px] font-bold mt-2">
+                              ⚠️ Cloud Sync Quota Reached: Please show this Token #{assignedToken} screen directly at the Admissions Reception Desk if your name is not yet called.
+                            </p>
+                          )}
                         </div>
                       )}
                     </div>

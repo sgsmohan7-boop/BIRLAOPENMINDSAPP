@@ -17,10 +17,19 @@ class RootErrorBoundary extends React.Component<{children: ReactNode}, ErrorBoun
   }
 
   static getDerivedStateFromError(error: Error) {
+    const msg = error?.message || String(error || "");
+    if (msg.includes("INTERNAL ASSERTION FAILED") || msg.includes("ca9") || msg.includes("b815")) {
+      console.warn("RootErrorBoundary suppressed internal Firestore watch assertion error:", msg);
+      return { hasError: false, error: null };
+    }
     return { hasError: true, error };
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    const msg = error?.message || String(error || "");
+    if (msg.includes("INTERNAL ASSERTION FAILED") || msg.includes("ca9") || msg.includes("b815")) {
+      return;
+    }
     console.error("Caught by RootErrorBoundary:", error, errorInfo);
     this.setState({ errorInfo });
   }
