@@ -80,9 +80,10 @@ export function normalizeCounsellorIdentity(inputName?: string, inputId?: string
   const rawName = (inputName || "").trim();
   const rawId = (inputId || "").trim();
   const combined = `${rawName} ${rawId}`.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const idToken = (rawId || (/^counsellor[-_\s]?\d+$/i.test(rawName) ? rawName : "")).toUpperCase().replace(/[^A-Z0-9]/g, "");
 
   // 1. Sowjanya (Merges 'R SOWJANYA', 'r sowjanya', 'rsowjanya', 'sowjanya r', 'counsellor-03')
-  if (combined.includes("sowjanya") || rawId.toUpperCase() === "COUNSELLOR-03") {
+  if (combined.includes("sowjanya") || idToken === "COUNSELLOR03") {
     return {
       id: CANONICAL_COUNSELLORS.SOWJANYA.id,
       name: CANONICAL_COUNSELLORS.SOWJANYA.name,
@@ -91,7 +92,7 @@ export function normalizeCounsellorIdentity(inputName?: string, inputId?: string
   }
 
   // 2. Kavya (Merges 'KAVYARAO', 'kavya rao', 'kavya', 'counsellor-04')
-  if (combined.includes("kavya") || rawId.toUpperCase() === "COUNSELLOR-04") {
+  if (combined.includes("kavya") || idToken === "COUNSELLOR04") {
     return {
       id: CANONICAL_COUNSELLORS.KAVYA.id,
       name: CANONICAL_COUNSELLORS.KAVYA.name,
@@ -100,7 +101,7 @@ export function normalizeCounsellorIdentity(inputName?: string, inputId?: string
   }
 
   // 3. Radhika
-  if (combined.includes("radhika") || rawId.toUpperCase() === "COUNSELLOR-01") {
+  if (combined.includes("radhika") || idToken === "COUNSELLOR01") {
     return {
       id: CANONICAL_COUNSELLORS.RADHIKA.id,
       name: CANONICAL_COUNSELLORS.RADHIKA.name,
@@ -109,7 +110,7 @@ export function normalizeCounsellorIdentity(inputName?: string, inputId?: string
   }
 
   // 4. Sravan
-  if (combined.includes("sravan") || rawId.toUpperCase() === "COUNSELLOR-02") {
+  if (combined.includes("sravan") || idToken === "COUNSELLOR02") {
     return {
       id: CANONICAL_COUNSELLORS.SRAVAN.id,
       name: CANONICAL_COUNSELLORS.SRAVAN.name,
@@ -119,7 +120,7 @@ export function normalizeCounsellorIdentity(inputName?: string, inputId?: string
 
   // 5. Test (Strict match to prevent false-positive remapping of active counsellors)
   if (
-    rawId.toUpperCase() === "COUNSELLOR-05" ||
+    idToken === "COUNSELLOR05" ||
     rawName.toLowerCase() === "test" ||
     rawName.toLowerCase() === "testing" ||
     rawName.toLowerCase() === "counsellor-05"
@@ -131,9 +132,10 @@ export function normalizeCounsellorIdentity(inputName?: string, inputId?: string
     };
   }
 
+  const resolvedFallbackId = rawId || (/^counsellor[-_\s]?\d+$/i.test(rawName) ? rawName.toUpperCase() : "COUNSELLOR-01");
   return {
-    id: rawId || "COUNSELLOR-01",
-    name: rawName || "Admissions Counsellor",
+    id: resolvedFallbackId,
+    name: (/^counsellor[-_\s]?\d+$/i.test(rawName) && !rawId) ? rawName.toUpperCase() : (rawName || "Admissions Counsellor"),
     username: rawName.toLowerCase().replace(/\s+/g, "_")
   };
 }

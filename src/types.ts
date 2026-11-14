@@ -342,6 +342,7 @@ export interface CounsellingEnquiry {
   enquiryType?: "walkin" | "online";
   onlineRefNo?: string; // e.g. "ONL-2026-01"
   walkInTokenNo?: number; // e.g. 1, 2, 3
+  sourceParentEntryId?: string;
 
   createdAt: string;
   updatedAt: string;
@@ -730,56 +731,51 @@ export function recordHighestEnquiryNumber(num: number) {
 export function getNextEnquiryNo(
   enquiries: CounsellingEnquiry[], 
   requestingCounsellorId?: string,
-  counsellorCode?: string,
+  _counsellorCode?: string,
   requestingTabId?: string
 ): string {
   const currentYear = new Date().getFullYear();
   let maxNum = 0;
   const combined = [...(Array.isArray(enquiries) ? enquiries : [])];
   const occupiedNumbers = new Set<string>();
+  const occupiedSerials = new Set<number>();
   const currentTab = requestingTabId || (typeof window !== "undefined" ? getTabSessionId() : "");
+
+  const registerOccupied = (rawNo?: string | null) => {
+    if (!rawNo) return;
+    const cleanNo = String(rawNo).trim().toUpperCase();
+    occupiedNumbers.add(cleanNo);
+    const match = cleanNo.match(/ENQ-.*-0*(\d+)/i) || cleanNo.match(/(\d+)$/);
+    if (match) {
+      const num = parseInt(match[1] || match[0], 10);
+      if (!isNaN(num) && num > 0 && num < 50000) {
+        occupiedSerials.add(num);
+        if (num > maxNum) maxNum = num;
+      }
+    }
+  };
 
   // 1. Scan active memory enquiries
   combined.forEach(e => {
-    if (!e || !e.enquiryNo) return;
-    const cleanNo = e.enquiryNo.trim().toUpperCase();
-    occupiedNumbers.add(cleanNo);
-    const match = cleanNo.match(/ENQ-.*-(\d+)/i) || cleanNo.match(/(\d+)$/);
-    if (match) {
-      const num = parseInt(match[1] || match[0], 10);
-      if (!isNaN(num) && num > maxNum && num < 5000) {
-        maxNum = num;
-      }
-    }
+    if (!e) return;
+    registerOccupied(e.enquiryNo);
+    registerOccupied(e.siblingEnquiryNo);
   });
 
   // 2. Also check raw localStorage to find any newly saved enquiry from other counsellors or tabs
   if (typeof window !== "undefined") {
-    let localSavedCount = 0;
     try {
       const raw = localStorage.getItem("it_command_counselling") || localStorage.getItem("it_command_counselling_forms");
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
           parsed.forEach(item => {
-            if (item && item.enquiryNo) {
-              localSavedCount++;
-              const cleanNo = item.enquiryNo.trim().toUpperCase();
-              occupiedNumbers.add(cleanNo);
-              const match = cleanNo.match(/ENQ-.*-(\d+)/i) || cleanNo.match(/(\d+)$/);
-              if (match) {
-                const num = parseInt(match[1] || match[0], 10);
-                if (!isNaN(num) && num > maxNum && num < 5000) {
-                  maxNum = num;
-                }
-              }
-            }
+            if (item?.enquiryNo) registerOccupied(item.enquiryNo);
+            if (item?.siblingEnquiryNo) registerOccupied(item.siblingEnquiryNo);
           });
         }
       }
     } catch {}
-
-    const totalActiveCount = combined.length + localSavedCount;
 
     // 3. Scan DELETED enquiries so deleted serial numbers are NEVER reused
     try {
@@ -787,18 +783,7 @@ export function getNextEnquiryNo(
       if (rawDel) {
         const parsedDel = JSON.parse(rawDel);
         if (Array.isArray(parsedDel)) {
-          parsedDel.forEach((delItem: string) => {
-            if (!delItem) return;
-            const cleanDel = String(delItem).trim().toUpperCase();
-            occupiedNumbers.add(cleanDel);
-            const match = cleanDel.match(/ENQ-.*-(\d+)/i) || cleanDel.match(/(\d+)$/);
-            if (match) {
-              const num = parseInt(match[1] || match[0], 10);
-              if (!isNaN(num) && num > maxNum && num < 5000) {
-                maxNum = num;
-              }
-            }
-          });
+          parsedDel.forEach((delItem: string) => registerOccupied(delItem));
         }
       }
     } catch {}
@@ -806,7 +791,7 @@ export function getNextEnquiryNo(
     // 4. Scan highest issued watermark counter (strictly ignore any runaway values)
     try {
       const highestStored = parseInt(localStorage.getItem(HIGHEST_ENQUIRY_KEY) || "0", 10);
-      if (highestStored >= 5000) {
+      if (highestStored >= 50000) {
         localStorage.removeItem(HIGHEST_ENQUIRY_KEY);
       } else if (!isNaN(highestStored) && highestStored > maxNum) {
         maxNum = highestStored;
@@ -821,31 +806,23 @@ export function getNextEnquiryNo(
         if (!res || !res.enquiryNo) continue;
         const isThisTab = Boolean(currentTab && res.tabId === currentTab);
         const isSameCounsellorWithoutTab = Boolean(!currentTab && res.counsellorId?.toLowerCase() === myIdLower);
-        
-        // If reservation belongs to another tab or another counsellor, reserve candidate without inflating maxNum
         if (!isThisTab && !isSameCounsellorWithoutTab) {
-          const resNo = res.enquiryNo.trim().toUpperCase();
-          occupiedNumbers.add(resNo);
+          registerOccupied(res.enquiryNo);
         }
       }
     } catch {}
   }
 
-  // Gap-Filling Slot Recycling Algorithm:
-  // First scan from 1 up to maxNum to check if any cancelled/released sibling slot exists.
-  // If a gap exists (e.g. #100 was released by a counsellor switching back to single student),
-  // immediately recycle that exact slot so admissions serial numbers remain 100% sequential with zero gaps!
+  // Strictly monotonic next number (NEVER gap-recycle past occupied numbers, eliminating cross-laptop ENQ collisions)
   const formatPad = (n: number) => n < 100 ? String(n).padStart(2, "0") : String(n);
-  let candidateNum = 1;
+  let candidateNum = maxNum > 0 ? maxNum + 1 : 1;
   let candidateStr = `ENQ-${currentYear}-${formatPad(candidateNum)}`;
 
-  while (occupiedNumbers.has(candidateStr.trim().toUpperCase()) && candidateNum <= maxNum) {
+  while (
+    occupiedSerials.has(candidateNum) ||
+    occupiedNumbers.has(candidateStr.trim().toUpperCase())
+  ) {
     candidateNum++;
-    candidateStr = `ENQ-${currentYear}-${formatPad(candidateNum)}`;
-  }
-
-  if (candidateNum > maxNum) {
-    candidateNum = maxNum > 0 ? maxNum + 1 : 1;
     candidateStr = `ENQ-${currentYear}-${formatPad(candidateNum)}`;
   }
 

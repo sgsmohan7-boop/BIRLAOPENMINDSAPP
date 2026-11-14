@@ -6,11 +6,6 @@ import { AnimatedLoading } from "./components/AnimatedLoading";
 
 import React, { useState, useEffect } from "react";
 import Login from "./components/Login";
-import Sidebar from "./components/Sidebar";
-import Dashboard from "./components/Dashboard";
-import InventoryMaster from "./components/InventoryMaster";
-import RoomMaster from "./components/RoomMaster";
-import EmployeeMaster from "./components/EmployeeMaster";
 import AppUpdateNotifier from "./components/AppUpdateNotifier";
 
 // Resilient Lazy Import Wrapper: Automatically retries up to 3 times on Vite dev-server rebuilds or transient network hiccups
@@ -38,6 +33,11 @@ function lazyWithRetry<T extends React.ComponentType<any>>(
 }
 
 // Lazy-load portals and modals to keep initial bundle ultra-light and boot instantly (<500ms)
+const Sidebar = lazyWithRetry(() => import("./components/Sidebar"), "Sidebar");
+const Dashboard = lazyWithRetry(() => import("./components/Dashboard"), "Dashboard");
+const InventoryMaster = lazyWithRetry(() => import("./components/InventoryMaster"), "InventoryMaster");
+const RoomMaster = lazyWithRetry(() => import("./components/RoomMaster"), "RoomMaster");
+const EmployeeMaster = lazyWithRetry(() => import("./components/EmployeeMaster"), "EmployeeMaster");
 const CounsellingPortal = lazyWithRetry(() => import("./components/CounsellingPortal"), "CounsellingPortal");
 const ManagementPortal = lazyWithRetry(() => import("./components/ManagementPortal"), "ManagementPortal");
 const WarrantyTracker = lazyWithRetry(() => import("./components/WarrantyTracker"), "WarrantyTracker");
@@ -55,10 +55,11 @@ const ParentFormMobileOnly = lazyWithRetry(() => import("./components/ParentForm
 import PortalErrorBoundary from "./components/PortalErrorBoundary";
 
 
-import { loadData, saveData, calculateExpiryDate, resetToDefaults, clearAllData, loadCounselling, saveCounselling, deduplicateEnquiries, loadCounsellorAccounts, saveCounsellorAccounts, mergeWithDemoEnquiries, mergeWithDefaultCounsellorAccounts, recordDeletedCounsellorAccountId, unrecordDeletedCounsellorAccountId, recordDeletedCounsellorAccountIds, recordDeletedEnquiryId, recordDeletedEnquiryIds, getDeletedEnquiryIds, unmarkDeletedEnquiryId, mergeWithDefaultITStaffAccounts, saveITStaffAccounts, loadITStaffAccounts, recordDeletedITStaffAccountId } from "./utils/storage";
+import { loadData, saveData, calculateExpiryDate, resetToDefaults, clearAllData, loadCounselling, saveCounselling, deduplicateEnquiries, loadCounsellorAccounts, saveCounsellorAccounts, mergeWithDemoEnquiries, mergeWithDefaultCounsellorAccounts, recordDeletedCounsellorAccountId, unrecordDeletedCounsellorAccountId, recordDeletedCounsellorAccountIds, recordDeletedEnquiryId, recordDeletedEnquiryIds, getDeletedEnquiryIds, unmarkDeletedEnquiryId, mergeWithDefaultITStaffAccounts, saveITStaffAccounts, loadITStaffAccounts, recordDeletedITStaffAccountId, getUnsyncedEnquiryIds, markEnquiryUnsynced, unmarkEnquiryUnsynced, loadParentSelfEntries, saveParentSelfEntries } from "./utils/storage";
 import { isObsoleteOrDuplicateCounsellorAccount, cleanAndNormalizeCounsellorAccounts, normalizeAllEnquiries, normalizeEnquiryCounsellor, normalizeCounsellorIdentity } from "./utils/counsellorNormalizer";
+import { synthesizeAndMergeEnquiries, isSameStudentRecord, extractEnquirySerialNum, formatCanonicalEnquiryNo } from "./utils/enquirySynthesis";
 import { AlertTriangle, X, Bell, ArrowRight, RefreshCw, Share2, Smartphone } from "lucide-react";
-import { Ticket, InventoryItem, Room, EmployeeAllocation, WarrantyContract, SchoolBranch, getNextTicketId, getNowFormatted, CounsellingEnquiry, CounsellorAccount, ManagementAccount, loadManagementAccounts, saveManagementAccounts, recordDeletedManagementAccountId, unrecordDeletedManagementAccountId, mergeWithDefaultManagementAccounts, ITStaffAccount, ParentSelfEntry } from "./types";
+import { Ticket, InventoryItem, Room, EmployeeAllocation, WarrantyContract, SchoolBranch, getNextTicketId, getNowFormatted, CounsellingEnquiry, CounsellorAccount, ManagementAccount, loadManagementAccounts, saveManagementAccounts, recordDeletedManagementAccountId, unrecordDeletedManagementAccountId, mergeWithDefaultManagementAccounts, ITStaffAccount, ParentSelfEntry, recordHighestEnquiryNumber } from "./types";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   syncCollection, 
@@ -74,7 +75,6 @@ import {
   prepareEnquiryForFirestore
 } from "./utils/firebase";
 import { checkBackupStatus, syncAllToMongoBackup, fetchFromMongoBackup, saveToMongoBackup, deleteFromMongoBackup } from "./utils/backupClient";
-import { loadR2Credentials, uploadToR2Direct } from "./utils/cloudflareR2Client";
 
 
 export default function App() {
@@ -267,6 +267,7 @@ export default function App() {
   const [allocations, setAllocations] = useState<EmployeeAllocation[]>(() => loadData().allocations);
   const [warranty, setWarranty] = useState<WarrantyContract[]>(() => loadData().warranty);
   const [counsellingEnquiries, setCounsellingEnquiries] = useState<CounsellingEnquiry[]>(() => loadCounselling());
+  const [parentSelfEntries, setParentSelfEntries] = useState<ParentSelfEntry[]>(() => loadParentSelfEntries());
   const [counsellorAccounts, setCounsellorAccounts] = useState<CounsellorAccount[]>(() => loadCounsellorAccounts());
   const [managementAccounts, setManagementAccounts] = useState<ManagementAccount[]>(() => loadManagementAccounts());
   const [itStaffAccounts, setItStaffAccounts] = useState<ITStaffAccount[]>(() => loadITStaffAccounts());
@@ -314,129 +315,43 @@ export default function App() {
     };
     fetchServerAccounts();
 
-    const fetchInitialCounselling = async () => {
-      // 1. Synthesize any completed/claimed walk-in parent entries from parent_self_entries (core counselling collections stream live via syncCollection below)
-      if (isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
+    // Only pull local Express /api/counselling when Firebase is NOT configured (avoid injecting stale local JSON on cloud deployments)
+    if (!isFirebaseConfigured()) {
+      const fetchLocalServerCounselling = async () => {
         try {
-          const cloudParentEntries = await fetchCollectionDocs<ParentSelfEntry>("parent_self_entries");
-          if (Array.isArray(cloudParentEntries) && cloudParentEntries.length > 0 && active) {
-            setCounsellingEnquiries(prev => {
+          const res = await fetch("/api/counselling");
+          if (res.ok) {
+            const json = await res.json();
+            if (json.success && active) {
+              if (Array.isArray(json.deletedIds) && json.deletedIds.length > 0) {
+                recordDeletedEnquiryIds(json.deletedIds);
+              }
               const deletedSet = new Set(getDeletedEnquiryIds().map(x => x.toLowerCase()));
-              const baseLocal = (prev || []).filter(e =>
-                e && (!e.id || !deletedSet.has(e.id.toLowerCase())) && (!e.enquiryNo || !deletedSet.has(e.enquiryNo.toLowerCase()))
-              );
-              const existingKeys = new Set<string>();
-              baseLocal.forEach(e => {
-                if (e.id) existingKeys.add(e.id.toLowerCase());
-                if (e.enquiryNo) existingKeys.add(e.enquiryNo.toLowerCase());
-              });
-
-              const synthesizedParentEnquiries: CounsellingEnquiry[] = [];
-              cloudParentEntries.forEach(p => {
-                if (!p || p.status === "dismissed") return;
-                if (p.status === "completed" || p.status === "claimed" || Boolean(p.claimedBy)) {
-                  const enqNo = p.completedEnquiryNo || p.onlineRefNo || `ENQ-2026-${p.dailyTokenNo || p.id}`;
-                  const docId = enqNo;
-                  if (deletedSet.has(docId.toLowerCase()) || deletedSet.has(enqNo.toLowerCase())) return;
-                  if (!existingKeys.has(docId.toLowerCase()) && !existingKeys.has(enqNo.toLowerCase())) {
-                    const rawDate = p.entryDate || (p.formattedDate ? p.formattedDate.split(" ")[0] : "") || p.dateKey || "11-11-2026";
-                    const counsellorNorm = normalizeCounsellorIdentity(p.completedByName || p.completedBy || p.claimedByName || p.claimedBy);
-                    synthesizedParentEnquiries.push({
-                      id: docId,
-                      enquiryNo: enqNo,
-                      date: rawDate,
-                      studentName: p.studentName || "Walk-in Parent",
-                      applyingForClass: p.applyingForClass || "Grade 1",
-                      academicYear: "2026-2027",
-                      dateOfBirth: p.dateOfBirth || "",
-                      gender: p.gender || "Male",
-                      fatherName: p.fatherName || "",
-                      motherName: p.motherName || "",
-                      contactNo: p.contactNo || "",
-                      whatsappNo: p.whatsappNo || p.contactNo || "",
-                      previousSchool: p.previousSchool || "",
-                      previousClass: "",
-                      residentialAddress: p.residentialAddress || "",
-                      heardAboutSchool: Array.isArray(p.heardAboutSchool) ? p.heardAboutSchool : ["Google / Online Search"],
-                      reasonForChoosing: p.reasonForChoosing || "Campus Reception Walk-in Visit",
-                      preferredContact: "Call",
-                      bestTimeToContact: "Morning 10 AM",
-                      academicPerformance: "",
-                      studentInterests: "",
-                      strengths: "",
-                      areasNeedingSupport: "",
-                      transportRequired: Boolean(p.transportRequired),
-                      hostelRequired: false,
-                      specialLearningSupport: Boolean(p.specialLearningSupport),
-                      specialLearningDetails: "",
-                      pointsDiscussed: "Reception Kiosk Registration & Walk-in Counselling",
-                      counsellorObservations: p.status === "completed" ? "Admissions counselling meeting completed" : "Walk-in parent registered via kiosk",
-                      explainedSchoolFacilities: true,
-                      explainedAcademicProgramme: true,
-                      explainedFeeStructure: true,
-                      explainedTransportDetails: true,
-                      explainedSchoolRules: true,
-                      explainedActivitiesSports: true,
-                      admissionStatus: "Follow-up Required",
-                      followUpDate: "18-11-2026",
-                      counsellorId: counsellorNorm.id,
-                      counsellorName: p.completedByName || p.claimedByName || counsellorNorm.name,
-                      parentSignatureRecorded: true,
-                      walkInTokenNo: p.dailyTokenNo || undefined,
-                      createdAt: p.submittedAt || p.claimedAt || new Date().toLocaleString(),
-                      updatedAt: new Date().toLocaleDateString(),
-                      updatedAtTimestamp: p.completedAt ? new Date(p.completedAt).getTime() : Date.now()
-                    });
-                    existingKeys.add(docId.toLowerCase());
-                    existingKeys.add(enqNo.toLowerCase());
-                  }
-                }
-              });
-
-              if (synthesizedParentEnquiries.length === 0) return baseLocal;
-              const merged = deduplicateEnquiries([...synthesizedParentEnquiries, ...baseLocal]);
-              const { enquiries: normalized } = normalizeAllEnquiries(merged);
-              saveCounselling(normalized);
-              return normalized;
-            });
-          }
-        } catch (_) {}
-      }
-
-      // 2. Express Server API fallback (for local Node environment)
-      try {
-        const res = await fetch("/api/counselling");
-        if (res.ok) {
-          const json = await res.json();
-          if (json.success && active) {
-            if (Array.isArray(json.deletedIds) && json.deletedIds.length > 0) {
-              recordDeletedEnquiryIds(json.deletedIds);
-            }
-            const deletedSet = new Set(getDeletedEnquiryIds().map(x => x.toLowerCase()));
-            const serverEnquiries = (Array.isArray(json.enquiries) ? json.enquiries : []).filter((e: any) => {
-              if (!e) return false;
-              const eId = (e.id || "").toLowerCase();
-              const eNo = (e.enquiryNo || "").toLowerCase();
-              return (!eId || !deletedSet.has(eId)) && (!eNo || !deletedSet.has(eNo));
-            });
-            setCounsellingEnquiries(prev => {
-              const prevFiltered = (prev || []).filter((e: any) => {
+              const serverEnquiries = (Array.isArray(json.enquiries) ? json.enquiries : []).filter((e: any) => {
                 if (!e) return false;
                 const eId = (e.id || "").toLowerCase();
                 const eNo = (e.enquiryNo || "").toLowerCase();
                 return (!eId || !deletedSet.has(eId)) && (!eNo || !deletedSet.has(eNo));
               });
-              const combined = deduplicateEnquiries([...serverEnquiries, ...prevFiltered]);
-              saveCounselling(combined);
-              return combined;
-            });
+              setCounsellingEnquiries(prev => {
+                const prevFiltered = (prev || []).filter((e: any) => {
+                  if (!e) return false;
+                  const eId = (e.id || "").toLowerCase();
+                  const eNo = (e.enquiryNo || "").toLowerCase();
+                  return (!eId || !deletedSet.has(eId)) && (!eNo || !deletedSet.has(eNo));
+                });
+                const combined = deduplicateEnquiries([...serverEnquiries, ...prevFiltered]);
+                saveCounselling(combined);
+                return combined;
+              });
+            }
           }
+        } catch (e) {
+          console.warn("Server counselling fetch warning:", e);
         }
-      } catch (e) {
-        console.warn("Server counselling fetch warning:", e);
-      }
-    };
-    fetchInitialCounselling();
+      };
+      fetchLocalServerCounselling();
+    }
 
     return () => { active = false; };
   }, [isLoggedIn, isParentKioskMode]);
@@ -451,24 +366,126 @@ export default function App() {
   const deletedFormsLoadedRef = React.useRef<boolean>(false);
   const backfilledIdsRef = React.useRef<Set<string>>(new Set());
   const normalizedMigratedIdsRef = React.useRef<Set<string>>(new Set());
+  const cloudFormsRef = React.useRef<CounsellingEnquiry[] | null>(null);
+  const cloudParentsRef = React.useRef<ParentSelfEntry[] | null>(null);
 
-  // Automatically push any local-only unsynced enquiries (or newer local edits) up to Firestore so all laptops stay 100% identical
+  const isLegacyTestOrGhostItem = (item: Partial<CounsellingEnquiry> | null | undefined): boolean => {
+    if (!item || !item.studentName || !item.studentName.trim()) return true;
+    const id = String(item.id || "").trim();
+    if (/^(TEST_DELETE_CHECK|TEST_DEBUG_|TEST_ENQ_1|TEST-01)/i.test(id)) return true;
+    // Ignore stale sravan October demo records from local JSON caches
+    const cname = String(item.counsellorName || "").trim().toLowerCase();
+    if (cname === "sravan" || String(item.counsellorId || "").toUpperCase() === "COUNSELLOR-02") {
+      if (["dd", "aaa", "wwww", "w", "23", "mohanarao", "wasdfghj", "yokshitha", "test1"].includes(item.studentName.trim().toLowerCase())) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  // Identify genuinely unsynced local creations/edits that should be preserved & pushed to Firestore without overwriting colliding students
+  const collectPendingUnsyncedLocals = React.useCallback(
+    (
+      cloudForms: CounsellingEnquiry[],
+      cloudParents: ParentSelfEntry[],
+      prevLocal: CounsellingEnquiry[],
+      deletedSet: Set<string>
+    ): CounsellingEnquiry[] => {
+      if (!Array.isArray(prevLocal) || prevLocal.length === 0) return [];
+      const unsyncedIdSet = new Set(getUnsyncedEnquiryIds().map(x => x.toLowerCase()));
+      const pending: CounsellingEnquiry[] = [];
+
+      const findHighestSerial = (): number => {
+        let maxN = 0;
+        [...cloudForms, ...prevLocal, ...pending].forEach(it => {
+          const n = extractEnquirySerialNum(it?.enquiryNo);
+          if (n && n > maxN) maxN = n;
+        });
+        deletedSet.forEach(d => {
+          const n = extractEnquirySerialNum(d);
+          if (n && n > maxN) maxN = n;
+        });
+        return maxN;
+      };
+
+      for (const localItem of prevLocal) {
+        if (!localItem || (!localItem.id && !localItem.enquiryNo)) continue;
+        if (isLegacyTestOrGhostItem(localItem)) continue;
+
+        const idLower = (localItem.id || "").trim().toLowerCase();
+        const noLower = (localItem.enquiryNo || "").trim().toLowerCase();
+        if ((idLower && deletedSet.has(idLower)) || (noLower && deletedSet.has(noLower))) continue;
+
+        const isExplicitlyUnsynced = unsyncedIdSet.has(idLower) || unsyncedIdSet.has(noLower);
+
+        // Cached synthetic parent rows (__pe-...) are derived dynamically from parent_self_entries; never re-push as missing forms unless explicitly saved offline
+        if (!isExplicitlyUnsynced && (idLower.includes("__pe-") || idLower.includes("__onl-") || localItem.counsellorObservations === "Walk-in parent registered via kiosk" || localItem.counsellorObservations === "Admissions counselling meeting completed")) {
+          if (localItem.sourceParentEntryId || idLower.includes("__")) {
+            continue;
+          }
+        }
+
+        // Match against cloudForms by SAME student (never match a different student who happens to hold same ENQ number)
+        const cloudSameStudent = cloudForms.find(cf => isSameStudentRecord(cf, localItem));
+        if (cloudSameStudent) {
+          // Only keep local edit if explicitly marked unsynced AND strictly newer than cloud version
+          const localTs = Number(localItem.updatedAtTimestamp || 0);
+          const cloudTs = Number(cloudSameStudent.updatedAtTimestamp || 0);
+          if (isExplicitlyUnsynced && localTs > cloudTs) {
+            pending.push(localItem);
+          } else {
+            unmarkEnquiryUnsynced(localItem.id, localItem.enquiryNo);
+          }
+          continue;
+        }
+
+        // Also check if already represented by a parent entry in cloudParents (so claimed tokens don't duplicate/push legacy local ghosts)
+        const matchesParent = cloudParents.some(cp => isSameStudentRecord(cp, localItem));
+        if (matchesParent && !isExplicitlyUnsynced) {
+          continue;
+        }
+
+        // Real student missing from Firestore! Ensure we never collide/overwrite an existing cloud ENQ document
+        let safeDocId = (localItem.enquiryNo || localItem.id).trim();
+        const collidingCloud = cloudForms.find(
+          cf => (cf.id || "").trim().toLowerCase() === safeDocId.toLowerCase() ||
+                (cf.enquiryNo || "").trim().toLowerCase() === safeDocId.toLowerCase()
+        );
+        if (collidingCloud && !isSameStudentRecord(collidingCloud, localItem)) {
+          // Safe auto-reallocate only if already occupied in Firestore by a DIFFERENT student
+          const nextNum = findHighestSerial() + 1;
+          safeDocId = formatCanonicalEnquiryNo(nextNum);
+        }
+
+        pending.push({
+          ...localItem,
+          id: safeDocId,
+          enquiryNo: safeDocId
+        });
+      }
+
+      return pending;
+    },
+    []
+  );
+
+  // Automatically push any genuinely unsynced local enquiries up to Firestore cleanly
   const pushUnsyncedLocalEnquiriesToCloud = React.useCallback(
-    (firestoreItems: CounsellingEnquiry[], localItems: CounsellingEnquiry[], deletedSet: Set<string>) => {
-      if (!isFirebaseConfigured() || !Array.isArray(localItems) || localItems.length === 0) return;
+    (cloudForms: CounsellingEnquiry[], pendingLocals: CounsellingEnquiry[], deletedSet: Set<string>) => {
+      if (!isFirebaseConfigured() || !Array.isArray(pendingLocals) || pendingLocals.length === 0) return;
 
-      const firestoreByKey = new Map<string, CounsellingEnquiry>();
-      (firestoreItems || []).forEach((fItem) => {
+      const cloudByKey = new Map<string, CounsellingEnquiry>();
+      (cloudForms || []).forEach((fItem) => {
         if (!fItem) return;
         const fId = (fItem.id || "").trim().toLowerCase();
         const fNo = (fItem.enquiryNo || "").trim().toLowerCase();
-        if (fId) firestoreByKey.set(fId, fItem);
-        if (fNo) firestoreByKey.set(fNo, fItem);
+        if (fId) cloudByKey.set(fId, fItem);
+        if (fNo) cloudByKey.set(fNo, fItem);
       });
 
-      localItems.forEach((localItem) => {
+      pendingLocals.forEach((localItem) => {
         if (!localItem || (!localItem.id && !localItem.enquiryNo)) return;
-        if (!localItem.studentName || !localItem.studentName.trim()) return;
+        if (isLegacyTestOrGhostItem(localItem)) return;
 
         const targetDocId = (localItem.enquiryNo || localItem.id).trim();
         const idLower = (localItem.id || "").trim().toLowerCase();
@@ -478,14 +495,15 @@ export default function App() {
           return;
         }
 
-        const cloudMatch = (noLower && firestoreByKey.get(noLower)) || (idLower && firestoreByKey.get(idLower));
+        const cloudMatch = (noLower && cloudByKey.get(noLower)) || (idLower && cloudByKey.get(idLower));
+        if (cloudMatch && !isSameStudentRecord(cloudMatch, localItem)) {
+          return;
+        }
+
         const localTs = Number(localItem.updatedAtTimestamp || 0);
         const cloudTs = Number(cloudMatch?.updatedAtTimestamp || 0);
 
-        const isMissingInCloud = !cloudMatch;
-        const isNewerLocally = Boolean(cloudMatch && localTs > 0 && localTs > cloudTs);
-
-        if (isMissingInCloud || isNewerLocally) {
+        if (!cloudMatch || (localTs > 0 && localTs > cloudTs)) {
           const syncSig = `${targetDocId.toLowerCase()}:${localTs}`;
           if (!backfilledIdsRef.current.has(syncSig)) {
             backfilledIdsRef.current.add(syncSig);
@@ -497,7 +515,11 @@ export default function App() {
             const safePayload = prepareEnquiryForFirestore(normalized);
             saveDocument("counselling_forms", targetDocId, safePayload)
               .then((ok) => {
-                if (!ok) backfilledIdsRef.current.delete(syncSig);
+                if (ok) {
+                  unmarkEnquiryUnsynced(targetDocId, localItem.id, localItem.enquiryNo);
+                } else {
+                  backfilledIdsRef.current.delete(syncSig);
+                }
               })
               .catch(() => {
                 backfilledIdsRef.current.delete(syncSig);
@@ -507,6 +529,40 @@ export default function App() {
       });
     },
     []
+  );
+
+  // Recompute unified cloud-authoritative counselling state from Firestore snapshots
+  const computeCloudAuthoritativeEnquiries = React.useCallback(
+    (
+      cloudForms: CounsellingEnquiry[],
+      cloudParents: ParentSelfEntry[],
+      prevLocal: CounsellingEnquiry[],
+      allowPush: boolean
+    ): CounsellingEnquiry[] => {
+      const deletedIds = getDeletedEnquiryIds();
+      const deletedSet = new Set(deletedIds.map(x => x.toLowerCase()));
+
+      const pendingLocals = collectPendingUnsyncedLocals(cloudForms, cloudParents, prevLocal, deletedSet);
+      if (allowPush && pendingLocals.length > 0) {
+        pushUnsyncedLocalEnquiriesToCloud(cloudForms, pendingLocals, deletedSet);
+      }
+
+      // Combine authoritative Firestore forms + genuinely pending unsynced locals, then run deterministic synthesis
+      const formsPlusPending = [...cloudForms];
+      pendingLocals.forEach(pItem => {
+        const idx = formsPlusPending.findIndex(f => isSameStudentRecord(f, pItem));
+        if (idx >= 0) {
+          formsPlusPending[idx] = pItem;
+        } else {
+          formsPlusPending.push(pItem);
+        }
+      });
+
+      const unified = synthesizeAndMergeEnquiries(formsPlusPending, cloudParents, deletedIds);
+      const { enquiries: normalized } = normalizeAllEnquiries(unified);
+      return normalized;
+    },
+    [collectPendingUnsyncedLocals, pushUnsyncedLocalEnquiriesToCloud]
   );
 
   const handleSyncRefresh = async () => {
@@ -524,7 +580,7 @@ export default function App() {
       setCounsellingEnquiries(currentLocalEnquiries);
       setCounsellorAccounts(loadCounsellorAccounts());
 
-      // 2. Direct Live Firestore Pull + Bidirectional Unsynced Backfill (Works on Vercel & all Cloud deployments)
+      // 2. Direct Live Firestore Pull (Google Docs Single Source of Truth across all laptops)
       if (isFirebaseConfigured()) {
         clearQuotaExhausted();
         try {
@@ -541,95 +597,27 @@ export default function App() {
             deletedFormsLoadedRef.current = true;
           }
 
-          const deletedSet = new Set(getDeletedEnquiryIds().map(x => x.toLowerCase()));
-          const activeCloudItems = (Array.isArray(cloudEnquiries) ? cloudEnquiries : [])
-            .filter(e => e && (!e.id || !deletedSet.has(e.id.toLowerCase())) && (!e.enquiryNo || !deletedSet.has(e.enquiryNo.toLowerCase())))
-            .map(e => ({ ...e, id: e.enquiryNo || e.id }));
-
-          const existingKeys = new Set<string>();
-          activeCloudItems.forEach(e => {
-            if (e.id) existingKeys.add(e.id.toLowerCase());
-            if (e.enquiryNo) existingKeys.add(e.enquiryNo.toLowerCase());
-          });
-
-          // Synthesize any missing completed or claimed entries from parent_self_entries
-          const synthesizedParentEnquiries: CounsellingEnquiry[] = [];
           if (Array.isArray(cloudParentEntries)) {
-            cloudParentEntries.forEach(p => {
-              if (!p || p.status === "dismissed") return;
-              if (p.status === "completed" || p.status === "claimed" || Boolean(p.claimedBy)) {
-                const enqNo = p.completedEnquiryNo || p.onlineRefNo || `ENQ-2026-${p.dailyTokenNo || p.id}`;
-                const docId = enqNo;
-                if (!existingKeys.has(docId.toLowerCase()) && !existingKeys.has(enqNo.toLowerCase())) {
-                  const rawDate = p.entryDate || (p.formattedDate ? p.formattedDate.split(" ")[0] : "") || p.dateKey || "11-11-2026";
-                  const counsellorNorm = normalizeCounsellorIdentity(p.completedByName || p.completedBy || p.claimedByName || p.claimedBy);
-                  synthesizedParentEnquiries.push({
-                    id: docId,
-                    enquiryNo: enqNo,
-                    date: rawDate,
-                    studentName: p.studentName || "Walk-in Parent",
-                    applyingForClass: p.applyingForClass || "Grade 1",
-                    academicYear: "2026-2027",
-                    dateOfBirth: p.dateOfBirth || "",
-                    gender: p.gender || "Male",
-                    fatherName: p.fatherName || "",
-                    motherName: p.motherName || "",
-                    contactNo: p.contactNo || "",
-                    whatsappNo: p.whatsappNo || p.contactNo || "",
-                    previousSchool: p.previousSchool || "",
-                    previousClass: "",
-                    residentialAddress: p.residentialAddress || "",
-                    heardAboutSchool: Array.isArray(p.heardAboutSchool) ? p.heardAboutSchool : ["Google / Online Search"],
-                    reasonForChoosing: p.reasonForChoosing || "Campus Reception Walk-in Visit",
-                    preferredContact: "Call",
-                    bestTimeToContact: "Morning 10 AM",
-                    academicPerformance: "",
-                    studentInterests: "",
-                    strengths: "",
-                    areasNeedingSupport: "",
-                    transportRequired: Boolean(p.transportRequired),
-                    hostelRequired: false,
-                    specialLearningSupport: Boolean(p.specialLearningSupport),
-                    specialLearningDetails: "",
-                    pointsDiscussed: "Reception Kiosk Registration & Walk-in Counselling",
-                    counsellorObservations: "Admissions counselling meeting completed",
-                    explainedSchoolFacilities: true,
-                    explainedAcademicProgramme: true,
-                    explainedFeeStructure: true,
-                    explainedTransportDetails: true,
-                    explainedSchoolRules: true,
-                    explainedActivitiesSports: true,
-                    admissionStatus: "Follow-up Required",
-                    followUpDate: "18-11-2026",
-                    counsellorId: counsellorNorm.id,
-                    counsellorName: p.completedByName || p.claimedByName || counsellorNorm.name,
-                    parentSignatureRecorded: true,
-                    walkInTokenNo: p.dailyTokenNo || undefined,
-                    createdAt: p.submittedAt || p.claimedAt || new Date().toLocaleString(),
-                    updatedAt: new Date().toLocaleDateString(),
-                    updatedAtTimestamp: p.completedAt ? new Date(p.completedAt).getTime() : Date.now()
-                  });
-                  existingKeys.add(docId.toLowerCase());
-                  existingKeys.add(enqNo.toLowerCase());
-                }
-              }
-            });
+            cloudParentsRef.current = cloudParentEntries;
+            setParentSelfEntries(cloudParentEntries);
+            saveParentSelfEntries(cloudParentEntries);
           }
 
-          const totalCloudPool = [...activeCloudItems, ...synthesizedParentEnquiries];
-
-          setCounsellingEnquiries(prev => {
-            const baseLocal = (prev && prev.length > 0 ? prev : currentLocalEnquiries).filter(e =>
-              e && (!e.id || !deletedSet.has(e.id.toLowerCase())) && (!e.enquiryNo || !deletedSet.has(e.enquiryNo.toLowerCase()))
-            );
-            if (deletedFormsLoadedRef.current) {
-              pushUnsyncedLocalEnquiriesToCloud(totalCloudPool, baseLocal, deletedSet);
-            }
-            const merged = deduplicateEnquiries([...totalCloudPool, ...baseLocal]);
-            const { enquiries: normalized } = normalizeAllEnquiries(merged);
-            saveCounselling(normalized);
-            return normalized;
-          });
+          if (Array.isArray(cloudEnquiries)) {
+            cloudFormsRef.current = cloudEnquiries;
+            const effectiveParents = cloudParentsRef.current ?? loadParentSelfEntries();
+            setCounsellingEnquiries(prev => {
+              const baseLocal = prev && prev.length > 0 ? prev : currentLocalEnquiries;
+              const unified = computeCloudAuthoritativeEnquiries(
+                cloudEnquiries,
+                effectiveParents,
+                baseLocal,
+                deletedFormsLoadedRef.current
+              );
+              saveCounselling(unified);
+              return unified;
+            });
+          }
 
           if (Array.isArray(cloudAccounts) && cloudAccounts.length > 0) {
             const mergedAccs = mergeWithDefaultCounsellorAccounts(cloudAccounts);
@@ -637,32 +625,32 @@ export default function App() {
             saveCounsellorAccounts(mergedAccs);
           }
         } catch (_) {}
-      }
-
-      // 3. Also pull from Express Server API when running in local/Node environments
-      try {
-        const cRes = await fetch("/api/counselling");
-        if (cRes.ok) {
-          const cJson = await cRes.json();
-          if (cJson.success && Array.isArray(cJson.enquiries)) {
-            if (Array.isArray(cJson.deletedIds) && cJson.deletedIds.length > 0) {
-              recordDeletedEnquiryIds(cJson.deletedIds);
+      } else {
+        // Pure local/Node fallback only when Firebase is not configured
+        try {
+          const cRes = await fetch("/api/counselling");
+          if (cRes.ok) {
+            const cJson = await cRes.json();
+            if (cJson.success && Array.isArray(cJson.enquiries)) {
+              if (Array.isArray(cJson.deletedIds) && cJson.deletedIds.length > 0) {
+                recordDeletedEnquiryIds(cJson.deletedIds);
+              }
+              const deletedSet = new Set(getDeletedEnquiryIds().map(x => x.toLowerCase()));
+              const serverItems = cJson.enquiries.filter((e: any) => {
+                if (!e) return false;
+                const eId = (e.id || "").toLowerCase();
+                const eNo = (e.enquiryNo || "").toLowerCase();
+                return (!eId || !deletedSet.has(eId)) && (!eNo || !deletedSet.has(eNo));
+              });
+              setCounsellingEnquiries(prev => {
+                const combined = deduplicateEnquiries([...(prev || []), ...serverItems]);
+                saveCounselling(combined);
+                return combined;
+              });
             }
-            const deletedSet = new Set(getDeletedEnquiryIds().map(x => x.toLowerCase()));
-            const serverItems = cJson.enquiries.filter((e: any) => {
-              if (!e) return false;
-              const eId = (e.id || "").toLowerCase();
-              const eNo = (e.enquiryNo || "").toLowerCase();
-              return (!eId || !deletedSet.has(eId)) && (!eNo || !deletedSet.has(eNo));
-            });
-            setCounsellingEnquiries(prev => {
-              const combined = deduplicateEnquiries([...(prev || []), ...serverItems]);
-              saveCounselling(combined);
-              return combined;
-            });
           }
-        }
-      } catch (_) {}
+        } catch (_) {}
+      }
 
       try {
         const aRes = await fetch("/api/accounts");
@@ -929,19 +917,39 @@ export default function App() {
             if (deletedDocs.length > 0) {
               const rawIds = deletedDocs.flatMap(d => [d.id, d.enquiryNo]).filter(Boolean) as string[];
               recordDeletedEnquiryIds(rawIds);
-              const delSet = new Set(rawIds.map(x => x.toLowerCase()));
+            }
+            if (cloudFormsRef.current !== null) {
+              const effectiveParents = cloudParentsRef.current ?? loadParentSelfEntries();
               setCounsellingEnquiries((prev) => {
-                const current = prev || [];
-                const filtered = current.filter((e) => {
-                  if (!e) return false;
-                  const eId = (e.id || "").toLowerCase();
-                  const eNo = (e.enquiryNo || "").toLowerCase();
-                  return (!eId || !delSet.has(eId)) && (!eNo || !delSet.has(eNo));
-                });
-                saveCounselling(filtered);
-                return filtered;
+                const unified = computeCloudAuthoritativeEnquiries(
+                  cloudFormsRef.current || [],
+                  effectiveParents,
+                  prev || [],
+                  true
+                );
+                saveCounselling(unified);
+                return unified;
               });
             }
+          }
+        }, []),
+
+        syncCollection<ParentSelfEntry>("parent_self_entries", (parentDocs) => {
+          if (!Array.isArray(parentDocs)) return;
+          cloudParentsRef.current = parentDocs;
+          setParentSelfEntries(parentDocs);
+          saveParentSelfEntries(parentDocs);
+          if (cloudFormsRef.current !== null) {
+            setCounsellingEnquiries((prev) => {
+              const unified = computeCloudAuthoritativeEnquiries(
+                cloudFormsRef.current || [],
+                parentDocs,
+                prev || [],
+                deletedFormsLoadedRef.current
+              );
+              saveCounselling(unified);
+              return unified;
+            });
           }
         }, []),
 
@@ -955,15 +963,9 @@ export default function App() {
 
           if (items.length === 0) {
             if (localStorage.getItem("sgs_wiping_database") === "true") {
+              cloudFormsRef.current = [];
               setCounsellingEnquiries([]);
               saveCounselling([]);
-              try {
-                fetch("/api/counselling", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify([])
-                }).catch(() => {});
-              } catch (_) {}
             }
             return;
           }
@@ -981,11 +983,12 @@ export default function App() {
             }
           });
 
-          // Standardize ID strictly to canonical enquiryNo, exclude deleted items, and migrate only genuinely un-normalized cloud docs
+          // Standardize ID & normalize counsellor without dropping colliding students
           const nonDeletedItems = items
             .filter(e => e && (!e.id || !deletedSet.has(e.id.toLowerCase())) && (!e.enquiryNo || !deletedSet.has(e.enquiryNo.toLowerCase())))
             .map(e => {
-              const base = { ...e, id: e.enquiryNo || e.id };
+              const preferredDocId = (e.id && e.id.includes("__")) ? e.id : (e.enquiryNo || e.id);
+              const base = { ...e, id: preferredDocId };
               const { normalized, wasChanged } = normalizeEnquiryCounsellor(base);
               if (wasChanged && normalized.id && !normalizedMigratedIdsRef.current.has(normalized.id)) {
                 normalizedMigratedIdsRef.current.add(normalized.id);
@@ -994,42 +997,24 @@ export default function App() {
               return normalized;
             });
 
+          cloudFormsRef.current = nonDeletedItems;
+          const effectiveParents = cloudParentsRef.current ?? loadParentSelfEntries();
+
           setCounsellingEnquiries((prev) => {
-            const prevFiltered = (prev || []).filter((e: any) => {
-              if (!e) return false;
-              const eId = (e.id || "").toLowerCase();
-              const eNo = (e.enquiryNo || "").toLowerCase();
-              return (!eId || !deletedSet.has(eId)) && (!eNo || !deletedSet.has(eNo));
-            });
-
-            // Auto-backfill any local-only unsynced enquiries (e.g. saved during offline/quota window) up to Firestore
-            if (deletedFormsLoadedRef.current) {
-              pushUnsyncedLocalEnquiriesToCloud(nonDeletedItems, prevFiltered, deletedSet);
-            } else {
-              fetchCollectionDocs<{ id: string; enquiryNo?: string }>("deleted_counselling_forms")
-                .then((delDocs) => {
-                  if (Array.isArray(delDocs)) {
-                    const extraIds = delDocs.flatMap(d => [d.id, d.enquiryNo]).filter(Boolean) as string[];
-                    if (extraIds.length > 0) recordDeletedEnquiryIds(extraIds);
-                    deletedFormsLoadedRef.current = true;
-                    const freshDeletedSet = new Set(getDeletedEnquiryIds().map(x => x.toLowerCase()));
-                    pushUnsyncedLocalEnquiriesToCloud(nonDeletedItems, prevFiltered, freshDeletedSet);
-                  }
-                })
-                .catch(() => {});
-            }
-
-            // Authoritative Firestore items first, local unsynced items second
-            const deduped = deduplicateEnquiries([...nonDeletedItems, ...prevFiltered]);
-            const { enquiries: normalizedEnquiries } = normalizeAllEnquiries(deduped);
-            saveCounselling(normalizedEnquiries);
+            const unified = computeCloudAuthoritativeEnquiries(
+              nonDeletedItems,
+              effectiveParents,
+              prev || [],
+              deletedFormsLoadedRef.current
+            );
+            saveCounselling(unified);
 
             fetch("/api/counselling", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(normalizedEnquiries)
+              body: JSON.stringify(unified)
             }).catch(() => {});
-            return normalizedEnquiries;
+            return unified;
           });
         }, []),
 
@@ -1247,15 +1232,35 @@ export default function App() {
 
   const handleSaveCounselling = (enquiry: CounsellingEnquiry) => {
     const saveTimestamp = Date.now();
-    // Canonical ID normalization: strictly enforce id === enquiryNo + authoritative millisecond timestamp
+    // Guard against ENQ-number collisions with a DIFFERENT student in cloud or current state
+    let resolvedNo = (enquiry.enquiryNo || enquiry.id || "").trim();
+    const knownPool = cloudFormsRef.current || counsellingEnquiries;
+    if (resolvedNo) {
+      const colliding = knownPool.find(
+        e => e && ((e.id || "").trim().toLowerCase() === resolvedNo.toLowerCase() || (e.enquiryNo || "").trim().toLowerCase() === resolvedNo.toLowerCase())
+      );
+      if (colliding && !isSameStudentRecord(colliding, enquiry)) {
+        let maxN = 0;
+        knownPool.forEach(e => {
+          const n = extractEnquirySerialNum(e?.enquiryNo);
+          if (n && n > maxN) maxN = n;
+        });
+        resolvedNo = formatCanonicalEnquiryNo(maxN + 1);
+      }
+    }
+    const serial = extractEnquirySerialNum(resolvedNo);
+    if (serial) recordHighestEnquiryNumber(serial);
+
     const cleanEnquiry: CounsellingEnquiry = {
       ...enquiry,
-      id: enquiry.enquiryNo || enquiry.id,
+      id: resolvedNo || enquiry.id,
+      enquiryNo: resolvedNo || enquiry.enquiryNo,
       updatedAtTimestamp: saveTimestamp
     };
 
-    // Unmark from deleted records in localStorage and Firestore so newly created/updated enquiries are never hidden
+    // Unmark from deleted records & track pending cloud sync until confirmed in Firestore
     unmarkDeletedEnquiryId(cleanEnquiry.id, cleanEnquiry.enquiryNo);
+    markEnquiryUnsynced(cleanEnquiry.id, cleanEnquiry.enquiryNo);
     if (isFirebaseConfigured()) {
       deleteDocument("deleted_counselling_forms", (cleanEnquiry.id || "").toLowerCase());
       if (cleanEnquiry.enquiryNo) {
@@ -1274,7 +1279,11 @@ export default function App() {
       // Strictly save 1 document per form into canonical counselling_forms collection
       saveDocument("counselling_forms", targetDocId, firestoreEnquiry)
         .then((ok) => {
-          if (!ok) backfilledIdsRef.current.delete(syncSig);
+          if (ok) {
+            unmarkEnquiryUnsynced(targetDocId, targetEnquiry.id, targetEnquiry.enquiryNo);
+          } else {
+            backfilledIdsRef.current.delete(syncSig);
+          }
         })
         .catch(() => {
           backfilledIdsRef.current.delete(syncSig);
@@ -1288,7 +1297,10 @@ export default function App() {
 
     // 1. Immediately persist synchronously to LocalStorage & update state
     setCounsellingEnquiries((prev) => {
-      const idx = prev.findIndex((e) => e.id === cleanEnquiry.id || (cleanEnquiry.enquiryNo && e.enquiryNo && e.enquiryNo.toLowerCase() === cleanEnquiry.enquiryNo.toLowerCase()));
+      const idx = prev.findIndex((e) =>
+        isSameStudentRecord(e, cleanEnquiry) &&
+        ((e.id === cleanEnquiry.id) || (cleanEnquiry.enquiryNo && e.enquiryNo && e.enquiryNo.toLowerCase() === cleanEnquiry.enquiryNo.toLowerCase()))
+      );
       let nextList: CounsellingEnquiry[];
       if (idx >= 0) {
         nextList = [...prev];
@@ -1332,12 +1344,15 @@ export default function App() {
 
     // 3. Direct Cloudflare R2 Background Upload (Ensures 24/7 global audio access)
     if (enquiry.audioRecording?.audioData && enquiry.audioRecording.audioData.length > 50) {
-      try {
-        const creds = loadR2Credentials();
-        const r2FileName = enquiry.audioRecording.fileName || `${enquiry.enquiryNo || 'ENQ'}_Meeting_${new Date().toISOString().slice(0, 10)}.webm`;
-        uploadToR2Direct(creds, r2FileName, enquiry.audioRecording.audioData, enquiry.audioRecording.mimeType || "audio/webm")
-          .catch((err) => console.warn("Background R2 audio auto-upload notice:", err));
-      } catch (_) {}
+      const audioPayload = enquiry.audioRecording.audioData;
+      const mimeType = enquiry.audioRecording.mimeType || "audio/webm";
+      const r2FileName = enquiry.audioRecording.fileName || `${enquiry.enquiryNo || 'ENQ'}_Meeting_${new Date().toISOString().slice(0, 10)}.webm`;
+      import("./utils/cloudflareR2Client")
+        .then(({ loadR2Credentials, uploadToR2Direct }) => {
+          const creds = loadR2Credentials();
+          return uploadToR2Direct(creds, r2FileName, audioPayload, mimeType);
+        })
+        .catch((err) => console.warn("Background R2 audio auto-upload notice:", err));
     }
 
     // 4. Express Server API sync + Audio File Storage Vault (for Node.js dev environments)
@@ -1932,6 +1947,8 @@ export default function App() {
           <div className="h-full w-full overflow-y-auto custom-scrollbar">
             <CounsellingPortal
               enquiries={counsellingEnquiries}
+              parentSelfEntriesProp={parentSelfEntries}
+              onParentSelfEntriesChange={setParentSelfEntries}
               onSaveEnquiry={handleSaveCounselling}
               onDeleteEnquiry={handleDeleteCounselling}
               onDeleteMultipleEnquiries={handleDeleteMultipleCounselling}
@@ -1996,6 +2013,8 @@ export default function App() {
             <div className="h-full w-full overflow-y-auto custom-scrollbar">
               <CounsellingPortal
                 enquiries={counsellingEnquiries}
+                parentSelfEntriesProp={parentSelfEntries}
+                onParentSelfEntriesChange={setParentSelfEntries}
                 onSaveEnquiry={handleSaveCounselling}
                 onDeleteEnquiry={handleDeleteCounselling}
                 onDeleteMultipleEnquiries={handleDeleteMultipleCounselling}
@@ -2090,6 +2109,8 @@ export default function App() {
           <PortalErrorBoundary sectionName="Parent Counselling & Admissions Department" onReset={handleSyncRefresh}>
             <CounsellingPortal
               enquiries={counsellingEnquiries}
+              parentSelfEntriesProp={parentSelfEntries}
+              onParentSelfEntriesChange={setParentSelfEntries}
               onSaveEnquiry={handleSaveCounselling}
               onDeleteEnquiry={handleDeleteCounselling}
               onDeleteMultipleEnquiries={handleDeleteMultipleCounselling}
@@ -2170,18 +2191,20 @@ export default function App() {
           </div>
         </div>
       )}
-      <Sidebar
-        currentTab={currentTab}
-        setCurrentTab={setCurrentTab}
-        userEmail={userEmail}
-        userRole={userRole}
-        userBranch={userBranch}
-        onLogout={handleLogout}
-        theme={theme}
-        toggleTheme={toggleTheme}
-        onSyncRefresh={handleSyncRefresh}
-        allowedTabs={allowedTabs}
-      />
+      <React.Suspense fallback={<div className="w-64 shrink-0 bg-slate-900" />}>
+        <Sidebar
+          currentTab={currentTab}
+          setCurrentTab={setCurrentTab}
+          userEmail={userEmail}
+          userRole={userRole}
+          userBranch={userBranch}
+          onLogout={handleLogout}
+          theme={theme}
+          toggleTheme={toggleTheme}
+          onSyncRefresh={handleSyncRefresh}
+          allowedTabs={allowedTabs}
+        />
+      </React.Suspense>
       <main className="flex-1 h-full overflow-hidden flex flex-col">
         {/* Top Header Bar - Cleaned & Uncluttered (Hidden on print) */}
         <div className="bg-[#FFFDF9] border-b border-[#E2CBB5] px-4 py-2 flex items-center justify-between shrink-0 relative z-30 shadow-xs no-print">

@@ -2596,83 +2596,51 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
       const currentList = readCounsellingData();
       const deletedList = readDeletedEnquiries();
       const occupied = new Set<string>();
+      const occupiedSerials = new Set<number>();
+      let maxNum = 0;
+
+      const registerOccupied = (no?: string | null) => {
+        if (!no) return;
+        const clean = String(no).trim().toUpperCase();
+        occupied.add(clean);
+        const match = clean.match(/ENQ-.*-0*(\d+)/i) || clean.match(/(\d+)$/);
+        if (match) {
+          const num = parseInt(match[1] || match[0], 10);
+          if (!isNaN(num) && num > 0 && num < 50000) {
+            occupiedSerials.add(num);
+            if (num > maxNum) maxNum = num;
+          }
+        }
+      };
 
       currentList.forEach(e => {
-        if (e?.enquiryNo) occupied.add(e.enquiryNo.trim().toUpperCase());
+        if (e?.enquiryNo) registerOccupied(e.enquiryNo);
+        if (e?.siblingEnquiryNo) registerOccupied(e.siblingEnquiryNo);
       });
-      deletedList.forEach(d => occupied.add(String(d).trim().toUpperCase()));
+      deletedList.forEach(d => registerOccupied(String(d)));
 
       // Include active reservations held by OTHER counsellors
       for (const [no, resv] of centralEnquiryReservations.entries()) {
         if (resv.counsellorId !== counsellorId) {
-          occupied.add(no.trim().toUpperCase());
+          registerOccupied(no);
         }
       }
-
-      // Calculate highest serial number
-      let maxNum = 0;
-      occupied.forEach(no => {
-        const match = no.match(/ENQ-.*-(\d+)/i) || no.match(/(\d+)$/);
-        if (match) {
-          const num = parseInt(match[1] || match[0], 10);
-          if (!isNaN(num) && num > maxNum && num < 50000) {
-            maxNum = num;
-          }
-        }
-      });
 
       const currentYear = new Date().getFullYear();
       const formatPad = (n: number) => n < 100 ? String(n).padStart(2, "0") : String(n);
 
-      if (isSiblingRequest && currentPrimaryEnquiryNo) {
-        // Find consecutive or next available slot for sibling
-        let candidateNum = maxNum > 0 ? maxNum + 1 : 1;
-        const primeMatch = currentPrimaryEnquiryNo.match(/ENQ-.*-(\d+)/i) || currentPrimaryEnquiryNo.match(/(\d+)$/);
-        if (primeMatch) {
-          const primeVal = parseInt(primeMatch[1] || primeMatch[0], 10);
-          if (!isNaN(primeVal) && !occupied.has(`ENQ-${currentYear}-${formatPad(primeVal + 1)}`.toUpperCase())) {
-            candidateNum = primeVal + 1;
-          }
-        }
-
-        let sibCandidate = `ENQ-${currentYear}-${formatPad(candidateNum)}`;
-        let guard = 0;
-        while ((occupied.has(sibCandidate.toUpperCase()) || sibCandidate === currentPrimaryEnquiryNo) && guard < 500) {
-          candidateNum++;
-          sibCandidate = `ENQ-${currentYear}-${formatPad(candidateNum)}`;
-          guard++;
-        }
-
-        centralEnquiryReservations.set(sibCandidate, {
-          enquiryNo: sibCandidate,
-          counsellorId,
-          counsellorName,
-          reservedAt: Date.now(),
-          isSibling: true,
-          linkedToPrimaryNo: currentPrimaryEnquiryNo
-        });
-
-        return res.json({
-          success: true,
-          enquiryNo: sibCandidate,
-          isSibling: true,
-          linkedTo: currentPrimaryEnquiryNo
-        });
-      }
-
-      // Standard single enquiry reservation with Gap-Filling Slot Recycling:
-      // Scan from 1 up to maxNum to check if any cancelled/released sibling slot exists.
-      // If a gap exists (e.g. #100 was released), give that exact number to the next counsellor so no numbers are wasted!
-      let candidateNum = 1;
+      let candidateNum = maxNum > 0 ? maxNum + 1 : 1;
       let candidateStr = `ENQ-${currentYear}-${formatPad(candidateNum)}`;
-      while (occupied.has(candidateStr.toUpperCase()) && candidateNum <= maxNum) {
+      let guard = 0;
+      while (
+        (occupiedSerials.has(candidateNum) ||
+          occupied.has(candidateStr.toUpperCase()) ||
+          (isSiblingRequest && candidateStr === currentPrimaryEnquiryNo)) &&
+        guard < 500
+      ) {
         candidateNum++;
         candidateStr = `ENQ-${currentYear}-${formatPad(candidateNum)}`;
-      }
-
-      if (candidateNum > maxNum) {
-        candidateNum = maxNum > 0 ? maxNum + 1 : 1;
-        candidateStr = `ENQ-${currentYear}-${formatPad(candidateNum)}`;
+        guard++;
       }
 
       centralEnquiryReservations.set(candidateStr, {
@@ -2680,12 +2648,15 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
         counsellorId,
         counsellorName,
         reservedAt: Date.now(),
-        isSibling: false
+        isSibling: Boolean(isSiblingRequest),
+        linkedToPrimaryNo: isSiblingRequest ? currentPrimaryEnquiryNo : undefined
       });
 
       return res.json({
         success: true,
-        enquiryNo: candidateStr
+        enquiryNo: candidateStr,
+        isSibling: Boolean(isSiblingRequest),
+        linkedTo: isSiblingRequest ? currentPrimaryEnquiryNo : undefined
       });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err?.message });
@@ -4136,9 +4107,18 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
   const isProduction = (process.env.NODE_ENV === "production" || !isDevCommand) && hasDist;
 
   if (isProduction) {
-    app.use(express.static(distPath, { maxAge: "1d", etag: true }));
+    app.use(
+      "/assets",
+      express.static(path.join(distPath, "assets"), { maxAge: "7d", immutable: true, fallthrough: false })
+    );
+    app.use(express.static(distPath, { maxAge: 0, etag: true, index: false }));
     app.get("*", (req, res, next) => {
-      if (req.path.startsWith("/api/")) return next();
+      if (req.path.startsWith("/api/") || req.path.startsWith("/assets/")) {
+        return res.status(404).end();
+      }
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
       const indexPath = path.join(distPath, "index.html");
       if (fs.existsSync(indexPath)) {
         res.sendFile(indexPath);

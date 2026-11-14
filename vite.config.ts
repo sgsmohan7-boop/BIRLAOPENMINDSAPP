@@ -25,7 +25,6 @@ export default defineConfig(() => {
     },
     plugins: [react(), tailwindcss()],
     optimizeDeps: {
-      force: true,
       include: [
         'react',
         'react-dom',
@@ -39,7 +38,10 @@ export default defineConfig(() => {
         'recharts',
         'jspdf',
         'jspdf-autotable',
-        '@vis.gl/react-google-maps'
+        '@vis.gl/react-google-maps',
+        '@aws-sdk/client-s3',
+        '@aws-sdk/s3-request-presigner',
+        '@google/genai'
       ]
     },
     build: {

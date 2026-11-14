@@ -18,11 +18,14 @@
     <meta property="og:description" content="A comprehensive IT command center for managing assets, tickets, rooms, AI-powered IT troubleshooting, and Birla Institute CCTV dynamic attendance monitoring." />
     <meta property="og:type" content="website" />
     
-    <!-- Instant Splash Screen Failsafe Dismissal -->
+    <!-- Safe Splash Screen Dismissal & Stale Chunk Recovery -->
     <script>
       (function() {
-        window.dismissSplashScreen = function() {
+        window.__APP_MOUNTED__ = false;
+        window.__BOOT_ERRORS__ = [];
+        window.dismissSplashScreen = function(force) {
           try {
+            if (!force && !window.__APP_MOUNTED__) return;
             var splash = document.getElementById('splash-screen');
             if (splash) {
               splash.style.transition = 'opacity 0.25s ease-out';
@@ -36,8 +39,84 @@
             }
           } catch(e) {}
         };
-        // Failsafe auto-dismissal after 2.0s so app never gets stuck on loading spinner
-        setTimeout(window.dismissSplashScreen, 2000);
+        // Unregister any stale service workers on preview/dev run.app domains so they never serve stale HTML/JS
+        try {
+          if (typeof location !== 'undefined' && (location.hostname.indexOf('run.app') !== -1 || location.hostname === 'localhost') && 'serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then(function(regs) {
+              regs.forEach(function(reg) { reg.unregister().catch(function(){}); });
+            }).catch(function(){});
+          }
+        } catch(e) {}
+        function cleanReload() {
+          try {
+            if ('serviceWorker' in navigator) {
+              navigator.serviceWorker.getRegistrations().then(function(regs) {
+                regs.forEach(function(reg) { reg.unregister().catch(function(){}); });
+              }).catch(function(){});
+            }
+            if ('caches' in window) {
+              caches.keys().then(function(ks) {
+                return Promise.all(ks.map(function(k) { return caches.delete(k); }));
+              }).finally(function() { window.location.reload(); });
+              return;
+            }
+          } catch(e) {}
+          window.location.reload();
+        }
+        // Auto-recover once if a stale cached HTML or outdated Vite dep fails module load
+        function tryRecoverOnce(reason) {
+          try {
+            var msg = String(reason || '');
+            if (msg && window.__BOOT_ERRORS__.indexOf(msg) === -1 && window.__BOOT_ERRORS__.length < 6) {
+              window.__BOOT_ERRORS__.push(msg);
+            }
+            if (/dynamically imported module|Loading chunk|Importing a module script failed|Failed to fetch|MIME type|Unexpected token '<|Outdated Optimize Dep|504/i.test(msg)) {
+              var key = 'bomis_chunk_recover_ts';
+              var last = parseInt(sessionStorage.getItem(key) || '0', 10);
+              if (!last || Date.now() - last > 15000) {
+                sessionStorage.setItem(key, String(Date.now()));
+                cleanReload();
+              }
+            }
+          } catch(e) {}
+        }
+        window.addEventListener('error', function(ev) {
+          if (!ev) return;
+          var msg = ev.message || (ev.error && ev.error.message) || '';
+          if (!msg && ev.target && ev.target.tagName) {
+            msg = 'Failed to load ' + ev.target.tagName + ': ' + (ev.target.src || ev.target.href || '');
+          }
+          if (msg) tryRecoverOnce(msg);
+        }, true);
+        window.addEventListener('unhandledrejection', function(ev) {
+          var reason = ev && ev.reason;
+          var msg = (reason && (reason.message || String(reason))) || '';
+          if (msg) tryRecoverOnce(msg);
+        });
+        // If React hasn't mounted after 18s, offer a visible Reload button + show any captured boot error
+        setTimeout(function() {
+          if (window.__APP_MOUNTED__) return;
+          var splash = document.getElementById('splash-screen');
+          if (splash) {
+            var sub = splash.querySelector('.splash-subtitle');
+            if (sub) sub.textContent = 'Taking longer than expected. Click below to refresh cleanly.';
+            if (!document.getElementById('splash-reload-btn')) {
+              var btn = document.createElement('button');
+              btn.id = 'splash-reload-btn';
+              btn.textContent = 'Reload Application';
+              btn.style.cssText = 'margin-top:16px;padding:10px 20px;background:#ea580c;color:#fff;border:none;border-radius:10px;font-weight:700;font-size:13px;cursor:pointer;';
+              btn.onclick = cleanReload;
+              splash.appendChild(btn);
+            }
+            if (window.__BOOT_ERRORS__ && window.__BOOT_ERRORS__.length > 0 && !document.getElementById('splash-error-log')) {
+              var errBox = document.createElement('pre');
+              errBox.id = 'splash-error-log';
+              errBox.textContent = window.__BOOT_ERRORS__.join('\n');
+              errBox.style.cssText = 'margin-top:14px;max-width:460px;max-height:120px;overflow:auto;padding:10px 12px;background:rgba(15,23,42,0.08);color:#b91c1c;border-radius:8px;font-size:11px;text-align:left;white-space:pre-wrap;word-break:break-word;';
+              splash.appendChild(errBox);
+            }
+          }
+        }, 18000);
       })();
     </script>
 

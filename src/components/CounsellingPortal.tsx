@@ -111,9 +111,10 @@ import {
   deduplicateEnquiries
 } from "../utils/storage";
 import { deleteAudioRecordingBlob, formatAudioDuration } from "../utils/audioStorage";
-import { isFirebaseConfigured, syncCollection, fetchCollectionDocs, fetchPendingParentEntriesFromFirestore, saveDocument, deleteDocument, getNextDailyTokenNo, isFirestoreQuotaExhausted, clearQuotaExhausted } from "../utils/firebase";
+import { isFirebaseConfigured, syncCollection, fetchCollectionDocs, fetchPendingParentEntriesFromFirestore, saveDocument, deleteDocument, getNextDailyTokenNo, isFirestoreQuotaExhausted, clearQuotaExhausted, reserveNextEnquiryNoFromFirestore } from "../utils/firebase";
 import { printOfficialAdmissionForm } from "../utils/printAdmissionForm";
 import { normalizeCounsellorIdentity } from "../utils/counsellorNormalizer";
+import { synthesizeAndMergeEnquiries, formatCanonicalEnquiryNo, extractEnquirySerialNum, isSameStudentRecord } from "../utils/enquirySynthesis";
 
 function getParentEntryStatusRank(status?: string): number {
   if (status === "dismissed") return 3;
@@ -196,11 +197,6 @@ function deduplicateParentEntries(entries: ParentSelfEntry[]): ParentSelfEntry[]
         }
         item.dailyTokenNo = nextSeq;
         usedTokens.add(nextSeq);
-        try {
-          if (isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
-            saveDocument("parent_self_entries", item.id, { dailyTokenNo: nextSeq });
-          }
-        } catch {}
       } else {
         usedTokens.add(tokenNum);
       }
@@ -220,6 +216,8 @@ function deduplicateParentEntries(entries: ParentSelfEntry[]): ParentSelfEntry[]
 
 interface CounsellingPortalProps {
   enquiries: CounsellingEnquiry[];
+  parentSelfEntriesProp?: ParentSelfEntry[];
+  onParentSelfEntriesChange?: (entries: ParentSelfEntry[]) => void;
   onSaveEnquiry: (enquiry: CounsellingEnquiry) => void;
   onDeleteEnquiry: (id: string) => void;
   onDeleteMultipleEnquiries?: (ids: string[]) => void;
@@ -394,6 +392,8 @@ export const getMonthStartYMDStr = (): string => {
 
 export default function CounsellingPortal({
   enquiries,
+  parentSelfEntriesProp,
+  onParentSelfEntriesChange,
   onSaveEnquiry,
   onDeleteEnquiry,
   onDeleteMultipleEnquiries,
@@ -449,115 +449,27 @@ export default function CounsellingPortal({
   const [selectedDateChip, setSelectedDateChip] = useState<string | null>(null);
 
   // Parent Self Registration Kiosk State & Realtime Queue
-  const [parentSelfEntries, setParentSelfEntries] = useState<ParentSelfEntry[]>(() => loadParentSelfEntries());
+  const [parentSelfEntries, setParentSelfEntries] = useState<ParentSelfEntry[]>(() =>
+    (parentSelfEntriesProp && parentSelfEntriesProp.length > 0) ? parentSelfEntriesProp : loadParentSelfEntries()
+  );
 
-  // Safe enquiries source with deleted IDs filtered out, synthesized claimed walk-in tokens & linked sibling audio hydration
-  const safeEnquiries = useMemo(() => {
-    const list = Array.isArray(enquiries) ? enquiries : [];
-    const deletedSet = new Set(getDeletedEnquiryIds().map(x => x.toLowerCase()));
-    const filtered = list.filter(e => {
-      if (!e) return false;
-      const eId = (e.id || "").toLowerCase();
-      const eNo = (e.enquiryNo || "").toLowerCase();
-      return (!eId || !deletedSet.has(eId)) && (!eNo || !deletedSet.has(eNo));
-    });
-
-    // Build set of existing enquiry keys so we don't duplicate (date-scoped for daily walk-in tokens)
-    const existingKeys = new Set<string>();
-    filtered.forEach(e => {
-      if (e.id) existingKeys.add(e.id.toLowerCase());
-      if (e.enquiryNo) existingKeys.add(e.enquiryNo.toLowerCase());
-      if (e.onlineRefNo) existingKeys.add(e.onlineRefNo.toLowerCase());
-      if (e.walkInTokenNo) {
-        const eDateYmd = parseEnquiryDateInfo(e.date || "").ymd || (e.date || "").trim() || "legacy";
-        existingKeys.add(`token-${eDateYmd}-${e.walkInTokenNo}`);
-      }
-    });
-
-    // Synthesize walk-in & kiosk entries from parentSelfEntries if missing from enquiries list
-    const synthesizedFromClaimedTokens: CounsellingEnquiry[] = [];
-    if (Array.isArray(parentSelfEntries)) {
-      parentSelfEntries.forEach(entry => {
-        if (!entry || entry.status === "dismissed") return;
-        const isEligible = entry.status === "claimed" || entry.status === "completed" || Boolean(entry.claimedBy);
-        if (isEligible) {
-          const entryId = entry.completedEnquiryNo || entry.onlineRefNo || entry.id;
-          const entryNo = entry.completedEnquiryNo || entry.onlineRefNo || `ENQ-2026-${entry.dailyTokenNo || entry.id}`;
-          const rawEntryDate = entry.entryDate || (entry.formattedDate ? entry.formattedDate.split(" ")[0] : "") || entry.dateKey || "";
-          const entryDateYmd = parseEnquiryDateInfo(rawEntryDate).ymd || rawEntryDate.trim() || "legacy";
-          const tokenKey = entry.dailyTokenNo ? `token-${entryDateYmd}-${entry.dailyTokenNo}` : "";
-
-          // Never duplicate if already registered in enquiries
-          const hasSiblingRecord = entry.hasSibling && entry.siblingDetails;
-          const cleanPhone = (entry.contactNo || "").replace(/\D/g, "");
-          const alreadyExists = (entryId && existingKeys.has(entryId.toLowerCase())) ||
-                                (entryNo && existingKeys.has(entryNo.toLowerCase())) ||
-                                (tokenKey && existingKeys.has(tokenKey)) ||
-                                filtered.some(e => {
-                                  const ePhone = (e.contactNo || "").replace(/\D/g, "");
-                                  const matchStudent = e.studentName && entry.studentName && e.studentName.trim().toLowerCase() === entry.studentName.trim().toLowerCase();
-                                  const matchSibling = hasSiblingRecord && e.studentName && entry.siblingDetails?.studentName && e.studentName.trim().toLowerCase() === entry.siblingDetails.studentName.trim().toLowerCase();
-                                  const matchPhone = cleanPhone && ePhone && cleanPhone === ePhone;
-                                  return (matchStudent || matchSibling) && (matchPhone || !cleanPhone);
-                                });
-          if (!alreadyExists) {
-            const counsellorNorm = normalizeCounsellorIdentity(entry.completedByName || entry.completedBy || entry.claimedByName || entry.claimedBy);
-            const synthesized: CounsellingEnquiry = {
-              id: entryId,
-              enquiryNo: entryNo,
-              date: rawEntryDate || entry.entryDate || entry.formattedDate || new Date().toISOString().split('T')[0],
-              studentName: entry.studentName || "Walk-in Parent",
-              applyingForClass: entry.applyingForClass || "Grade 1",
-              academicYear: entry.academicYear || "2026-2027",
-              dateOfBirth: entry.dateOfBirth || "",
-              gender: entry.gender || "Male",
-              fatherName: entry.fatherName || "",
-              motherName: entry.motherName || "",
-              contactNo: entry.contactNo || "",
-              whatsappNo: entry.whatsappNo || entry.contactNo || "",
-              previousSchool: entry.previousSchool || "",
-              previousClass: entry.previousClass || "",
-              residentialAddress: entry.residentialAddress || "",
-              heardAboutSchool: Array.isArray(entry.heardAboutSchool) ? entry.heardAboutSchool : ["Google / Online Search"],
-              reasonForChoosing: entry.reasonForChoosing || "Campus Reception Walk-in Visit",
-              preferredContact: entry.preferredContact || "Call",
-              bestTimeToContact: "",
-              academicPerformance: "",
-              studentInterests: "",
-              strengths: "",
-              areasNeedingSupport: "",
-              transportRequired: Boolean(entry.transportRequired),
-              hostelRequired: false,
-              specialLearningSupport: Boolean(entry.specialLearningSupport),
-              specialLearningDetails: "",
-              pointsDiscussed: "Reception Kiosk Registration & Walk-in Counselling",
-              counsellorObservations: entry.status === "completed" ? "Admissions counselling meeting completed" : "Walk-in parent registered via kiosk",
-              explainedSchoolFacilities: true,
-              explainedAcademicProgramme: true,
-              explainedFeeStructure: true,
-              explainedTransportDetails: true,
-              explainedSchoolRules: true,
-              explainedActivitiesSports: true,
-              admissionStatus: "Follow-up Required",
-              followUpDate: getFutureDateDMY(7),
-              counsellorId: counsellorNorm.id,
-              counsellorName: entry.completedByName || entry.claimedByName || counsellorNorm.name,
-              parentSignatureRecorded: true,
-              walkInTokenNo: entry.dailyTokenNo,
-              createdAt: entry.submittedAt || entry.claimedAt || new Date().toLocaleString(),
-              updatedAt: new Date().toLocaleDateString(),
-              updatedAtTimestamp: entry.completedAt ? new Date(entry.completedAt).getTime() : Date.now()
-            };
-            synthesizedFromClaimedTokens.push(synthesized);
-            if (entryId) existingKeys.add(entryId.toLowerCase());
-            if (entryNo) existingKeys.add(entryNo.toLowerCase());
-            if (tokenKey) existingKeys.add(tokenKey);
-          }
-        }
+  React.useEffect(() => {
+    if (Array.isArray(parentSelfEntriesProp) && parentSelfEntriesProp.length > 0) {
+      setParentSelfEntries(prev => {
+        const combined = deduplicateParentEntries([...parentSelfEntriesProp, ...(prev || [])]);
+        saveParentSelfEntries(combined);
+        return combined;
       });
     }
+  }, [parentSelfEntriesProp]);
 
-    const combinedList = deduplicateEnquiries([...filtered, ...synthesizedFromClaimedTokens]);
+  // Safe enquiries source: unified deterministic cloud merger + linked sibling audio hydration
+  const safeEnquiries = useMemo(() => {
+    const combinedList = synthesizeAndMergeEnquiries(
+      Array.isArray(enquiries) ? enquiries : [],
+      Array.isArray(parentSelfEntries) ? parentSelfEntries : [],
+      getDeletedEnquiryIds()
+    );
 
     // Audio map by enquiry number & ID for fast linked sibling resolution
     const audioMap = new Map<string, any>();
@@ -955,13 +867,11 @@ export default function CounsellingPortal({
       try {
         const cloudEntries = await fetchCollectionDocs<ParentSelfEntry>("parent_self_entries", true);
         if (Array.isArray(cloudEntries)) {
-          setParentSelfEntries(prev => {
-            const currentLocal = prev || [];
-            pushUnsyncedParentEntriesToCloud(cloudEntries, currentLocal);
-            const combined = deduplicateParentEntries([...cloudEntries, ...currentLocal]);
-            saveParentSelfEntries(combined);
-            return combined;
-          });
+          pushUnsyncedParentEntriesToCloud(cloudEntries, parentSelfEntries || []);
+          const combined = deduplicateParentEntries([...cloudEntries, ...(parentSelfEntries || [])]);
+          saveParentSelfEntries(combined);
+          setParentSelfEntries(combined);
+          onParentSelfEntriesChange?.(combined);
         }
       } catch {}
     }
@@ -1625,17 +1535,41 @@ export default function CounsellingPortal({
       return;
     }
 
-    // Generate clean Enquiry ID and auto-fill form (preserving ONL- for online, ENQ- for walkin)
+    // Generate clean Enquiry ID atomically via Firestore counter (preserving ONL- for online, ENQ- for walkin)
     const isOnline = entry.enquiryType === "online";
-    const draftNo = isOnline 
+    let draftNo = isOnline
       ? (entry.onlineRefNo || entry.id || getNextOnlineEnquiryNo(safeEnquiries))
-      : getNextEnquiryNo(safeEnquiries);
+      : await reserveNextEnquiryNoFromFirestore(safeEnquiries, currentCounsellorId, false);
+
+    if (!isOnline) {
+      // Fallback server reservation if needed to align Express state
+      try {
+        const res = await fetch("/api/counselling/reserve-enquiry-number", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            counsellorId: currentCounsellorId,
+            counsellorName: currentCounsellorName,
+            isSiblingRequest: false
+          })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const srvN = extractEnquirySerialNum(data?.enquiryNo);
+          const fbN = extractEnquirySerialNum(draftNo);
+          if (srvN && fbN && srvN > fbN) {
+            draftNo = data.enquiryNo;
+          }
+        }
+      } catch {}
+    }
 
     const newClaimedData: CounsellingEnquiry = {
       id: draftNo,
       enquiryNo: draftNo,
       enquiryType: isOnline ? "online" : "walkin",
       onlineRefNo: isOnline ? draftNo : undefined,
+      sourceParentEntryId: entry.id,
       date: new Date().toLocaleDateString("en-GB").replace(/\//g, "-"),
       studentName: entry.studentName,
       applyingForClass: entry.applyingForClass || "Grade 1",
@@ -1693,9 +1627,11 @@ export default function CounsellingPortal({
           draftNo2 = `ONL-${new Date().getFullYear()}-${formatPad(startNum + 1)}`;
         }
       } else {
-        const draftMatch = draftNo.match(/ENQ-.*-(\d+)/i) || draftNo.match(/(\d+)$/);
-        const startNum = draftMatch ? parseInt(draftMatch[1] || draftMatch[0], 10) : 1;
-        draftNo2 = `ENQ-${new Date().getFullYear()}-${String(startNum + 1).padStart(2, "0")}`;
+        draftNo2 = await reserveNextEnquiryNoFromFirestore(
+          [...safeEnquiries, newClaimedData],
+          currentCounsellorId,
+          true
+        );
       }
 
       const sibClaimedData: CounsellingEnquiry = {
@@ -1704,6 +1640,7 @@ export default function CounsellingPortal({
         enquiryNo: draftNo2,
         enquiryType: isOnline ? "online" : "walkin",
         onlineRefNo: isOnline ? draftNo2 : undefined,
+        sourceParentEntryId: entry.id,
         studentName: entry.siblingDetails.studentName,
         applyingForClass: entry.siblingDetails.applyingForClass || "PP1 (LKG)",
         dateOfBirth: entry.siblingDetails.dateOfBirth || "",
@@ -1801,12 +1738,13 @@ export default function CounsellingPortal({
   };
 
   const handleEnableSiblingMode = async () => {
-    const currentYear = new Date().getFullYear();
-    const curMatch = formData.enquiryNo.match(/ENQ-.*-(\d+)/i) || formData.enquiryNo.match(/(\d+)$/);
-    const startNum = curMatch ? parseInt(curMatch[1] || curMatch[0], 10) : 1;
-    let sibNo = `ENQ-${currentYear}-${String(startNum + 1).padStart(2, "0")}`;
-
     const defaultCounsellor = activeCounsellor || localAccounts[0];
+    let sibNo = await reserveNextEnquiryNoFromFirestore(
+      [...safeEnquiries, formData],
+      defaultCounsellor?.id || "COUNSELLOR-01",
+      true
+    );
+
     try {
       const res = await fetch("/api/counselling/reserve-enquiry-number", {
         method: "POST",
@@ -1820,7 +1758,9 @@ export default function CounsellingPortal({
       });
       if (res.ok) {
         const data = await res.json();
-        if (data.success && data.enquiryNo) {
+        const srvN = extractEnquirySerialNum(data?.enquiryNo);
+        const fbN = extractEnquirySerialNum(sibNo);
+        if (srvN && fbN && srvN > fbN) {
           sibNo = data.enquiryNo;
         }
       }
@@ -1927,15 +1867,10 @@ export default function CounsellingPortal({
       }
     } catch {}
 
-    // Generate consecutive clean Enquiry IDs
-    const draftNo1 = getNextEnquiryNo(safeEnquiries);
-    let nextNum = 1;
-    const match = draftNo1.match(/ENQ-(\d{4})-(\d+)/i) || draftNo1.match(/(\d+)$/);
-    if (match) {
-      nextNum = parseInt(match[2] || match[1], 10) + 1;
-    }
-    const currentYear = new Date().getFullYear();
-    const draftNo2 = `ENQ-${currentYear}-${String(nextNum).padStart(3, "0")}`;
+    // Generate consecutive clean Enquiry IDs atomically across devices
+    const draftNo1 = await reserveNextEnquiryNoFromFirestore(safeEnquiries, currentCounsellorId, false);
+    const n1 = extractEnquirySerialNum(draftNo1) || 1;
+    const draftNo2 = formatCanonicalEnquiryNo(n1 + 1);
     const dateToday = new Date().toLocaleDateString("en-GB").replace(/\//g, "-");
 
     const sharedFather = (entry1.fatherName || entry2.fatherName || "").trim();
@@ -2474,15 +2409,18 @@ export default function CounsellingPortal({
     }
     // If Admin/Super Admin/Management, respect the admin filter dropdown
     if (adminFilterCounsellor !== "ALL") {
-      const targetNorm = normalizeCounsellorIdentity(adminFilterCounsellor);
+      const selectedAcc = localAccounts.find(
+        a => (a.id || "").trim().toLowerCase() === adminFilterCounsellor.trim().toLowerCase()
+      );
+      const targetNorm = normalizeCounsellorIdentity(selectedAcc?.name || "", adminFilterCounsellor);
       const filtered = safeEnquiries.filter(e => {
         const eNorm = normalizeCounsellorIdentity(e.counsellorName, e.counsellorId);
-        return eNorm.id === targetNorm.id;
+        return eNorm.id.trim().toLowerCase() === targetNorm.id.trim().toLowerCase();
       });
       return filtered;
     }
     return safeEnquiries;
-  }, [safeEnquiries, userRole, activeCounsellor, adminFilterCounsellor]);
+  }, [safeEnquiries, userRole, activeCounsellor, adminFilterCounsellor, localAccounts]);
 
   const recordedCount = useMemo(() => {
     return counsellorScopeEnquiries.filter(e => e.audioRecording && (e.audioRecording.audioData || e.audioRecording.storageKey || e.audioRecording.driveFileUrl || e.audioRecording.driveFileId)).length;
@@ -2554,7 +2492,7 @@ export default function CounsellingPortal({
 
   const startNewEnquiry = async () => {
     const defaultCounsellor = activeCounsellor || localAccounts[0];
-    let nextNo = getNextEnquiryNo(safeEnquiries, defaultCounsellor?.id);
+    let nextNo = await reserveNextEnquiryNoFromFirestore(safeEnquiries, defaultCounsellor?.id, false);
 
     try {
       const res = await fetch("/api/counselling/reserve-enquiry-number", {
@@ -2568,7 +2506,9 @@ export default function CounsellingPortal({
       });
       if (res.ok) {
         const data = await res.json();
-        if (data.success && data.enquiryNo) {
+        const srvN = extractEnquirySerialNum(data?.enquiryNo);
+        const fbN = extractEnquirySerialNum(nextNo);
+        if (srvN && fbN && srvN > fbN) {
           nextNo = data.enquiryNo;
         }
       }
@@ -2692,55 +2632,69 @@ export default function CounsellingPortal({
     }
 
     const alreadySaved = safeEnquiries.find(
-      e => (formData.id && e.id === formData.id) || 
-           (formData.enquiryNo && e.enquiryNo && e.enquiryNo.trim().toUpperCase() === formData.enquiryNo.trim().toUpperCase())
+      e => isSameStudentRecord(e, formData) && (
+        (formData.id && e.id === formData.id) ||
+        (formData.enquiryNo && e.enquiryNo && e.enquiryNo.trim().toUpperCase() === formData.enquiryNo.trim().toUpperCase())
+      )
     );
     const isNew = !selectedEnquiry && !alreadySaved;
     const finalCounsellor = activeCounsellor || localAccounts.find(c => c.id === formData.counsellorId) || localAccounts[0];
     const assignedCounsellorId = userRole === "Counsellor" && activeCounsellor ? activeCounsellor.id : (formData.counsellorId || finalCounsellor.id);
     const assignedCounsellorName = userRole === "Counsellor" && activeCounsellor ? activeCounsellor.name : (formData.counsellorName || finalCounsellor.name);
 
-    // Build exhaustive list of all existing enquiry numbers across memory & live storage
+    // Build exhaustive list of all existing enquiry numbers + serials owned by OTHER students
     const existingEnquiryNos = new Set<string>();
+    const existingSerials = new Set<number>();
+    const addOccupied = (rawNo?: string | null) => {
+      if (!rawNo) return;
+      existingEnquiryNos.add(rawNo.trim().toUpperCase());
+      const sn = extractEnquirySerialNum(rawNo);
+      if (sn) existingSerials.add(sn);
+    };
+
     safeEnquiries.forEach(item => {
-      if (item?.enquiryNo) existingEnquiryNos.add(item.enquiryNo.trim().toUpperCase());
+      addOccupied(item?.enquiryNo);
     });
     try {
       const raw = localStorage.getItem("it_command_counselling_forms");
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
-          parsed.forEach(item => {
-            if (item?.enquiryNo) existingEnquiryNos.add(item.enquiryNo.trim().toUpperCase());
-          });
+          parsed.forEach(item => addOccupied(item?.enquiryNo));
         }
       }
     } catch {}
 
-    // If editing or updating already saved enquiry/draft, remove its own enquiryNo from collision check
-    if (selectedEnquiry?.enquiryNo) {
+    // Only exclude own number if it belongs to THIS same student
+    if (selectedEnquiry?.enquiryNo && isSameStudentRecord(selectedEnquiry, formData)) {
       existingEnquiryNos.delete(selectedEnquiry.enquiryNo.trim().toUpperCase());
+      const sn = extractEnquirySerialNum(selectedEnquiry.enquiryNo);
+      if (sn) existingSerials.delete(sn);
     }
     if (alreadySaved?.enquiryNo) {
       existingEnquiryNos.delete(alreadySaved.enquiryNo.trim().toUpperCase());
+      const sn = extractEnquirySerialNum(alreadySaved.enquiryNo);
+      if (sn) existingSerials.delete(sn);
     }
 
     let nextEnquiryNo = (alreadySaved?.enquiryNo || formData.enquiryNo || "").trim();
+    const curSerial = extractEnquirySerialNum(nextEnquiryNo);
 
-    // Only if enquiryNo is completely missing OR truly collides with another counsellor's saved record
-    if (!nextEnquiryNo || (isNew && existingEnquiryNos.has(nextEnquiryNo.toUpperCase()))) {
+    // If enquiryNo is missing OR occupied by a DIFFERENT student (cross-laptop collision), allocate a non-colliding ENQ number
+    if (
+      !nextEnquiryNo ||
+      (isNew && (existingEnquiryNos.has(nextEnquiryNo.toUpperCase()) || (curSerial && existingSerials.has(curSerial))))
+    ) {
       let candidate = getNextEnquiryNo(safeEnquiries);
+      let candSerial = extractEnquirySerialNum(candidate) || 1;
       let guard = 0;
-      while (existingEnquiryNos.has(candidate.trim().toUpperCase()) && guard < 200) {
-        const match = candidate.match(/ENQ-.*-(\d+)/i) || candidate.match(/(\d+)$/);
-        const curr = match ? parseInt(match[1] || match[0], 10) : 1;
-        const nextVal = curr + 1;
-        candidate = `ENQ-${new Date().getFullYear()}-${String(nextVal).padStart(2, "0")}`;
+      while ((existingEnquiryNos.has(candidate.trim().toUpperCase()) || existingSerials.has(candSerial)) && guard < 500) {
+        candSerial++;
+        candidate = formatCanonicalEnquiryNo(candSerial);
         guard++;
       }
       nextEnquiryNo = candidate;
     }
-    // Clean canonical ID strictly matching enquiryNo: NO messy timestamps in document ID
     const nextId = nextEnquiryNo;
 
     const nowTs = Date.now();
@@ -2779,14 +2733,25 @@ export default function CounsellingPortal({
     // Joint Sibling Session Commit
     if (isJointSiblingMode && siblingFormData && siblingFormData.studentName.trim()) {
       let sibCandidateNo = siblingFormData.enquiryNo;
-      if (!sibCandidateNo || sibCandidateNo === nextEnquiryNo || existingEnquiryNos.has(sibCandidateNo.toUpperCase())) {
+      const sibSerial = extractEnquirySerialNum(sibCandidateNo);
+      if (
+        !sibCandidateNo ||
+        sibCandidateNo === nextEnquiryNo ||
+        existingEnquiryNos.has(sibCandidateNo.toUpperCase()) ||
+        (sibSerial && existingSerials.has(sibSerial))
+      ) {
         let guard2 = 0;
         let candNum = (numMatch ? parseInt(numMatch[1] || numMatch[0], 10) : 1) + 1;
-        while (existingEnquiryNos.has(`ENQ-${new Date().getFullYear()}-${String(candNum).padStart(2, "0")}`.toUpperCase()) && guard2 < 200) {
+        while (
+          (existingSerials.has(candNum) ||
+            existingEnquiryNos.has(formatCanonicalEnquiryNo(candNum).toUpperCase()) ||
+            formatCanonicalEnquiryNo(candNum) === nextEnquiryNo) &&
+          guard2 < 500
+        ) {
           candNum++;
           guard2++;
         }
-        sibCandidateNo = `ENQ-${new Date().getFullYear()}-${String(candNum).padStart(2, "0")}`;
+        sibCandidateNo = formatCanonicalEnquiryNo(candNum);
       }
 
       // Link cross-references
@@ -3219,11 +3184,6 @@ export default function CounsellingPortal({
       updatedAt: formatDMYFromDate(new Date())
     };
     onSaveEnquiry(updated);
-    if (isFirebaseConfigured()) {
-      try {
-        await saveDocument("enquiries", updated.id, updated);
-      } catch {}
-    }
     setDeleteToast(`🎉 Admission Confirmed for ${enquiry.studentName} (${enquiry.enquiryNo})!`);
     setTimeout(() => setDeleteToast(null), 4000);
   };
@@ -3239,11 +3199,6 @@ export default function CounsellingPortal({
       updatedAt: formatDMYFromDate(new Date())
     };
     onSaveEnquiry(updated);
-    if (isFirebaseConfigured()) {
-      try {
-        await saveDocument("enquiries", updated.id, updated);
-      } catch {}
-    }
     setDeleteToast(`Enquiry ${enquiry.enquiryNo} (${enquiry.studentName}) marked as Not Interested.`);
     setTimeout(() => setDeleteToast(null), 3500);
   };
@@ -3263,11 +3218,6 @@ export default function CounsellingPortal({
       updatedAt: formatDMYFromDate(new Date())
     };
     onSaveEnquiry(updated);
-    if (isFirebaseConfigured()) {
-      try {
-        await saveDocument("enquiries", updated.id, updated);
-      } catch {}
-    }
     setReschedulingEnquiry(null);
     setRescheduleCustomDate("");
     setRescheduleNote("");
@@ -3357,7 +3307,15 @@ Warm regards,
     
     let base = counsellorScopeEnquiries;
     if (metricAdminCounsellor !== "ALL" && userRole !== "Counsellor") {
-      base = base.filter(e => e.counsellorId === metricAdminCounsellor || e.counsellorName?.includes(metricAdminCounsellor));
+      const targetNorm = normalizeCounsellorIdentity(metricAdminCounsellor, metricAdminCounsellor);
+      base = base.filter(e => {
+        const eNorm = normalizeCounsellorIdentity(e.counsellorName, e.counsellorId);
+        return (
+          eNorm.id.trim().toLowerCase() === targetNorm.id.trim().toLowerCase() ||
+          e.counsellorId === metricAdminCounsellor ||
+          e.counsellorName?.toLowerCase().includes(metricAdminCounsellor.toLowerCase())
+        );
+      });
     }
 
     switch (selectedMetricCard) {

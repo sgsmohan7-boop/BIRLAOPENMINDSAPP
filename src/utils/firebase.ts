@@ -25,11 +25,14 @@ import {
   disableNetwork,
   enableNetwork,
   query,
-  where
+  where,
+  runTransaction
 } from "firebase/firestore";
 import firebaseConfig from "../../firebase-applet-config.json";
 import { Ticket, InventoryItem, Room, EmployeeAllocation, WarrantyContract, CounsellingEnquiry } from "../types";
+import { getDeletedEnquiryIds } from "./storage";
 import { app, db, auth } from "../lib/firebase";
+import { extractEnquirySerialNum, formatCanonicalEnquiryNo } from "./enquirySynthesis";
 
 // Initialize Firebase Auth Provider
 const googleProvider = new GoogleAuthProvider();
@@ -320,102 +323,204 @@ export function markQuotaExhausted() {
   transientBackoffUntil = Date.now() + 15000;
 }
 
-// Real-Time Syncing Helpers with Automatic Background Self-Healing (No Manual Retry Needed)
+type SharedCollectionEntry = {
+  subscribers: Set<(data: any[]) => void>;
+  unsub: (() => void) | null;
+  reconnectTimer: ReturnType<typeof setTimeout> | null;
+  lastCloudData: any[] | null;
+};
+
+const sharedCollectionListeners = new Map<string, SharedCollectionEntry>();
+
+// Real-Time Syncing Helpers with Multiplexed Listeners & Calm Backoff
 export function syncCollection<T>(
   collectionName: string,
   onUpdate: (data: T[]) => void,
   fallbackData: T[]
 ): () => void {
-  // Immediately provide cached data for instantaneous response on app opening
-  if (fallbackData && fallbackData.length > 0) {
-    onUpdate(fallbackData);
-  }
-
   if (!isFirebaseConfigured()) {
+    if (fallbackData && fallbackData.length > 0) {
+      onUpdate(fallbackData);
+    }
     return () => {};
   }
 
-  let disposed = false;
-  let activeUnsub: (() => void) | null = null;
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let entry = sharedCollectionListeners.get(collectionName);
+  if (!entry) {
+    entry = {
+      subscribers: new Set(),
+      unsub: null,
+      reconnectTimer: null,
+      lastCloudData: null
+    };
+    sharedCollectionListeners.set(collectionName, entry);
+  }
+
+  const wrappedCallback = onUpdate as (data: any[]) => void;
+  entry.subscribers.add(wrappedCallback);
+
+  // Deliver already-synced cloud data immediately if available, else initial fallback once
+  if (entry.lastCloudData !== null) {
+    wrappedCallback(entry.lastCloudData);
+  } else if (fallbackData && fallbackData.length > 0) {
+    wrappedCallback(fallbackData);
+  }
 
   const scheduleReconnect = (delayMs: number) => {
-    if (disposed || reconnectTimer) return;
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
+    const current = sharedCollectionListeners.get(collectionName);
+    if (!current || current.subscribers.size === 0 || current.reconnectTimer) return;
+    current.reconnectTimer = setTimeout(() => {
+      const latest = sharedCollectionListeners.get(collectionName);
+      if (!latest || latest.subscribers.size === 0) return;
+      latest.reconnectTimer = null;
       attach();
     }, delayMs);
   };
 
   const attach = () => {
-    if (disposed) return;
+    const current = sharedCollectionListeners.get(collectionName);
+    if (!current || current.subscribers.size === 0 || current.unsub) return;
+
     if (isFirestoreQuotaExhausted()) {
-      const waitMs = Math.max(2000, transientBackoffUntil - Date.now() + 250);
+      const waitMs = Math.max(5000, transientBackoffUntil - Date.now() + 500);
       scheduleReconnect(waitMs);
       return;
     }
 
-    if (activeUnsub) {
-      try {
-        activeUnsub();
-      } catch {}
-      activeUnsub = null;
-    }
-
     const colRef = collection(db, collectionName);
-    activeUnsub = onSnapshot(
+    current.unsub = onSnapshot(
       colRef,
       (snapshot) => {
-        if (disposed) return;
+        const latest = sharedCollectionListeners.get(collectionName);
+        if (!latest || latest.subscribers.size === 0) return;
         clearQuotaExhausted();
-        const items: T[] = [];
+        const items: any[] = [];
         snapshot.forEach((d) => {
-          items.push({ id: d.id, ...d.data() } as T);
+          items.push({ id: d.id, ...d.data() });
         });
-        // Deliver authoritative live updates from Firestore
-        onUpdate(items);
+        latest.lastCloudData = items;
+        latest.subscribers.forEach((cb) => {
+          try {
+            cb(items);
+          } catch (cbErr) {
+            console.warn(`Subscriber error on ${collectionName}:`, cbErr);
+          }
+        });
       },
       (error) => {
-        if (disposed) return;
+        const latest = sharedCollectionListeners.get(collectionName);
+        if (!latest) return;
         const msg = error instanceof Error ? error.message : String(error || "");
-        if (
+        const isQuota =
           msg.includes("resource-exhausted") ||
           msg.includes("Quota limit exceeded") ||
           msg.includes("quota metric") ||
-          (error as any)?.code === "resource-exhausted"
-        ) {
-          markQuotaExhausted();
+          (error as any)?.code === "resource-exhausted";
+
+        if (isQuota) {
+          // Calm 3-minute backoff on daily quota exhaustion instead of hammering every 20s
+          transientBackoffUntil = Date.now() + 180000;
         }
-        if (activeUnsub) {
+        if (latest.unsub) {
           try {
-            activeUnsub();
+            latest.unsub();
           } catch {}
-          activeUnsub = null;
+          latest.unsub = null;
         }
-        if (fallbackData && fallbackData.length > 0) {
-          onUpdate(fallbackData);
-        }
-        // Automatically reconnect silently in background without requiring manual Retry Sync
-        scheduleReconnect(20000);
+        scheduleReconnect(isQuota ? 180000 : 30000);
       }
     );
   };
 
-  attach();
+  if (!entry.unsub && !entry.reconnectTimer) {
+    attach();
+  }
 
   return () => {
-    disposed = true;
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    }
-    if (activeUnsub) {
-      try {
-        activeUnsub();
-      } catch {}
-      activeUnsub = null;
+    const current = sharedCollectionListeners.get(collectionName);
+    if (!current) return;
+    current.subscribers.delete(wrappedCallback);
+    if (current.subscribers.size === 0) {
+      if (current.reconnectTimer) {
+        clearTimeout(current.reconnectTimer);
+        current.reconnectTimer = null;
+      }
+      if (current.unsub) {
+        try {
+          current.unsub();
+        } catch {}
+        current.unsub = null;
+      }
     }
   };
+}
+
+/**
+ * Globally atomic enquiry number allocation via Firestore runTransaction on system_metadata/enq_counter.
+ * Guarantees two different laptops or counsellors never receive the same ENQ-2026-XX serial number.
+ */
+export async function reserveNextEnquiryNoFromFirestore(
+  existingEnquiries: CounsellingEnquiry[],
+  _counsellorId?: string,
+  _isSiblingRequest = false
+): Promise<string> {
+  const year = new Date().getFullYear();
+  let localFloorMax = 0;
+
+  const scanMax = (raw?: string | null) => {
+    const n = extractEnquirySerialNum(raw);
+    if (n && n > localFloorMax) localFloorMax = n;
+  };
+
+  (Array.isArray(existingEnquiries) ? existingEnquiries : []).forEach((e) => {
+    scanMax(e?.enquiryNo);
+    scanMax(e?.siblingEnquiryNo);
+  });
+
+  if (typeof window !== "undefined") {
+    try {
+      const deleted = localStorage.getItem("sgs_deleted_enquiry_ids");
+      if (deleted) {
+        const arr = JSON.parse(deleted);
+        if (Array.isArray(arr)) arr.forEach((d) => scanMax(String(d)));
+      }
+      const storedHigh = parseInt(localStorage.getItem("sgs_highest_enquiry_issued") || "0", 10);
+      if (!isNaN(storedHigh) && storedHigh < 50000 && storedHigh > localFloorMax) {
+        localFloorMax = storedHigh;
+      }
+    } catch {}
+  }
+
+  if (isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
+    try {
+      const counterRef = doc(db, "system_metadata", "enq_counter");
+      const allocated = await Promise.race([
+        runTransaction(db, async (tx) => {
+          const snap = await tx.get(counterRef);
+          const remoteHigh = snap.exists() ? Number(snap.data()?.highestIssued || 0) : 0;
+          const safeRemoteHigh = !isNaN(remoteHigh) && remoteHigh < 50000 ? remoteHigh : 0;
+          const nextNum = Math.max(safeRemoteHigh, localFloorMax) + 1;
+          tx.set(
+            counterRef,
+            { highestIssued: nextNum, year, updatedAt: Date.now() },
+            { merge: true }
+          );
+          return nextNum;
+        }),
+        new Promise<null>((r) => setTimeout(() => r(null), 2500))
+      ]);
+      if (typeof allocated === "number" && allocated > 0) {
+        return formatCanonicalEnquiryNo(allocated, year);
+      }
+    } catch (err: any) {
+      const msg = err instanceof Error ? err.message : String(err || "");
+      if (msg.includes("resource-exhausted") || msg.includes("Quota limit exceeded")) {
+        transientBackoffUntil = Date.now() + 180000;
+      }
+    }
+  }
+
+  return formatCanonicalEnquiryNo(localFloorMax + 1, year);
 }
 
 // Clean undefined values so Firestore setDoc never throws 'Unsupported field value: undefined'

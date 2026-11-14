@@ -1,5 +1,6 @@
 import { Ticket, InventoryItem, Room, EmployeeAllocation, WarrantyContract, SchoolBranch, CounsellingEnquiry, CounsellorAccount, DEFAULT_COUNSELLOR_ACCOUNTS, ITStaffAccount, DEFAULT_IT_STAFF_ACCOUNTS, ArchivedITStaffAccount } from "../types";
 import { isObsoleteOrDuplicateCounsellorAccount, normalizeCounsellorIdentity, normalizeEnquiryCounsellor, CANONICAL_COUNSELLORS, cleanAndNormalizeCounsellorAccounts } from "./counsellorNormalizer";
+import { isSameStudentRecord } from "./enquirySynthesis";
 
 export const DEMO_COUNSELLING: CounsellingEnquiry[] = [
   {
@@ -472,6 +473,7 @@ export const mergeWithDemoEnquiries = (items: CounsellingEnquiry[]): Counselling
 export const deduplicateEnquiries = (items: CounsellingEnquiry[]): CounsellingEnquiry[] => {
   if (!Array.isArray(items)) return [];
   const result: CounsellingEnquiry[] = [];
+  const usedIds = new Set<string>();
 
   for (const rawItem of items) {
     if (!rawItem) continue;
@@ -482,10 +484,16 @@ export const deduplicateEnquiries = (items: CounsellingEnquiry[]): CounsellingEn
 
     if (!idKey && !noKey) continue;
 
+    // Only merge with an existing entry if BOTH share the id/enquiryNo AND represent the SAME student
     const existingIndex = result.findIndex(existing => {
       const eId = (existing.id || "").trim().toLowerCase();
       const eNo = (existing.enquiryNo || "").trim().toLowerCase();
-      return (idKey && eId === idKey) || (noKey && eNo && eNo === noKey);
+      const keyMatches = (idKey && eId === idKey) || (noKey && eNo && eNo === noKey);
+      if (!keyMatches) return false;
+      const eName = (existing.studentName || "").trim();
+      const iName = (item.studentName || "").trim();
+      if (!eName || !iName) return true;
+      return isSameStudentRecord(existing, item);
     });
 
     if (existingIndex >= 0) {
@@ -517,7 +525,21 @@ export const deduplicateEnquiries = (items: CounsellingEnquiry[]): CounsellingEn
         merged.enquiryNo = primary.enquiryNo || secondary.enquiryNo;
       }
       result[existingIndex] = merged;
+      if (merged.id) usedIds.add(merged.id.trim().toLowerCase());
     } else {
+      // If a different student collided on the exact same internal `id`, assign a distinct `id` while preserving `enquiryNo`
+      let assignedId = (item.id || item.enquiryNo || "").trim();
+      if (assignedId && usedIds.has(assignedId.toLowerCase())) {
+        let suffix = 2;
+        const baseId = assignedId;
+        assignedId = `${baseId}__${suffix}`;
+        while (usedIds.has(assignedId.toLowerCase())) {
+          suffix++;
+          assignedId = `${baseId}__${suffix}`;
+        }
+        item.id = assignedId;
+      }
+      if (assignedId) usedIds.add(assignedId.toLowerCase());
       result.push(item);
     }
   }
@@ -1279,3 +1301,37 @@ export function removeDismissedParentEntryFromArchive(id: string): void {
   } catch {}
 }
 
+const UNSYNCED_ENQUIRY_IDS_KEY = "sgs_unsynced_enquiry_ids";
+
+export function getUnsyncedEnquiryIds(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(UNSYNCED_ENQUIRY_IDS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed.map(x => String(x || "").trim()).filter(Boolean);
+    }
+  } catch {}
+  return [];
+}
+
+export function markEnquiryUnsynced(...ids: (string | undefined)[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    const existing = new Set(getUnsyncedEnquiryIds().map(x => x.toLowerCase()));
+    ids.forEach(id => {
+      if (id && id.trim()) existing.add(id.trim().toLowerCase());
+    });
+    localStorage.setItem(UNSYNCED_ENQUIRY_IDS_KEY, JSON.stringify(Array.from(existing)));
+  } catch {}
+}
+
+export function unmarkEnquiryUnsynced(...ids: (string | undefined)[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    const removeSet = new Set(ids.filter(Boolean).map(x => String(x).trim().toLowerCase()));
+    if (removeSet.size === 0) return;
+    const filtered = getUnsyncedEnquiryIds().filter(x => !removeSet.has(x.toLowerCase()));
+    localStorage.setItem(UNSYNCED_ENQUIRY_IDS_KEY, JSON.stringify(filtered));
+  } catch {}
+}

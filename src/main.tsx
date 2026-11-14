@@ -81,21 +81,20 @@ class RootErrorBoundary extends React.Component<{children: ReactNode}, ErrorBoun
 }
 
 try {
-  // Remove splash screen immediately upon script execution
-  try {
-    const splash = document.getElementById('splash-screen');
-    if (splash) {
-      splash.style.display = 'none';
-      splash.remove();
-    }
-    if (typeof (window as any).dismissSplashScreen === 'function') {
-      (window as any).dismissSplashScreen();
-    }
-  } catch (_) {}
-
   const container = document.getElementById('root');
   if (container) {
     const root = createRoot(container);
+    (window as any).__APP_MOUNTED__ = true;
+    try {
+      const splash = document.getElementById('splash-screen');
+      if (splash) {
+        splash.style.display = 'none';
+        splash.remove();
+      }
+      if (typeof (window as any).dismissSplashScreen === 'function') {
+        (window as any).dismissSplashScreen(true);
+      }
+    } catch (_) {}
     root.render(
       <StrictMode>
         <RootErrorBoundary>
@@ -108,6 +107,7 @@ try {
   console.error("Critical mounting error:", e);
   const container = document.getElementById('root');
   if (container) {
+    const safeMsg = String(e?.message || e || 'Unknown error').replace(/[<>&]/g, '');
     container.innerHTML = `
       <div style="padding: 40px; font-family: sans-serif; background: #0f172a; color: #fff; min-height: 100vh; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center;">
         <h2 style="color: #ea580c; font-size: 20px;">Starting Application...</h2>
@@ -115,6 +115,7 @@ try {
         <button onclick="sessionStorage.clear(); location.reload();" style="background: #ea580c; color: white; border: none; padding: 12px 24px; border-radius: 12px; font-weight: bold; cursor: pointer;">
           🔄 Reload Application
         </button>
+        <pre style="margin-top:16px;max-width:500px;font-size:11px;color:#f87171;white-space:pre-wrap;">${safeMsg}</pre>
       </div>
     `;
   }

@@ -1,6 +1,13 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { getFirestore, initializeFirestore, setLogLevel } from 'firebase/firestore';
+import {
+  getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  memoryLocalCache,
+  setLogLevel
+} from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 try {
@@ -38,8 +45,17 @@ const dbId = firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatab
   : "(default)";
 
 try {
+  let localCacheCfg: any;
+  try {
+    localCacheCfg = (typeof window !== "undefined" && typeof indexedDB !== "undefined")
+      ? persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+      : memoryLocalCache();
+  } catch {
+    localCacheCfg = memoryLocalCache();
+  }
   firestoreDb = initializeFirestore(app, {
     experimentalAutoDetectLongPolling: true,
+    localCache: localCacheCfg,
   }, dbId);
 } catch {
   try {
