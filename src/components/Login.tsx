@@ -33,7 +33,7 @@ import {
 } from "lucide-react";
 import { collection, getDocs } from "firebase/firestore";
 import { SchoolBranch, COUNSELLORS_LIST, CounsellorProfile, CounsellorAccount, ManagementAccount, loadManagementAccounts, saveManagementAccounts, mergeWithDefaultManagementAccounts, ITStaffAccount } from "../types";
-import { signInAsDesktopUser, loginWithEmail, getUserIAMRole, isFirebaseConfigured, db } from "../utils/firebase";
+import { signInAsDesktopUser, loginWithEmail, getUserIAMRole, isFirebaseConfigured, isFirestoreQuotaExhausted, db } from "../utils/firebase";
 import { loadCounsellorAccounts, saveCounsellorAccounts, mergeWithDefaultCounsellorAccounts, getDeletedCounsellorAccountIds, recordDeletedCounsellorAccountIds, loadITStaffAccounts, saveITStaffAccounts, mergeWithDefaultITStaffAccounts } from "../utils/storage";
 import PortalLinksModal from "./PortalLinksModal";
 
@@ -273,6 +273,8 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
   useEffect(() => {
     let isMounted = true;
     const fetchLiveAccounts = async () => {
+      let serverLoadedMgmt = false;
+      let serverLoadedIT = false;
       try {
         const res = await fetch("/api/accounts");
         if (res.ok) {
@@ -292,11 +294,13 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
               const mergedMgmt = mergeWithDefaultManagementAccounts(json.accounts.management, extraMgmtDeleted);
               setLiveManagementAccounts(mergedMgmt);
               saveManagementAccounts(mergedMgmt);
+              serverLoadedMgmt = true;
             }
-            if (Array.isArray(json.accounts.itStaff)) {
+            if (Array.isArray(json.accounts.itStaff) && json.accounts.itStaff.length > 0) {
               const mergedIT = mergeWithDefaultITStaffAccounts(json.accounts.itStaff, json.accounts.deletedItStaff || []);
               setLiveITStaffAccounts(mergedIT);
               saveITStaffAccounts(mergedIT);
+              serverLoadedIT = true;
             }
           }
         }
@@ -304,61 +308,72 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
         console.warn("Could not fetch accounts from server:", e);
       }
 
-      // Dedicated Management REST API fetch fallback
-      try {
-        const resMgmt = await fetch("/api/accounts/management");
-        if (resMgmt.ok) {
-          const jsonMgmt = await resMgmt.json();
-          if (jsonMgmt.success && Array.isArray(jsonMgmt.management) && isMounted) {
-            const mergedMgmt = mergeWithDefaultManagementAccounts(jsonMgmt.management, jsonMgmt.deletedManagement || []);
-            setLiveManagementAccounts(mergedMgmt);
-            saveManagementAccounts(mergedMgmt);
-          }
-        }
-      } catch (e) {
-        console.warn("Could not fetch Management accounts from server:", e);
-      }
-
-      // Dedicated IT Staff API & Firestore fetch fallback
-      try {
-        const resIT = await fetch("/api/accounts/it-staff");
-        if (resIT.ok) {
-          const jsonIT = await resIT.json();
-          if (jsonIT.success && Array.isArray(jsonIT.itStaff) && isMounted) {
-            const mergedIT = mergeWithDefaultITStaffAccounts(jsonIT.itStaff, jsonIT.deletedItStaff || []);
-            setLiveITStaffAccounts(mergedIT);
-            saveITStaffAccounts(mergedIT);
-          }
-        }
-      } catch (e) {
-        console.warn("Could not fetch IT staff accounts from server:", e);
-      }
-
-      if (isFirebaseConfigured()) {
+      // Dedicated Management REST API fetch fallback (only if /api/accounts didn't include management)
+      if (!serverLoadedMgmt) {
         try {
-          const snapMgmt = await getDocs(collection(db, "management_accounts"));
-          const fsMgmt: ManagementAccount[] = [];
-          snapMgmt.forEach(d => fsMgmt.push({ id: d.id, ...d.data() } as ManagementAccount));
-          if (fsMgmt.length > 0 && isMounted) {
-            const mergedMgmt = mergeWithDefaultManagementAccounts(fsMgmt);
-            setLiveManagementAccounts(mergedMgmt);
-            saveManagementAccounts(mergedMgmt);
+          const resMgmt = await fetch("/api/accounts/management");
+          if (resMgmt.ok) {
+            const jsonMgmt = await resMgmt.json();
+            if (jsonMgmt.success && Array.isArray(jsonMgmt.management) && isMounted) {
+              const mergedMgmt = mergeWithDefaultManagementAccounts(jsonMgmt.management, jsonMgmt.deletedManagement || []);
+              setLiveManagementAccounts(mergedMgmt);
+              saveManagementAccounts(mergedMgmt);
+              if (jsonMgmt.management.length > 0) serverLoadedMgmt = true;
+            }
           }
         } catch (e) {
-          console.warn("Firestore live Management accounts fetch warning:", e);
+          console.warn("Could not fetch Management accounts from server:", e);
         }
+      }
 
+      // Dedicated IT Staff API fetch fallback
+      if (!serverLoadedIT) {
         try {
-          const snap = await getDocs(collection(db, "it_staff_accounts"));
-          const fsItems: ITStaffAccount[] = [];
-          snap.forEach(d => fsItems.push({ id: d.id, ...d.data() } as ITStaffAccount));
-          if (fsItems.length > 0 && isMounted) {
-            const mergedIT = mergeWithDefaultITStaffAccounts(fsItems);
-            setLiveITStaffAccounts(mergedIT);
-            saveITStaffAccounts(mergedIT);
+          const resIT = await fetch("/api/accounts/it-staff");
+          if (resIT.ok) {
+            const jsonIT = await resIT.json();
+            if (jsonIT.success && Array.isArray(jsonIT.itStaff) && isMounted) {
+              const mergedIT = mergeWithDefaultITStaffAccounts(jsonIT.itStaff, jsonIT.deletedItStaff || []);
+              setLiveITStaffAccounts(mergedIT);
+              saveITStaffAccounts(mergedIT);
+              if (jsonIT.itStaff.length > 0) serverLoadedIT = true;
+            }
           }
         } catch (e) {
-          console.warn("Firestore live IT accounts fetch warning:", e);
+          console.warn("Could not fetch IT staff accounts from server:", e);
+        }
+      }
+
+      // Only query Firestore on Login mount if Express server failed AND read quota is healthy
+      if (isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
+        if (!serverLoadedMgmt) {
+          try {
+            const snapMgmt = await getDocs(collection(db, "management_accounts"));
+            const fsMgmt: ManagementAccount[] = [];
+            snapMgmt.forEach(d => fsMgmt.push({ id: d.id, ...d.data() } as ManagementAccount));
+            if (fsMgmt.length > 0 && isMounted) {
+              const mergedMgmt = mergeWithDefaultManagementAccounts(fsMgmt);
+              setLiveManagementAccounts(mergedMgmt);
+              saveManagementAccounts(mergedMgmt);
+            }
+          } catch (e) {
+            console.warn("Firestore live Management accounts fetch warning:", e);
+          }
+        }
+
+        if (!serverLoadedIT) {
+          try {
+            const snap = await getDocs(collection(db, "it_staff_accounts"));
+            const fsItems: ITStaffAccount[] = [];
+            snap.forEach(d => fsItems.push({ id: d.id, ...d.data() } as ITStaffAccount));
+            if (fsItems.length > 0 && isMounted) {
+              const mergedIT = mergeWithDefaultITStaffAccounts(fsItems);
+              setLiveITStaffAccounts(mergedIT);
+              saveITStaffAccounts(mergedIT);
+            }
+          } catch (e) {
+            console.warn("Firestore live IT accounts fetch warning:", e);
+          }
         }
       }
     };
@@ -421,7 +436,7 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
     }
 
     // 3. If still not found, query live Firestore database collection directly
-    if (!matched && isFirebaseConfigured()) {
+    if (!matched && isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
       try {
         const snap = await getDocs(collection(db, "it_staff_accounts"));
         const fsItems: ITStaffAccount[] = [];
@@ -559,7 +574,7 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
     }
 
     // 3. If still not found, query Firestore collection directly
-    if (!mgmtFound && isFirebaseConfigured()) {
+    if (!mgmtFound && isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
       try {
         const snap = await getDocs(collection(db, "management_accounts"));
         const fsItems: ManagementAccount[] = [];
@@ -768,7 +783,7 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
     }
 
     // 3. Query Firestore directly if configured
-    if (!found && isFirebaseConfigured()) {
+    if (!found && isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
       try {
         const snap = await getDocs(collection(db, "counsellor_accounts"));
         const fsItems: CounsellorAccount[] = [];

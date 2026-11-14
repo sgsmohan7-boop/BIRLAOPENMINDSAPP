@@ -325,7 +325,7 @@ export default function ParentKioskView({
       const existingRaw = localStorage.getItem("sgs_parent_self_entries") || localStorage.getItem("parent_self_entries");
       const existing: ParentSelfEntry[] = existingRaw ? JSON.parse(existingRaw) : [];
       let updated = [finalEntry1, ...existing.filter(e => e.id !== id1)];
-      localStorage.setItem("parent_self_entries", JSON.stringify(updated));
+      localStorage.removeItem("parent_self_entries");
       localStorage.setItem("sgs_parent_self_entries", JSON.stringify(updated));
 
       // Dispatch event & broadcast to notify open Counsellor tabs

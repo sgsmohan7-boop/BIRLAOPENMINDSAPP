@@ -824,6 +824,16 @@ export default function CounsellingPortal({
 
   const [isRefreshingDept, setIsRefreshingDept] = useState(false);
   const backfilledParentEntriesRef = React.useRef<Set<string>>(new Set());
+  const lastParentSigRef = React.useRef<string>("");
+
+  const notifyParentEntriesChanged = React.useCallback((nextList: ParentSelfEntry[]) => {
+    if (!onParentSelfEntriesChange) return;
+    const sig = nextList.map(e => `${e.id}:${e.status || "pending"}:${e.claimedBy || ""}`).join("|");
+    if (sig !== lastParentSigRef.current) {
+      lastParentSigRef.current = sig;
+      onParentSelfEntriesChange(nextList);
+    }
+  }, [onParentSelfEntriesChange]);
 
   const pushUnsyncedParentEntriesToCloud = React.useCallback((cloudItems: ParentSelfEntry[], localItems: ParentSelfEntry[]) => {
     if (!isFirebaseConfigured() || !Array.isArray(localItems) || localItems.length === 0) return;
@@ -861,32 +871,35 @@ export default function CounsellingPortal({
   const handleRefreshDept = async () => {
     setIsRefreshingDept(true);
 
-    // 1. Direct Live Firestore pull for parent_self_entries (works on Vercel static & all cloud deployments)
+    // 1. Scoped Firestore pull for ONLY pending parent_self_entries (minimal daily read usage)
     if (isFirebaseConfigured()) {
       clearQuotaExhausted();
       try {
-        const cloudEntries = await fetchCollectionDocs<ParentSelfEntry>("parent_self_entries", true);
+        const cloudEntries = await fetchPendingParentEntriesFromFirestore<ParentSelfEntry>();
         if (Array.isArray(cloudEntries)) {
           pushUnsyncedParentEntriesToCloud(cloudEntries, parentSelfEntries || []);
           const combined = deduplicateParentEntries([...cloudEntries, ...(parentSelfEntries || [])]);
           saveParentSelfEntries(combined);
           setParentSelfEntries(combined);
-          onParentSelfEntriesChange?.(combined);
+          notifyParentEntriesChanged(combined);
         }
       } catch {}
     }
 
-    // 2. Fallback Express API check (for local dev environment)
+    // 2. Authoritative Express API check (0 Firestore reads — syncs MongoDB & server entries immediately)
     try {
       const res = await fetch("/api/parent-self-entry");
       if (res.ok) {
         const json = await res.json();
         if (json.success && Array.isArray(json.entries)) {
+          let mergedOut: ParentSelfEntry[] | null = null;
           setParentSelfEntries(prev => {
             const combined = deduplicateParentEntries([...(prev || []), ...json.entries]);
             saveParentSelfEntries(combined);
+            mergedOut = combined;
             return combined;
           });
+          if (mergedOut) notifyParentEntriesChanged(mergedOut);
         }
       }
     } catch {}
@@ -987,17 +1000,22 @@ export default function CounsellingPortal({
         }
       }
 
-      // 2. Express API check (0 Firestore reads — syncs entries submitted on the same server)
+      // 2. Express API check (0 Firestore reads — syncs entries submitted on server & MongoDB even during Firestore quota limits)
       try {
         const res = await fetch("/api/parent-self-entry");
         if (res.ok) {
           const json = await res.json();
           if (json.success && Array.isArray(json.entries)) {
+            let nextCombined: ParentSelfEntry[] | null = null;
             setParentSelfEntries(prev => {
               const combined = deduplicateParentEntries([...(prev || []), ...json.entries]);
               saveParentSelfEntries(combined);
+              nextCombined = combined;
               return combined;
             });
+            if (nextCombined) {
+              notifyParentEntriesChanged(nextCombined);
+            }
           }
         }
       } catch {}
@@ -1006,20 +1024,23 @@ export default function CounsellingPortal({
     attachFirestoreListener();
     fetchServerEntries(false);
 
-    // Express server poll fallback (zero Firestore read cost)
-    const interval = setInterval(() => fetchServerEntries(false), 12000);
+    // Express server poll fallback (zero Firestore read cost — keeps parent QR tickets flowing 24/7)
+    const interval = setInterval(() => fetchServerEntries(false), 8000);
 
     const handleRealtimeEntry = (evt?: any) => {
       const localStored = loadParentSelfEntries();
       const incoming = evt?.detail || evt?.entry;
       if (incoming || localStored.length > 0) {
+        let nextCombined: ParentSelfEntry[] | null = null;
         setParentSelfEntries(prev => {
           const pool = [...(prev || []), ...localStored];
           if (incoming && incoming.id) pool.unshift(incoming);
           const combined = deduplicateParentEntries(pool);
           saveParentSelfEntries(combined);
+          nextCombined = combined;
           return combined;
         });
+        if (nextCombined) notifyParentEntriesChanged(nextCombined);
       }
     };
 
@@ -1027,7 +1048,13 @@ export default function CounsellingPortal({
       if (evt.key && evt.key !== "sgs_parent_self_entries") return;
       const localStored = loadParentSelfEntries();
       if (localStored.length > 0) {
-        setParentSelfEntries(prev => deduplicateParentEntries([...(prev || []), ...localStored]));
+        let nextCombined: ParentSelfEntry[] | null = null;
+        setParentSelfEntries(prev => {
+          const combined = deduplicateParentEntries([...(prev || []), ...localStored]);
+          nextCombined = combined;
+          return combined;
+        });
+        if (nextCombined) notifyParentEntriesChanged(nextCombined);
       }
     };
 
@@ -1211,6 +1238,7 @@ export default function CounsellingPortal({
     const updated = [entry, ...parentSelfEntries.filter(e => e.id !== entry.id)];
     setParentSelfEntries(updated);
     saveParentSelfEntries(updated);
+    notifyParentEntriesChanged(updated);
     fetch("/api/parent-self-entry", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1286,6 +1314,7 @@ export default function CounsellingPortal({
     } : e);
     setParentSelfEntries(updated);
     saveParentSelfEntries(updated);
+    notifyParentEntriesChanged(updated);
     setCounsellorDismissVersion(v => v + 1);
 
     // 2. Update Firestore with status: "dismissed"
@@ -1358,6 +1387,7 @@ export default function CounsellingPortal({
     } : e);
     setParentSelfEntries(updated);
     saveParentSelfEntries(updated);
+    notifyParentEntriesChanged(updated);
     setCounsellorDismissVersion(v => v + 1);
 
     try {
@@ -1392,6 +1422,7 @@ export default function CounsellingPortal({
     const updated = parentSelfEntries.filter(e => e.id !== entryId);
     setParentSelfEntries(updated);
     saveParentSelfEntries(updated);
+    notifyParentEntriesChanged(updated);
 
     try {
       if (isFirebaseConfigured()) {
@@ -1412,6 +1443,7 @@ export default function CounsellingPortal({
     const count = claimedParentEntries.length;
     const ids = claimedParentEntries.map(e => e.id);
     const counsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR";
+    const counsellorName = activeCounsellor ? activeCounsellor.name : "Admissions Desk";
 
     // 1. Delete all claimed entries from Firestore and record dismissal
     ids.forEach(id => {
@@ -1419,11 +1451,19 @@ export default function CounsellingPortal({
       deleteDocument("parent_self_entries", id).catch(() => {});
     });
 
-    // 2. Clear from React state & LocalStorage
+    // 2. Sync to Express server so they don't resurface
+    fetch("/api/parent-self-entry/clear-pending", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids, counsellorId, counsellorName })
+    }).catch(() => {});
+
+    // 3. Clear from React state & LocalStorage
     const claimedIdSet = new Set(ids);
     const updated = parentSelfEntries.filter(e => !claimedIdSet.has(e.id));
     setParentSelfEntries(updated);
     saveParentSelfEntries(updated);
+    notifyParentEntriesChanged(updated);
 
     setDeleteToast(`🧹 Successfully deleted ${count} claimed test token(s).`);
     setTimeout(() => setDeleteToast(null), 4000);
@@ -1434,18 +1474,27 @@ export default function CounsellingPortal({
     const count = pendingParentEntries.length;
     const pendingIds = pendingParentEntries.map(e => e.id);
     const counsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR";
+    const counsellorName = activeCounsellor ? activeCounsellor.name : "Admissions Desk";
 
-    // 1. Record all dismissed IDs and delete from Firestore
+    // 1. Record all dismissed IDs and update Firestore
     pendingIds.forEach(id => {
       recordDismissedParentEntryId(id, counsellorId);
       deleteDocument("parent_self_entries", id).catch(() => {});
     });
 
-    // 2. Clear from React state for this counsellor's workspace
+    // 2. Sync to Express server so cleared cards don't come back on next server poll
+    fetch("/api/parent-self-entry/clear-pending", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: pendingIds, counsellorId, counsellorName })
+    }).catch(() => {});
+
+    // 3. Clear from React state for this counsellor's workspace
     const pendingIdSet = new Set(pendingIds);
     const updated = parentSelfEntries.filter(e => !pendingIdSet.has(e.id));
     setParentSelfEntries(updated);
     saveParentSelfEntries(updated);
+    notifyParentEntriesChanged(updated);
 
     setDeleteToast(`🧹 Cleared ${count} waiting parent card(s) from your workspace desk.`);
     setTimeout(() => setDeleteToast(null), 4000);
@@ -1473,6 +1522,7 @@ export default function CounsellingPortal({
 
     setParentSelfEntries(updatedEntries);
     saveParentSelfEntries(updatedEntries);
+    notifyParentEntriesChanged(updatedEntries);
 
     // Update Firestore so other counsellors immediately see this parent is claimed
     try {
@@ -1499,13 +1549,21 @@ export default function CounsellingPortal({
     // If this entry already has an active or saved draft with filled fields or recorded audio, restore it seamlessly
     let existingSavedDraft: any = null;
     try {
-      if (activeDraft && (activeDraft?.entry?.id === entry.id || activeDraft?.formData?.studentName?.toLowerCase() === entry.studentName.toLowerCase())) {
+      const myCid = (activeCounsellor?.id || "").toLowerCase();
+      if (
+        activeDraft &&
+        (!activeDraft.counsellorId || !myCid || String(activeDraft.counsellorId).toLowerCase() === myCid) &&
+        (activeDraft?.entry?.id === entry.id || activeDraft?.formData?.studentName?.toLowerCase() === entry.studentName.toLowerCase())
+      ) {
         existingSavedDraft = activeDraft;
       } else {
         const rawDraft = localStorage.getItem("bomis_counsellor_active_draft");
         if (rawDraft) {
           const parsed = JSON.parse(rawDraft);
-          if (parsed?.entry?.id === entry.id || parsed?.formData?.studentName?.toLowerCase() === entry.studentName.toLowerCase()) {
+          if (
+            (!parsed?.counsellorId || !myCid || String(parsed.counsellorId).toLowerCase() === myCid) &&
+            (parsed?.entry?.id === entry.id || parsed?.formData?.studentName?.toLowerCase() === entry.studentName.toLowerCase())
+          ) {
             existingSavedDraft = parsed;
           }
         }
@@ -1668,7 +1726,7 @@ export default function CounsellingPortal({
       setIsJointSiblingMode(true);
       setLinkedSiblingTokens([entry]);
 
-      const draftObj = { formData: newClaimedData, siblingFormData: sibClaimedData, entry, isJointSibling: true, claimedAt: new Date().toISOString() };
+      const draftObj = { counsellorId: activeCounsellor.id, formData: newClaimedData, siblingFormData: sibClaimedData, entry, isJointSibling: true, claimedAt: new Date().toISOString() };
       try { localStorage.setItem("bomis_counsellor_active_draft", JSON.stringify(draftObj)); } catch {}
       setActiveDraft(draftObj);
 
@@ -1686,7 +1744,7 @@ export default function CounsellingPortal({
       setIsJointSiblingMode(false);
       setLinkedSiblingTokens([]);
 
-      const draftObj = { formData: newClaimedData, entry, claimedAt: new Date().toISOString() };
+      const draftObj = { counsellorId: activeCounsellor.id, formData: newClaimedData, entry, claimedAt: new Date().toISOString() };
       try { localStorage.setItem("bomis_counsellor_active_draft", JSON.stringify(draftObj)); } catch {}
       setActiveDraft(draftObj);
 
@@ -2656,7 +2714,7 @@ export default function CounsellingPortal({
       addOccupied(item?.enquiryNo);
     });
     try {
-      const raw = localStorage.getItem("it_command_counselling_forms");
+      const raw = localStorage.getItem("it_command_counselling") || localStorage.getItem("it_command_counselling_forms");
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
@@ -2864,6 +2922,7 @@ export default function CounsellingPortal({
 
     setParentSelfEntries(updatedParentSelfEntries);
     saveParentSelfEntries(updatedParentSelfEntries);
+    notifyParentEntriesChanged(updatedParentSelfEntries);
 
     // Sync completion to Firestore & Server API
     if (claimedEntryId) {
@@ -4143,7 +4202,7 @@ Warm regards,
       </div>
 
       {/* Active In-Progress Claimed Lead Recovery Banner */}
-      {activeDraft && activeDraft.formData && activeDraft.formData.studentName && activeView !== "form" && (
+      {activeDraft && activeDraft.formData && activeDraft.formData.studentName && activeView !== "form" && (!activeDraft.counsellorId || !activeCounsellor?.id || String(activeDraft.counsellorId).toLowerCase() === activeCounsellor.id.toLowerCase()) && (
         <div className="p-4 bg-gradient-to-r from-orange-600 via-amber-600 to-yellow-600 text-white rounded-2xl flex flex-wrap items-center justify-between gap-3 shadow-xl border border-amber-400/40 animate-in fade-in slide-in-from-top-3">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-white/20 backdrop-blur-md flex items-center justify-center font-black text-xl shrink-0 border border-white/30 text-white shadow-md">
@@ -5074,6 +5133,7 @@ Warm regards,
                     } : e);
                     setParentSelfEntries(updated);
                     saveParentSelfEntries(updated);
+                    notifyParentEntriesChanged(updated);
 
                     // Save each to archived storage
                     pendingOnlineEntries.forEach(e => {

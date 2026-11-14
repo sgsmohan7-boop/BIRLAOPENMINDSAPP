@@ -67,11 +67,11 @@ import {
   deleteDocument, 
   isFirebaseConfigured, 
   syncBulkArrayToFirebase, 
-  testFirestoreConnection,
   purgeAllCollectionsFromFirebase,
   isFirestoreQuotaExhausted,
   clearQuotaExhausted,
   fetchCollectionDocs,
+  fetchPendingParentEntriesFromFirestore,
   prepareEnquiryForFirestore
 } from "./utils/firebase";
 import { checkBackupStatus, syncAllToMongoBackup, fetchFromMongoBackup, saveToMongoBackup, deleteFromMongoBackup } from "./utils/backupClient";
@@ -315,45 +315,89 @@ export default function App() {
     };
     fetchServerAccounts();
 
-    // Only pull local Express /api/counselling when Firebase is NOT configured (avoid injecting stale local JSON on cloud deployments)
-    if (!isFirebaseConfigured()) {
-      const fetchLocalServerCounselling = async () => {
-        try {
-          const res = await fetch("/api/counselling");
-          if (res.ok) {
-            const json = await res.json();
-            if (json.success && active) {
-              if (Array.isArray(json.deletedIds) && json.deletedIds.length > 0) {
-                recordDeletedEnquiryIds(json.deletedIds);
-              }
-              const deletedSet = new Set(getDeletedEnquiryIds().map(x => x.toLowerCase()));
-              const serverEnquiries = (Array.isArray(json.enquiries) ? json.enquiries : []).filter((e: any) => {
+    // Always pull live server parent_self_entries (0 Firestore reads) and pull /api/counselling when Firestore is unconfigured or read-quota limited
+    const fetchLocalServerParentEntries = async () => {
+      try {
+        const pRes = await fetch("/api/parent-self-entry");
+        if (pRes.ok) {
+          const pJson = await pRes.json();
+          if (pJson.success && Array.isArray(pJson.entries) && active) {
+            setParentSelfEntries(prev => {
+              const map = new Map<string, ParentSelfEntry>();
+              [...(prev || []), ...pJson.entries].forEach((e: ParentSelfEntry) => {
+                if (e && e.id) map.set(e.id, { ...map.get(e.id), ...e });
+              });
+              const merged = Array.from(map.values());
+              saveParentSelfEntries(merged);
+              return merged;
+            });
+          }
+        }
+      } catch {}
+    };
+    fetchLocalServerParentEntries();
+
+    const fetchLocalServerCounselling = async () => {
+      try {
+        const res = await fetch("/api/counselling");
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && active) {
+            if (Array.isArray(json.deletedIds) && json.deletedIds.length > 0) {
+              recordDeletedEnquiryIds(json.deletedIds);
+            }
+            const deletedSet = new Set(getDeletedEnquiryIds().map(x => x.toLowerCase()));
+            const serverEnquiries = (Array.isArray(json.enquiries) ? json.enquiries : []).filter((e: any) => {
+              if (!e) return false;
+              const eId = (e.id || "").toLowerCase();
+              const eNo = (e.enquiryNo || "").toLowerCase();
+              return (!eId || !deletedSet.has(eId)) && (!eNo || !deletedSet.has(eNo));
+            });
+            setCounsellingEnquiries(prev => {
+              const prevFiltered = (prev || []).filter((e: any) => {
                 if (!e) return false;
                 const eId = (e.id || "").toLowerCase();
                 const eNo = (e.enquiryNo || "").toLowerCase();
                 return (!eId || !deletedSet.has(eId)) && (!eNo || !deletedSet.has(eNo));
               });
-              setCounsellingEnquiries(prev => {
-                const prevFiltered = (prev || []).filter((e: any) => {
-                  if (!e) return false;
-                  const eId = (e.id || "").toLowerCase();
-                  const eNo = (e.enquiryNo || "").toLowerCase();
-                  return (!eId || !deletedSet.has(eId)) && (!eNo || !deletedSet.has(eNo));
-                });
-                const combined = deduplicateEnquiries([...serverEnquiries, ...prevFiltered]);
-                saveCounselling(combined);
-                return combined;
-              });
-            }
+              const combined = deduplicateEnquiries([...serverEnquiries, ...prevFiltered]);
+              saveCounselling(combined);
+              return combined;
+            });
           }
-        } catch (e) {
-          console.warn("Server counselling fetch warning:", e);
         }
-      };
+      } catch (e) {
+        console.warn("Server counselling fetch warning:", e);
+      }
+    };
+
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    if (!isFirebaseConfigured() || isFirestoreQuotaExhausted()) {
       fetchLocalServerCounselling();
+    } else {
+      // If Firestore snapshot hasn't arrived after 3.5s (e.g. quota exhaustion during attach), pull server cache transparently
+      fallbackTimer = setTimeout(() => {
+        if (active && cloudFormsRef.current === null) {
+          fetchLocalServerCounselling();
+        }
+      }, 3500);
     }
 
-    return () => { active = false; };
+    const handleQuotaExhaustedEvent = () => {
+      if (active) {
+        fetchLocalServerParentEntries();
+        if (cloudFormsRef.current === null) {
+          fetchLocalServerCounselling();
+        }
+      }
+    };
+    window.addEventListener("firestore-quota-exhausted", handleQuotaExhaustedEvent);
+
+    return () => {
+      active = false;
+      if (fallbackTimer) clearTimeout(fallbackTimer);
+      window.removeEventListener("firestore-quota-exhausted", handleQuotaExhaustedEvent);
+    };
   }, [isLoggedIn, isParentKioskMode]);
 
   // Expiring Warranty states
@@ -445,7 +489,13 @@ export default function App() {
           continue;
         }
 
-        // Real student missing from Firestore! Ensure we never collide/overwrite an existing cloud ENQ document
+        // If cloudForms already loaded and this local record was NOT explicitly marked unsynced offline on this device,
+        // treat cloud as authoritative (prevents stale laptop localStorage cache from resurrecting deleted/renamed records)
+        if (cloudForms.length > 0 && !isExplicitlyUnsynced) {
+          continue;
+        }
+
+        // Genuine offline/unsynced student missing from Firestore! Ensure we never collide/overwrite an existing cloud ENQ document
         let safeDocId = (localItem.enquiryNo || localItem.id).trim();
         const collidingCloud = cloudForms.find(
           cf => (cf.id || "").trim().toLowerCase() === safeDocId.toLowerCase() ||
@@ -580,15 +630,16 @@ export default function App() {
       setCounsellingEnquiries(currentLocalEnquiries);
       setCounsellorAccounts(loadCounsellorAccounts());
 
-      // 2. Direct Live Firestore Pull (Google Docs Single Source of Truth across all laptops)
+      // 2. Smart Firestore Pull (uses SDK cache+delta to preserve daily quota) + Express Server fallback
+      let firestoreEnquiriesSynced = false;
       if (isFirebaseConfigured()) {
         clearQuotaExhausted();
         try {
-          const [cloudDeletedDocs, cloudEnquiries, cloudAccounts, cloudParentEntries] = await Promise.all([
-            fetchCollectionDocs<{ id: string; enquiryNo?: string }>("deleted_counselling_forms", true),
-            fetchCollectionDocs<CounsellingEnquiry>("counselling_forms", true),
-            fetchCollectionDocs<CounsellorAccount>("counsellor_accounts", true),
-            fetchCollectionDocs<ParentSelfEntry>("parent_self_entries", true)
+          const [cloudDeletedDocs, cloudEnquiries, cloudAccounts, cloudPendingParents] = await Promise.all([
+            fetchCollectionDocs<{ id: string; enquiryNo?: string }>("deleted_counselling_forms", false),
+            fetchCollectionDocs<CounsellingEnquiry>("counselling_forms", false),
+            fetchCollectionDocs<CounsellorAccount>("counsellor_accounts", false),
+            fetchPendingParentEntriesFromFirestore<ParentSelfEntry>()
           ]);
 
           if (Array.isArray(cloudDeletedDocs)) {
@@ -597,13 +648,21 @@ export default function App() {
             deletedFormsLoadedRef.current = true;
           }
 
-          if (Array.isArray(cloudParentEntries)) {
-            cloudParentsRef.current = cloudParentEntries;
-            setParentSelfEntries(cloudParentEntries);
-            saveParentSelfEntries(cloudParentEntries);
+          if (Array.isArray(cloudPendingParents)) {
+            setParentSelfEntries(prev => {
+              const map = new Map<string, ParentSelfEntry>();
+              [...(prev || []), ...cloudPendingParents].forEach(p => {
+                if (p && p.id) map.set(p.id, p);
+              });
+              const merged = Array.from(map.values());
+              cloudParentsRef.current = merged;
+              saveParentSelfEntries(merged);
+              return merged;
+            });
           }
 
           if (Array.isArray(cloudEnquiries)) {
+            firestoreEnquiriesSynced = true;
             cloudFormsRef.current = cloudEnquiries;
             const effectiveParents = cloudParentsRef.current ?? loadParentSelfEntries();
             setCounsellingEnquiries(prev => {
@@ -625,8 +684,28 @@ export default function App() {
             saveCounsellorAccounts(mergedAccs);
           }
         } catch (_) {}
-      } else {
-        // Pure local/Node fallback only when Firebase is not configured
+      }
+
+      // Always sync Express /api/parent-self-entry (0 Firestore reads), and pull /api/counselling if Firestore was unavailable/quota-paused
+      try {
+        const pRes = await fetch("/api/parent-self-entry");
+        if (pRes.ok) {
+          const pJson = await pRes.json();
+          if (pJson.success && Array.isArray(pJson.entries)) {
+            setParentSelfEntries(prev => {
+              const map = new Map<string, ParentSelfEntry>();
+              [...(prev || []), ...pJson.entries].forEach((e: ParentSelfEntry) => {
+                if (e && e.id) map.set(e.id, { ...map.get(e.id), ...e });
+              });
+              const merged = Array.from(map.values());
+              saveParentSelfEntries(merged);
+              return merged;
+            });
+          }
+        }
+      } catch (_) {}
+
+      if (!firestoreEnquiriesSynced) {
         try {
           const cRes = await fetch("/api/counselling");
           if (cRes.ok) {
@@ -684,9 +763,8 @@ export default function App() {
     historyRef.current = history;
   }, [history]);
 
-  // Load datasets on mount
+  // Load datasets on mount (skip test Firestore read on unauthenticated/QR screens to save daily quota)
   useEffect(() => {
-    testFirestoreConnection();
 
     // Load initial local data (cached local state or fallback seeds)
     const localData = loadData();
@@ -828,13 +906,17 @@ export default function App() {
   }, [isLoggedIn, userRole, userEmail, currentTab, tickets, history, inventory, rooms, allocations, warranty]);
 
 
-  // Google Cloud Data Server Real-Time Synchronization (Active only for authenticated staff portals)
+  // Google Cloud Data Server Real-Time Synchronization (Role-scoped to minimize daily Firestore read units)
   useEffect(() => {
     if (isParentKioskMode || !isLoggedIn) return;
+    if (userRole === "Student") return; // Student portal manages transport_fleet directly
     const isFb = isFirebaseConfigured();
     if (isFb) {
       const localData = loadData();
       const isCounsellingOnlyRole = userRole === "Counsellor";
+      const isTeacherRole = userRole === "Teacher";
+      const isManagementRole = userRole === "Management";
+      const isAdminRole = !isCounsellingOnlyRole && !isTeacherRole && !isManagementRole;
 
       const itUnsubs = isCounsellingOnlyRole ? [] : [
         syncCollection<Ticket>("tickets", (items) => {
@@ -849,30 +931,6 @@ export default function App() {
           }
         }, localData.tickets),
 
-        syncCollection<Ticket>("history", (items) => {
-          if (localStorage.getItem("sgs_wiping_database") === "true") {
-            setHistory([]);
-            return;
-          }
-          if (Array.isArray(items)) {
-            setHistory(items);
-            saveData({ history: items });
-            localStorage.setItem("sgs_last_sync_history", new Date().toISOString());
-          }
-        }, localData.history),
-
-        syncCollection<InventoryItem>("inventory", (items) => {
-          if (localStorage.getItem("sgs_wiping_database") === "true") {
-            setInventory([]);
-            return;
-          }
-          if (Array.isArray(items)) {
-            setInventory(items);
-            saveData({ inventory: items });
-            localStorage.setItem("sgs_last_sync_inventory", new Date().toISOString());
-          }
-        }, localData.inventory),
-
         syncCollection<Room>("rooms", (items) => {
           if (localStorage.getItem("sgs_wiping_database") === "true") {
             setRooms([]);
@@ -885,32 +943,60 @@ export default function App() {
           }
         }, localData.rooms),
 
-        syncCollection<EmployeeAllocation>("allocations", (items) => {
-          if (localStorage.getItem("sgs_wiping_database") === "true") {
-            setAllocations([]);
-            return;
-          }
-          if (Array.isArray(items)) {
-            setAllocations(items);
-            saveData({ allocations: items });
-            localStorage.setItem("sgs_last_sync_allocations", new Date().toISOString());
-          }
-        }, localData.allocations),
+        ...(!isTeacherRole ? [
+          syncCollection<InventoryItem>("inventory", (items) => {
+            if (localStorage.getItem("sgs_wiping_database") === "true") {
+              setInventory([]);
+              return;
+            }
+            if (Array.isArray(items)) {
+              setInventory(items);
+              saveData({ inventory: items });
+              localStorage.setItem("sgs_last_sync_inventory", new Date().toISOString());
+            }
+          }, localData.inventory)
+        ] : []),
 
-        syncCollection<WarrantyContract>("warranty", (items) => {
-          if (localStorage.getItem("sgs_wiping_database") === "true") {
-            setWarranty([]);
-            return;
-          }
-          if (Array.isArray(items)) {
-            setWarranty(items);
-            saveData({ warranty: items });
-            localStorage.setItem("sgs_last_sync_warranty", new Date().toISOString());
-          }
-        }, localData.warranty)
+        ...(isAdminRole ? [
+          syncCollection<Ticket>("history", (items) => {
+            if (localStorage.getItem("sgs_wiping_database") === "true") {
+              setHistory([]);
+              return;
+            }
+            if (Array.isArray(items)) {
+              setHistory(items);
+              saveData({ history: items });
+              localStorage.setItem("sgs_last_sync_history", new Date().toISOString());
+            }
+          }, localData.history),
+
+          syncCollection<EmployeeAllocation>("allocations", (items) => {
+            if (localStorage.getItem("sgs_wiping_database") === "true") {
+              setAllocations([]);
+              return;
+            }
+            if (Array.isArray(items)) {
+              setAllocations(items);
+              saveData({ allocations: items });
+              localStorage.setItem("sgs_last_sync_allocations", new Date().toISOString());
+            }
+          }, localData.allocations),
+
+          syncCollection<WarrantyContract>("warranty", (items) => {
+            if (localStorage.getItem("sgs_wiping_database") === "true") {
+              setWarranty([]);
+              return;
+            }
+            if (Array.isArray(items)) {
+              setWarranty(items);
+              saveData({ warranty: items });
+              localStorage.setItem("sgs_last_sync_warranty", new Date().toISOString());
+            }
+          }, localData.warranty)
+        ] : [])
       ];
 
-      const counsellingUnsubs = [
+      const counsellingUnsubs = isTeacherRole ? [] : [
         syncCollection<{ id: string; enquiryNo?: string }>("deleted_counselling_forms", (deletedDocs) => {
           if (Array.isArray(deletedDocs)) {
             deletedFormsLoadedRef.current = true;
@@ -1018,14 +1104,6 @@ export default function App() {
           });
         }, []),
 
-        syncCollection<{ id: string; username?: string }>("deleted_counsellor_accounts", (deletedDocs) => {
-          if (deletedDocs && deletedDocs.length > 0) {
-            const ids = deletedDocs.map(d => d.id || d.username || "").filter(Boolean);
-            recordDeletedCounsellorAccountIds(ids);
-            setCounsellorAccounts(prev => mergeWithDefaultCounsellorAccounts(prev, ids));
-          }
-        }, []),
-
         syncCollection<CounsellorAccount>("counsellor_accounts", (items) => {
           if (localStorage.getItem("sgs_wiping_database") === "true") {
             setCounsellorAccounts([]);
@@ -1044,51 +1122,63 @@ export default function App() {
           saveCounsellorAccounts(cleaned);
         }, loadCounsellorAccounts()),
 
-        syncCollection<{ id: string; lastWipedAt?: number }>("system_metadata", (items) => {
-          const statusDoc = items.find(i => i.id === "status");
-          if (statusDoc?.lastWipedAt) {
-            const localLastWipe = localStorage.getItem("sgs_local_last_wiped") 
-              ? parseInt(localStorage.getItem("sgs_local_last_wiped")!, 10) 
-              : 0;
-            if (statusDoc.lastWipedAt > localLastWipe) {
-              localStorage.setItem("sgs_local_last_wiped", String(statusDoc.lastWipedAt));
-              clearAllData();
-              setTickets([]);
-              setHistory([]);
-              setInventory([]);
-              setRooms([]);
-              setAllocations([]);
-              setWarranty([]);
+        ...(!isCounsellingOnlyRole ? [
+          syncCollection<{ id: string; username?: string }>("deleted_counsellor_accounts", (deletedDocs) => {
+            if (deletedDocs && deletedDocs.length > 0) {
+              const ids = deletedDocs.map(d => d.id || d.username || "").filter(Boolean);
+              recordDeletedCounsellorAccountIds(ids);
+              setCounsellorAccounts(prev => mergeWithDefaultCounsellorAccounts(prev, ids));
             }
-          }
-        }, []),
+          }, []),
+
+          syncCollection<{ id: string; lastWipedAt?: number }>("system_metadata", (items) => {
+            const statusDoc = items.find(i => i.id === "status");
+            if (statusDoc?.lastWipedAt) {
+              const localLastWipe = localStorage.getItem("sgs_local_last_wiped") 
+                ? parseInt(localStorage.getItem("sgs_local_last_wiped")!, 10) 
+                : 0;
+              if (statusDoc.lastWipedAt > localLastWipe) {
+                localStorage.setItem("sgs_local_last_wiped", String(statusDoc.lastWipedAt));
+                clearAllData();
+                setTickets([]);
+                setHistory([]);
+                setInventory([]);
+                setRooms([]);
+                setAllocations([]);
+                setWarranty([]);
+              }
+            }
+          }, [])
+        ] : []),
       ];
 
-      const itAccountUnsubs = isCounsellingOnlyRole ? [] : [
-        syncCollection<{ id: string; username?: string }>("deleted_it_staff_accounts", (deletedDocs) => {
-          if (deletedDocs && deletedDocs.length > 0) {
-            const ids = deletedDocs.map(d => d.id || d.username || "").filter(Boolean);
-            if (ids.length > 0) recordDeletedITStaffAccountId(ids[0]);
-          }
-        }, []),
+      const itAccountUnsubs = (isCounsellingOnlyRole || isTeacherRole) ? [] : [
+        ...(isAdminRole ? [
+          syncCollection<{ id: string; username?: string }>("deleted_it_staff_accounts", (deletedDocs) => {
+            if (deletedDocs && deletedDocs.length > 0) {
+              const ids = deletedDocs.map(d => d.id || d.username || "").filter(Boolean);
+              if (ids.length > 0) recordDeletedITStaffAccountId(ids[0]);
+            }
+          }, []),
 
-        syncCollection<ITStaffAccount>("it_staff_accounts", (items) => {
-          if (localStorage.getItem("sgs_wiping_database") === "true") {
-            return;
-          }
-          const merged = mergeWithDefaultITStaffAccounts(items || []);
-          setItStaffAccounts(merged);
-          saveITStaffAccounts(merged);
-        }, loadITStaffAccounts()),
+          syncCollection<ITStaffAccount>("it_staff_accounts", (items) => {
+            if (localStorage.getItem("sgs_wiping_database") === "true") {
+              return;
+            }
+            const merged = mergeWithDefaultITStaffAccounts(items || []);
+            setItStaffAccounts(merged);
+            saveITStaffAccounts(merged);
+          }, loadITStaffAccounts()),
 
-        syncCollection<{ id: string; username?: string }>("deleted_management_accounts", (deletedDocs) => {
-          if (deletedDocs && deletedDocs.length > 0) {
-            deletedDocs.forEach(d => {
-              if (d.id || d.username) recordDeletedManagementAccountId(d.id, d.username);
-            });
-            setManagementAccounts(prev => mergeWithDefaultManagementAccounts(prev));
-          }
-        }, []),
+          syncCollection<{ id: string; username?: string }>("deleted_management_accounts", (deletedDocs) => {
+            if (deletedDocs && deletedDocs.length > 0) {
+              deletedDocs.forEach(d => {
+                if (d.id || d.username) recordDeletedManagementAccountId(d.id, d.username);
+              });
+              setManagementAccounts(prev => mergeWithDefaultManagementAccounts(prev));
+            }
+          }, [])
+        ] : []),
 
         syncCollection<ManagementAccount>("management_accounts", (items) => {
           if (localStorage.getItem("sgs_wiping_database") === "true") {
@@ -1120,8 +1210,8 @@ export default function App() {
     const newKeys = new Set(newList.map((i) => i.id));
     const oldMap = new Map((oldList || []).map((i) => [i.id, i]));
 
-    // 2. Principal Firestore sync (Only write items that actually changed!)
-    if (isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
+    // 2. Principal Firestore sync (Only write items that actually changed; decoupled from read quota)
+    if (isFirebaseConfigured()) {
       newList.forEach((item) => {
         const prev = oldMap.get(item.id);
         if (!prev || JSON.stringify(prev) !== JSON.stringify(item)) {

@@ -274,19 +274,49 @@ export async function signInAsDesktopUser(displayName: string): Promise<Firebase
   }
 }
 
-const QUOTA_STORAGE_KEY = "sgs_firestore_quota_exhausted";
-const QUOTA_PROJECT_KEY = "sgs_firestore_quota_project";
+const READ_QUOTA_BACKOFF_KEY = "sgs_firestore_read_backoff_until";
+const LEGACY_QUOTA_STORAGE_KEY = "sgs_firestore_quota_exhausted";
+const LEGACY_QUOTA_PROJECT_KEY = "sgs_firestore_quota_project";
 
-// Short in-memory-only transient backoff (never persisted in localStorage/sessionStorage)
-let transientBackoffUntil = 0;
+function readPersistedReadBackoff(): number {
+  if (typeof window === "undefined") return 0;
+  try {
+    const raw = sessionStorage.getItem(READ_QUOTA_BACKOFF_KEY);
+    if (!raw) return 0;
+    const ts = parseInt(raw, 10);
+    if (!isNaN(ts) && ts > Date.now()) {
+      // Cap persisted backoff to max 10 minutes
+      return Math.min(ts, Date.now() + 600000);
+    }
+    sessionStorage.removeItem(READ_QUOTA_BACKOFF_KEY);
+  } catch {}
+  return 0;
+}
 
-// Immediately clear any legacy browser pause flags on load and connect Firestore directly
+// Separate in-memory/session READ vs WRITE quota backoffs.
+// CRITICAL: Exhausting Firebase Spark's 50k/day READ limit must NEVER block WRITES (parent QR form submissions, counsellor saves).
+let transientReadBackoffUntil = readPersistedReadBackoff();
+let transientWriteBackoffUntil = 0;
+
+function isQuotaError(error: any): boolean {
+  const msg = error instanceof Error ? error.message : String(error || "");
+  const lower = msg.toLowerCase();
+  return (
+    lower.includes("resource-exhausted") ||
+    lower.includes("quota limit exceeded") ||
+    lower.includes("quota metric") ||
+    lower.includes("too many requests") ||
+    (error as any)?.code === "resource-exhausted"
+  );
+}
+
+// Clean up legacy localStorage pause flags on load and keep network enabled
 if (typeof window !== "undefined") {
   try {
-    sessionStorage.removeItem(QUOTA_STORAGE_KEY);
-    localStorage.removeItem(QUOTA_STORAGE_KEY);
-    sessionStorage.removeItem(QUOTA_PROJECT_KEY);
-    localStorage.removeItem(QUOTA_PROJECT_KEY);
+    sessionStorage.removeItem(LEGACY_QUOTA_STORAGE_KEY);
+    localStorage.removeItem(LEGACY_QUOTA_STORAGE_KEY);
+    sessionStorage.removeItem(LEGACY_QUOTA_PROJECT_KEY);
+    localStorage.removeItem(LEGACY_QUOTA_PROJECT_KEY);
     enableNetwork(db).catch(() => {});
   } catch {}
 }
@@ -295,22 +325,38 @@ export function getFirestoreUpgradeUrl(): string {
   return `https://console.firebase.google.com/project/${firebaseConfig.projectId}/firestore/databases/${firebaseConfig.firestoreDatabaseId}/data?openUpgradeDialog=true`;
 }
 
-export function isFirestoreQuotaExhausted(): boolean {
-  if (transientBackoffUntil > 0 && Date.now() >= transientBackoffUntil) {
-    transientBackoffUntil = 0;
+export function isFirestoreReadQuotaExhausted(): boolean {
+  if (transientReadBackoffUntil > 0 && Date.now() >= transientReadBackoffUntil) {
+    transientReadBackoffUntil = 0;
+    if (typeof window !== "undefined") {
+      try { sessionStorage.removeItem(READ_QUOTA_BACKOFF_KEY); } catch {}
+    }
   }
-  return transientBackoffUntil > Date.now();
+  return transientReadBackoffUntil > Date.now();
+}
+
+export function isFirestoreWriteQuotaExhausted(): boolean {
+  if (transientWriteBackoffUntil > 0 && Date.now() >= transientWriteBackoffUntil) {
+    transientWriteBackoffUntil = 0;
+  }
+  return transientWriteBackoffUntil > Date.now();
+}
+
+export function isFirestoreQuotaExhausted(): boolean {
+  return isFirestoreReadQuotaExhausted();
 }
 
 export function clearQuotaExhausted() {
-  const wasPaused = transientBackoffUntil > 0;
-  transientBackoffUntil = 0;
+  const wasPaused = transientReadBackoffUntil > 0 || transientWriteBackoffUntil > 0;
+  transientReadBackoffUntil = 0;
+  transientWriteBackoffUntil = 0;
   if (typeof window !== "undefined") {
     try {
-      sessionStorage.removeItem(QUOTA_STORAGE_KEY);
-      localStorage.removeItem(QUOTA_STORAGE_KEY);
-      sessionStorage.removeItem(QUOTA_PROJECT_KEY);
-      localStorage.removeItem(QUOTA_PROJECT_KEY);
+      sessionStorage.removeItem(READ_QUOTA_BACKOFF_KEY);
+      sessionStorage.removeItem(LEGACY_QUOTA_STORAGE_KEY);
+      localStorage.removeItem(LEGACY_QUOTA_STORAGE_KEY);
+      sessionStorage.removeItem(LEGACY_QUOTA_PROJECT_KEY);
+      localStorage.removeItem(LEGACY_QUOTA_PROJECT_KEY);
       if (wasPaused) {
         window.dispatchEvent(new CustomEvent("firestore-quota-cleared"));
       }
@@ -318,9 +364,26 @@ export function clearQuotaExhausted() {
   }
 }
 
-export function markQuotaExhausted() {
-  // Brief 15s in-memory breather before automatic background reconnect
-  transientBackoffUntil = Date.now() + 15000;
+export function markQuotaExhausted(durationMs = 300000) {
+  // Calm read-only backoff (default 5 minutes; listeners use 10 minutes) so we don't spam exhausted quota,
+  // while leaving WRITES & Express Server sync completely active.
+  const nextUntil = Date.now() + durationMs;
+  if (nextUntil > transientReadBackoffUntil) {
+    transientReadBackoffUntil = nextUntil;
+    if (typeof window !== "undefined") {
+      try {
+        sessionStorage.setItem(READ_QUOTA_BACKOFF_KEY, String(transientReadBackoffUntil));
+        window.dispatchEvent(new CustomEvent("firestore-quota-exhausted"));
+      } catch {}
+    }
+  }
+}
+
+export function markWriteQuotaExhausted(durationMs = 60000) {
+  const nextUntil = Date.now() + durationMs;
+  if (nextUntil > transientWriteBackoffUntil) {
+    transientWriteBackoffUntil = nextUntil;
+  }
 }
 
 type SharedCollectionEntry = {
@@ -381,8 +444,8 @@ export function syncCollection<T>(
     const current = sharedCollectionListeners.get(collectionName);
     if (!current || current.subscribers.size === 0 || current.unsub) return;
 
-    if (isFirestoreQuotaExhausted()) {
-      const waitMs = Math.max(5000, transientBackoffUntil - Date.now() + 500);
+    if (isFirestoreReadQuotaExhausted()) {
+      const waitMs = Math.max(10000, transientReadBackoffUntil - Date.now() + 500);
       scheduleReconnect(waitMs);
       return;
     }
@@ -410,16 +473,11 @@ export function syncCollection<T>(
       (error) => {
         const latest = sharedCollectionListeners.get(collectionName);
         if (!latest) return;
-        const msg = error instanceof Error ? error.message : String(error || "");
-        const isQuota =
-          msg.includes("resource-exhausted") ||
-          msg.includes("Quota limit exceeded") ||
-          msg.includes("quota metric") ||
-          (error as any)?.code === "resource-exhausted";
+        const isQuota = isQuotaError(error);
 
         if (isQuota) {
-          // Calm 3-minute backoff on daily quota exhaustion instead of hammering every 20s
-          transientBackoffUntil = Date.now() + 180000;
+          // Calm 10-minute read backoff on daily quota exhaustion instead of hammering every 20s
+          markQuotaExhausted(600000);
         }
         if (latest.unsub) {
           try {
@@ -427,7 +485,7 @@ export function syncCollection<T>(
           } catch {}
           latest.unsub = null;
         }
-        scheduleReconnect(isQuota ? 180000 : 30000);
+        scheduleReconnect(isQuota ? 600000 : 30000);
       }
     );
   };
@@ -491,7 +549,7 @@ export async function reserveNextEnquiryNoFromFirestore(
     } catch {}
   }
 
-  if (isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
+  if (isFirebaseConfigured() && !isFirestoreReadQuotaExhausted()) {
     try {
       const counterRef = doc(db, "system_metadata", "enq_counter");
       const allocated = await Promise.race([
@@ -513,9 +571,8 @@ export async function reserveNextEnquiryNoFromFirestore(
         return formatCanonicalEnquiryNo(allocated, year);
       }
     } catch (err: any) {
-      const msg = err instanceof Error ? err.message : String(err || "");
-      if (msg.includes("resource-exhausted") || msg.includes("Quota limit exceeded")) {
-        transientBackoffUntil = Date.now() + 180000;
+      if (isQuotaError(err)) {
+        markQuotaExhausted(300000);
       }
     }
   }
@@ -576,10 +633,10 @@ export function prepareEnquiryForFirestore(targetEnquiry: CounsellingEnquiry): a
   return firestoreEnquiry;
 }
 
-// Fetch documents from Firestore (uses smart SDK cache+live connection by default; forceRetry forces server fetch)
+// Fetch documents from Firestore (uses smart SDK cache+live connection by default; forceRetry forces server fetch only when read quota is not exhausted)
 export async function fetchCollectionDocs<T>(collectionName: string, forceRetry = false): Promise<T[] | null> {
   if (!isFirebaseConfigured()) return null;
-  if (!forceRetry && isFirestoreQuotaExhausted()) return null;
+  if (isFirestoreReadQuotaExhausted()) return null;
   const colRef = collection(db, collectionName);
   try {
     try {
@@ -593,14 +650,8 @@ export async function fetchCollectionDocs<T>(collectionName: string, forceRetry 
     });
     return items;
   } catch (serverErr: any) {
-    const srvMsg = serverErr instanceof Error ? serverErr.message : String(serverErr || "");
-    if (
-      srvMsg.includes("resource-exhausted") ||
-      srvMsg.includes("Quota limit exceeded") ||
-      srvMsg.includes("quota metric") ||
-      serverErr?.code === "resource-exhausted"
-    ) {
-      markQuotaExhausted();
+    if (isQuotaError(serverErr)) {
+      markQuotaExhausted(300000);
       return null;
     }
     if (forceRetry) {
@@ -621,7 +672,7 @@ export async function fetchCollectionDocs<T>(collectionName: string, forceRetry 
 
 // Fetch only pending reception/online parent tokens from Firestore (minimal read units)
 export async function fetchPendingParentEntriesFromFirestore<T>(): Promise<T[] | null> {
-  if (!isFirebaseConfigured() || isFirestoreQuotaExhausted()) return null;
+  if (!isFirebaseConfigured() || isFirestoreReadQuotaExhausted()) return null;
   try {
     const colRef = collection(db, "parent_self_entries");
     const pendingQuery = query(colRef, where("status", "==", "pending"));
@@ -633,23 +684,18 @@ export async function fetchPendingParentEntriesFromFirestore<T>(): Promise<T[] |
     });
     return items;
   } catch (err: any) {
-    const msg = err instanceof Error ? err.message : String(err || "");
-    if (
-      msg.includes("resource-exhausted") ||
-      msg.includes("Quota limit exceeded") ||
-      msg.includes("quota metric") ||
-      err?.code === "resource-exhausted"
-    ) {
-      markQuotaExhausted();
+    if (isQuotaError(err)) {
+      markQuotaExhausted(300000);
     }
     return null;
   }
 }
 
 // Global Single Item Save and Overwrite Helpers
+// NOTE: Decoupled from read quota! Even if daily reads are exhausted, writes MUST still be attempted.
 export async function saveDocument(collectionName: string, id: string, data: any): Promise<boolean> {
   if (!isFirebaseConfigured()) return false;
-  if (isFirestoreQuotaExhausted()) {
+  if (isFirestoreWriteQuotaExhausted()) {
     return false;
   }
   const rawId = id && String(id).trim() ? String(id).trim() : `doc_${Date.now()}`;
@@ -658,17 +704,11 @@ export async function saveDocument(collectionName: string, id: string, data: any
   try {
     const sanitized = cleanForFirestore(data);
     await setDoc(doc(db, collectionName, docId), sanitized, { merge: true });
-    clearQuotaExhausted();
+    transientWriteBackoffUntil = 0;
     return true;
   } catch (error: any) {
-    const msg = error instanceof Error ? error.message : String(error || "");
-    if (
-      msg.includes("resource-exhausted") ||
-      msg.includes("Quota limit exceeded") ||
-      msg.includes("quota metric") ||
-      error?.code === "resource-exhausted"
-    ) {
-      markQuotaExhausted();
+    if (isQuotaError(error)) {
+      markWriteQuotaExhausted(60000);
       return false;
     }
     console.error(`Firestore saveDocument error [${path}]:`, error);
@@ -678,23 +718,17 @@ export async function saveDocument(collectionName: string, id: string, data: any
 }
 
 export async function deleteDocument(collectionName: string, id: string) {
-  if (!isFirebaseConfigured() || isFirestoreQuotaExhausted()) return;
+  if (!isFirebaseConfigured() || isFirestoreWriteQuotaExhausted()) return;
   const rawId = id && String(id).trim() ? String(id).trim() : "";
   if (!rawId) return;
   const docId = rawId.replace(/\//g, "_");
   const path = `${collectionName}/${docId}`;
   try {
     await deleteDoc(doc(db, collectionName, docId));
-    clearQuotaExhausted();
+    transientWriteBackoffUntil = 0;
   } catch (error: any) {
-    const msg = error instanceof Error ? error.message : String(error || "");
-    if (
-      msg.includes("resource-exhausted") ||
-      msg.includes("Quota limit exceeded") ||
-      msg.includes("quota metric") ||
-      error?.code === "resource-exhausted"
-    ) {
-      markQuotaExhausted();
+    if (isQuotaError(error)) {
+      markWriteQuotaExhausted(60000);
       return;
     }
     handleFirestoreError(error, OperationType.DELETE, path);
@@ -703,7 +737,7 @@ export async function deleteDocument(collectionName: string, id: string) {
 
 // Sync whole arrays from local memory if migrating or bulk saving
 export async function syncBulkArrayToFirebase(collectionName: string, items: any[]) {
-  if (!isFirebaseConfigured() || isFirestoreQuotaExhausted()) return;
+  if (!isFirebaseConfigured() || isFirestoreWriteQuotaExhausted()) return;
   try {
     const batch = writeBatch(db);
     items.forEach((item) => {
@@ -713,15 +747,10 @@ export async function syncBulkArrayToFirebase(collectionName: string, items: any
       }
     });
     await batch.commit();
+    transientWriteBackoffUntil = 0;
   } catch (error: any) {
-    const msg = error instanceof Error ? error.message : String(error || "");
-    if (
-      msg.includes("resource-exhausted") ||
-      msg.includes("Quota limit exceeded") ||
-      msg.includes("quota metric") ||
-      error?.code === "resource-exhausted"
-    ) {
-      markQuotaExhausted();
+    if (isQuotaError(error)) {
+      markWriteQuotaExhausted(60000);
       return;
     }
     handleFirestoreError(error, OperationType.WRITE, collectionName);
@@ -748,7 +777,7 @@ export async function purgeCollectionFromFirebase(collectionName: string) {
   }
 }
 
-// Calculate authoritative next daily token number across Firestore, Server API, and Local Storage
+// Calculate authoritative next daily token number across Server API (zero Firestore reads first!), Local Storage, and Firestore
 export async function getNextDailyTokenNo(dmy: string, dateKey: string): Promise<number> {
   const tokenSet = new Set<number>();
 
@@ -772,9 +801,42 @@ export async function getNextDailyTokenNo(dmy: string, dateKey: string): Promise
     }
   } catch {}
 
-  // 2. Firestore query (scoped strictly to today's dateKey to minimize daily read units)
+  // 2. Fast Server API endpoint queries (0 Firestore read cost)
   try {
-    if (isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
+    const [fastTokenRes, res] = await Promise.all([
+      Promise.race([
+        fetch(`/api/parent-self-entry/next-token?date=${dmy}`),
+        new Promise<null>((r) => setTimeout(() => r(null), 1500))
+      ]),
+      Promise.race([
+        fetch("/api/parent-self-entry?scope=today"),
+        new Promise<null>((r) => setTimeout(() => r(null), 1500))
+      ])
+    ]);
+    if (fastTokenRes && 'json' in fastTokenRes) {
+      const data: any = await fastTokenRes.json();
+      if (data && data.success && typeof data.nextToken === "number" && data.nextToken > 1) {
+        tokenSet.add(data.nextToken - 1);
+      }
+    }
+    if (res && 'json' in res) {
+      const data: any = await res.json();
+      if (data && data.success && Array.isArray(data.entries)) {
+        data.entries.forEach((e: any) => {
+          if (e.enquiryType === "online") return;
+          const itemDate = e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
+          if (itemDate === dmy || e.dateKey === dateKey) {
+            const num = Number(e.dailyTokenNo);
+            if (!isNaN(num) && num > 0) tokenSet.add(num);
+          }
+        });
+      }
+    }
+  } catch {}
+
+  // 3. Firestore query (scoped strictly to today's dateKey; never blocks subsequent saveDocument write if 429)
+  try {
+    if (isFirebaseConfigured() && !isFirestoreReadQuotaExhausted()) {
       const colRef = collection(db, "parent_self_entries");
       const todayQuery = query(colRef, where("dateKey", "==", dateKey));
       const snapshot = await Promise.race([
@@ -784,7 +846,7 @@ export async function getNextDailyTokenNo(dmy: string, dateKey: string): Promise
       if (snapshot && 'forEach' in snapshot) {
         snapshot.forEach((d) => {
           const e = d.data();
-          if (e.enquiryType === "online") return; // Online enquiries never consume walk-in daily tokens
+          if (e.enquiryType === "online") return;
           const itemDate = e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
           if (itemDate === dmy || e.dateKey === dateKey) {
             const num = Number(e.dailyTokenNo);
@@ -794,51 +856,10 @@ export async function getNextDailyTokenNo(dmy: string, dateKey: string): Promise
       }
     }
   } catch (err: any) {
-    const msg = err instanceof Error ? err.message : String(err || "");
-    if (
-      msg.includes("resource-exhausted") ||
-      msg.includes("Quota limit exceeded") ||
-      msg.includes("quota metric") ||
-      err?.code === "resource-exhausted"
-    ) {
-      markQuotaExhausted();
+    if (isQuotaError(err)) {
+      markQuotaExhausted(300000);
     }
   }
-
-  // 3. Fast Server API endpoint query
-  try {
-    const fastTokenRes = await Promise.race([
-      fetch(`/api/parent-self-entry/next-token?date=${dmy}`),
-      new Promise<null>((r) => setTimeout(() => r(null), 1200))
-    ]);
-    if (fastTokenRes && 'json' in fastTokenRes) {
-      const data: any = await fastTokenRes.json();
-      if (data && data.success && typeof data.nextToken === "number" && data.nextToken > 1) {
-        tokenSet.add(data.nextToken - 1);
-      }
-    }
-  } catch {}
-
-  // 4. Server full entries list query
-  try {
-    const res = await Promise.race([
-      fetch("/api/parent-self-entry?scope=today"),
-      new Promise<null>((r) => setTimeout(() => r(null), 1500))
-    ]);
-    if (res && 'json' in res) {
-      const data: any = await res.json();
-      if (data && data.success && Array.isArray(data.entries)) {
-        data.entries.forEach((e: any) => {
-          if (e.enquiryType === "online") return; // Online enquiries never consume walk-in daily tokens
-          const itemDate = e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
-          if (itemDate === dmy || e.dateKey === dateKey) {
-            const num = Number(e.dailyTokenNo);
-            if (!isNaN(num) && num > 0) tokenSet.add(num);
-          }
-        });
-      }
-    }
-  } catch {}
 
   const tokens = Array.from(tokenSet);
   if (tokens.length === 0) return 1;

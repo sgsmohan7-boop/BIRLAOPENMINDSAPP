@@ -43,8 +43,6 @@ if (typeof window !== "undefined") {
     ) {
       event.preventDefault();
       try {
-        sessionStorage.setItem("sgs_firestore_quota_exhausted", String(Date.now()));
-        localStorage.setItem("sgs_firestore_quota_exhausted", String(Date.now()));
         window.dispatchEvent(new CustomEvent("firestore-quota-exhausted"));
       } catch {}
     }
@@ -60,8 +58,6 @@ if (typeof window !== "undefined") {
       text.includes("Free daily write units")
     ) {
       try {
-        sessionStorage.setItem("sgs_firestore_quota_exhausted", String(Date.now()));
-        localStorage.setItem("sgs_firestore_quota_exhausted", String(Date.now()));
         window.dispatchEvent(new CustomEvent("firestore-quota-exhausted"));
       } catch {}
       return;

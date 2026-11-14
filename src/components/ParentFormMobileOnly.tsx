@@ -167,8 +167,26 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
     let onlineRefNo2: string | null = null;
 
     if (enquiryType === "online") {
-      // 1. Online Enquiry: Distinct sequence numbering (e.g. ONL-2026-01) - NO daily token
+      // 1. Online Enquiry: Distinct sequence numbering (e.g. ONL-2026-01) - check server first so new phones don't collide
       onlineRefNo1 = getNextOnlineEnquiryNo();
+      try {
+        const refRes = await Promise.race([
+          fetch("/api/parent-self-entry/next-online-ref"),
+          new Promise<null>((r) => setTimeout(() => r(null), 1200))
+        ]);
+        if (refRes && "ok" in refRes && refRes.ok) {
+          const refJson: any = await refRes.json();
+          if (refJson?.success && refJson.nextRef) {
+            const srvNum = Number(refJson.nextNumber || 0);
+            const locMatch = onlineRefNo1.match(/(\d+)$/);
+            const locNum = locMatch ? parseInt(locMatch[1], 10) : 1;
+            if (srvNum > locNum) {
+              onlineRefNo1 = refJson.nextRef;
+            }
+          }
+        }
+      } catch {}
+
       const match = onlineRefNo1.match(/ONL-.*-(\d+)/i) || onlineRefNo1.match(/(\d+)$/);
       const curNum = match ? parseInt(match[1] || match[0], 10) : 1;
       recordHighestOnlineEnquiryNumber(curNum);
@@ -180,7 +198,7 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
         recordHighestOnlineEnquiryNumber(nextNum);
       }
     } else {
-      // 2. Campus Walk-in: Authoritative daily token S.No across Firestore, Server API, and Local Storage
+      // 2. Campus Walk-in: Authoritative daily token S.No across Server API, Local Storage, and Firestore
       try {
         dailyTokenNo1 = await getNextDailyTokenNo(dmy, dateKey);
       } catch {
@@ -189,7 +207,7 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
     }
 
     let finalEntry1: ParentSelfEntry = {
-      id: enquiryType === "online" ? onlineRefNo1 : id1,
+      id: id1,
       enquiryType,
       onlineRefNo: enquiryType === "online" ? onlineRefNo1 : undefined,
       studentName: studentName.trim(),
@@ -233,6 +251,7 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
         const json = await res.json();
         if (json.success && json.entry) {
           srvOk = true;
+          if (json.entry.id) finalEntry1.id = json.entry.id;
           if (enquiryType === "walkin" && json.entry.dailyTokenNo) {
             finalEntry1.dailyTokenNo = json.entry.dailyTokenNo;
             dailyTokenNo1 = json.entry.dailyTokenNo;
@@ -240,6 +259,10 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
           if (enquiryType === "online" && json.entry.onlineRefNo) {
             finalEntry1.onlineRefNo = json.entry.onlineRefNo;
             onlineRefNo1 = json.entry.onlineRefNo;
+            if (json.entry.siblingDetails?.onlineRefNo && finalEntry1.siblingDetails) {
+              finalEntry1.siblingDetails.onlineRefNo = json.entry.siblingDetails.onlineRefNo;
+              onlineRefNo2 = json.entry.siblingDetails.onlineRefNo;
+            }
           }
         }
       }
@@ -277,7 +300,7 @@ export default function ParentFormMobileOnly({ onSubmitSuccess }: ParentFormMobi
       const existingRaw = localStorage.getItem("sgs_parent_self_entries") || localStorage.getItem("parent_self_entries");
       const existing: ParentSelfEntry[] = existingRaw ? JSON.parse(existingRaw) : [];
       let updated = [finalEntry1, ...existing.filter(e => e.id !== finalEntry1.id && e.id !== id1 && e.id !== id2)];
-      localStorage.setItem("parent_self_entries", JSON.stringify(updated));
+      localStorage.removeItem("parent_self_entries");
       localStorage.setItem("sgs_parent_self_entries", JSON.stringify(updated));
       window.dispatchEvent(new CustomEvent("parent_self_entry_added", { detail: finalEntry1 }));
       if (typeof BroadcastChannel !== "undefined") {

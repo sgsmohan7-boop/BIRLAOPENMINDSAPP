@@ -852,6 +852,42 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
   // Parent Self-Service Registration Kiosk & Live Queue Endpoints
   const PARENT_SELF_ENTRIES_FILE = path.join(process.cwd(), "data", "parent_self_entries.json");
   let parentSelfEntriesInMemory: any[] = [];
+  let lastMongoParentPullAt = 0;
+
+  const PARENT_STATUS_RANK: Record<string, number> = {
+    pending: 1,
+    claimed: 2,
+    dismissed: 3,
+    completed: 4
+  };
+
+  function getParentStatusRank(status?: string): number {
+    return PARENT_STATUS_RANK[String(status || "pending").toLowerCase()] || 1;
+  }
+
+  function mergeParentEntryArrays(diskList: any[], mongoList: any[]): any[] {
+    const map = new Map<string, any>();
+    for (const item of [...diskList, ...mongoList]) {
+      if (!item || !item.id) continue;
+      const existing = map.get(item.id);
+      if (!existing) {
+        map.set(item.id, item);
+      } else {
+        const existingRank = getParentStatusRank(existing.status);
+        const itemRank = getParentStatusRank(item.status);
+        if (itemRank > existingRank) {
+          map.set(item.id, { ...existing, ...item });
+        } else if (itemRank < existingRank) {
+          map.set(item.id, { ...item, ...existing, status: existing.status });
+        } else {
+          map.set(item.id, { ...existing, ...item });
+        }
+      }
+    }
+    return Array.from(map.values()).sort((a, b) =>
+      String(b.submittedAt || "").localeCompare(String(a.submittedAt || ""))
+    );
+  }
 
   function loadParentSelfEntriesFromDisk(): any[] {
     try {
@@ -859,7 +895,8 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       if (fs.existsSync(PARENT_SELF_ENTRIES_FILE)) {
         const raw = fs.readFileSync(PARENT_SELF_ENTRIES_FILE, "utf-8");
-        return JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
       }
     } catch (err) {
       console.warn("Notice loading parent_self_entries.json:", err);
@@ -877,10 +914,70 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
     }
   }
 
+  async function loadMergedParentSelfEntries(forceMongo = false): Promise<any[]> {
+    const diskList = loadParentSelfEntriesFromDisk();
+    parentSelfEntriesInMemory = diskList;
+    try {
+      const db = await getMongoDB();
+      if (db && (forceMongo || Date.now() - lastMongoParentPullAt > 5000)) {
+        lastMongoParentPullAt = Date.now();
+        const mongoDocs = await db.collection("parent_self_entries").find({}).toArray();
+        if (Array.isArray(mongoDocs) && mongoDocs.length > 0) {
+          const cleanMongo = mongoDocs.map(({ _id, ...rest }) => rest);
+          const merged = mergeParentEntryArrays(diskList, cleanMongo);
+          parentSelfEntriesInMemory = merged;
+          if (merged.length !== diskList.length) {
+            saveParentSelfEntriesToDisk(merged);
+          }
+          return merged;
+        }
+      }
+    } catch (err) {
+      console.warn("Notice merging Mongo parent_self_entries:", err);
+    }
+    return diskList;
+  }
+
+  function syncParentEntryToMongoAsync(entry: any): void {
+    if (!entry || !entry.id) return;
+    const { _id, ...cleanEntry } = entry;
+    getMongoDB()
+      .then((db) => {
+        if (!db) return;
+        return db.collection("parent_self_entries").updateOne(
+          { id: cleanEntry.id },
+          { $set: cleanEntry },
+          { upsert: true }
+        );
+      })
+      .catch(() => {});
+  }
+
+  function deleteParentEntryFromMongoAsync(id: string): void {
+    if (!id) return;
+    getMongoDB()
+      .then((db) => {
+        if (!db) return;
+        return db.collection("parent_self_entries").deleteOne({ id });
+      })
+      .catch(() => {});
+  }
+
   parentSelfEntriesInMemory = loadParentSelfEntriesFromDisk();
 
-  app.get("/api/parent-self-entry", (req, res) => {
-    parentSelfEntriesInMemory = loadParentSelfEntriesFromDisk();
+  // Enable CORS on /api/parent-self-entry* for seamless mobile QR / cross-origin PWA access
+  app.use("/api/parent-self-entry", (req, res, next) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    if (req.method === "OPTIONS") {
+      return res.sendStatus(204);
+    }
+    next();
+  });
+
+  app.get("/api/parent-self-entry", async (req, res) => {
+    parentSelfEntriesInMemory = await loadMergedParentSelfEntries(false);
     const scope = req.query.scope;
     if (scope === "today") {
       const now = new Date();
@@ -897,9 +994,9 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
   });
 
   // GET /api/parent-self-entry/next-token (Ultra-fast server authoritative daily token inquiry)
-  app.get("/api/parent-self-entry/next-token", (req, res) => {
+  app.get("/api/parent-self-entry/next-token", async (req, res) => {
     try {
-      parentSelfEntriesInMemory = loadParentSelfEntriesFromDisk();
+      parentSelfEntriesInMemory = await loadMergedParentSelfEntries(false);
       const now = new Date();
       const todayDmy = now.toLocaleDateString("en-GB").replace(/\//g, "-");
       const queryDate = (req.query.date as string) || todayDmy;
@@ -921,13 +1018,13 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
   });
 
   // GET /api/parent-self-entry/next-online-ref (Authoritative online reference inquiry)
-  app.get("/api/parent-self-entry/next-online-ref", (_req, res) => {
+  app.get("/api/parent-self-entry/next-online-ref", async (_req, res) => {
     try {
-      parentSelfEntriesInMemory = loadParentSelfEntriesFromDisk();
+      parentSelfEntriesInMemory = await loadMergedParentSelfEntries(false);
       const currentYear = new Date().getFullYear();
       let counselling: any[] = [];
       try {
-        const cPath = path.join(process.cwd(), "data", "counselling_forms.json");
+        const cPath = path.join(process.cwd(), "data", "counselling.json");
         if (fs.existsSync(cPath)) {
           counselling = JSON.parse(fs.readFileSync(cPath, "utf-8"));
         }
@@ -962,10 +1059,10 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
     }
   });
 
-  app.post("/api/parent-self-entry", (req, res) => {
+  app.post("/api/parent-self-entry", async (req, res) => {
     try {
-      parentSelfEntriesInMemory = loadParentSelfEntriesFromDisk();
-      const entry = req.body;
+      parentSelfEntriesInMemory = await loadMergedParentSelfEntries(false);
+      const entry = { ...(req.body || {}) };
       if (!entry || !entry.studentName || !entry.contactNo) {
         return res.status(400).json({ success: false, error: "studentName and contactNo are required." });
       }
@@ -976,10 +1073,64 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
 
       if (!entry.entryDate) entry.entryDate = dmy;
       if (!entry.dateKey) entry.dateKey = dateKey;
+      if (!entry.id) entry.id = `PSE-${now.getFullYear()}-${Math.floor(100 + Math.random() * 900)}-${Date.now()}`;
 
       if (entry.enquiryType === "online") {
-        // Online enquiries strictly do NOT have daily token numbers
+        // Online enquiries strictly do NOT have daily token numbers; prevent ONL-YYYY-XX collisions across devices
         delete entry.dailyTokenNo;
+        const incomingRef = String(entry.onlineRefNo || "").trim().toUpperCase();
+        const incomingStudent = String(entry.studentName || "").trim().toLowerCase();
+        const incomingPhone = String(entry.contactNo || "").replace(/\D/g, "");
+        const colliding = parentSelfEntriesInMemory.find((e: any) => {
+          const ref = String(e.onlineRefNo || e.id || "").trim().toUpperCase();
+          if (!ref || ref !== incomingRef) return false;
+          const eStudent = String(e.studentName || "").trim().toLowerCase();
+          const ePhone = String(e.contactNo || "").replace(/\D/g, "");
+          return eStudent !== incomingStudent || ePhone !== incomingPhone;
+        });
+
+        if (!incomingRef || colliding) {
+          let maxNum = 0;
+          const scanRef = (raw?: string) => {
+            const ref = String(raw || "").trim().toUpperCase();
+            if (!ref.startsWith("ONL-")) return;
+            const match = ref.match(/ONL-.*-(\d+)/i) || ref.match(/(\d+)$/);
+            if (match) {
+              const num = parseInt(match[1] || match[0], 10);
+              if (!isNaN(num) && num > maxNum) maxNum = num;
+            }
+          };
+          parentSelfEntriesInMemory.forEach((e: any) => {
+            scanRef(e.onlineRefNo);
+            scanRef(e.id);
+            scanRef(e.siblingDetails?.onlineRefNo);
+          });
+          try {
+            const cPath = path.join(process.cwd(), "data", "counselling.json");
+            if (fs.existsSync(cPath)) {
+              const cList = JSON.parse(fs.readFileSync(cPath, "utf-8"));
+              if (Array.isArray(cList)) {
+                cList.forEach((c: any) => {
+                  scanRef(c.onlineRefNo);
+                  scanRef(c.enquiryNo);
+                });
+              }
+            }
+          } catch {}
+          const formatPad = (n: number) => n < 100 ? String(n).padStart(2, "0") : String(n);
+          const nextNum = maxNum + 1;
+          const nextRef = `ONL-${now.getFullYear()}-${formatPad(nextNum)}`;
+          entry.onlineRefNo = nextRef;
+          if (!entry.id || String(entry.id).trim().toUpperCase().startsWith("ONL-")) {
+            entry.id = `PSE-${now.getFullYear()}-${Math.floor(100 + Math.random() * 900)}-${Date.now()}`;
+          }
+          if (entry.siblingDetails) {
+            entry.siblingDetails = {
+              ...entry.siblingDetails,
+              onlineRefNo: `ONL-${now.getFullYear()}-${formatPad(nextNum + 1)}`
+            };
+          }
+        }
       } else {
         // Physical walk-ins: Compute daily token S.No (1, 2, 3...) resetting daily each morning
         const targetDateKey = entry.dateKey || dateKey;
@@ -1006,22 +1157,33 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
         }
       }
 
+      let savedEntry = entry;
       const idx = parentSelfEntriesInMemory.findIndex(e => e.id === entry.id);
       if (idx >= 0) {
-        parentSelfEntriesInMemory[idx] = { ...parentSelfEntriesInMemory[idx], ...entry };
+        const existing = parentSelfEntriesInMemory[idx];
+        const existingRank = getParentStatusRank(existing.status);
+        const incomingRank = getParentStatusRank(entry.status);
+        savedEntry = {
+          ...existing,
+          ...entry,
+          status: incomingRank >= existingRank ? (entry.status || existing.status) : existing.status
+        };
+        parentSelfEntriesInMemory[idx] = savedEntry;
       } else {
-        parentSelfEntriesInMemory.unshift(entry);
+        parentSelfEntriesInMemory.unshift(savedEntry);
       }
 
       saveParentSelfEntriesToDisk(parentSelfEntriesInMemory);
-      return res.json({ success: true, entry });
+      syncParentEntryToMongoAsync(savedEntry);
+      return res.json({ success: true, entry: savedEntry });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message });
     }
   });
 
-  app.post("/api/parent-self-entry/claim", (req, res) => {
+  app.post("/api/parent-self-entry/claim", async (req, res) => {
     try {
+      parentSelfEntriesInMemory = await loadMergedParentSelfEntries(false);
       const { id, counsellorId, counsellorName, status } = req.body;
       const targetId = id || req.body.entryId;
       if (!targetId) {
@@ -1040,6 +1202,7 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
         };
         parentSelfEntriesInMemory.push(tombstone);
         saveParentSelfEntriesToDisk(parentSelfEntriesInMemory);
+        syncParentEntryToMongoAsync(tombstone);
         return res.json({ success: true, entry: tombstone });
       }
 
@@ -1049,6 +1212,7 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
       item.claimedAt = new Date().toISOString();
 
       saveParentSelfEntriesToDisk(parentSelfEntriesInMemory);
+      syncParentEntryToMongoAsync(item);
       return res.json({ success: true, entry: item });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message });
@@ -1056,9 +1220,9 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
   });
 
   // POST /api/parent-self-entry/dismiss (Track who dismissed it, reason, and timestamp)
-  app.post("/api/parent-self-entry/dismiss", (req, res) => {
+  app.post("/api/parent-self-entry/dismiss", async (req, res) => {
     try {
-      parentSelfEntriesInMemory = loadParentSelfEntriesFromDisk();
+      parentSelfEntriesInMemory = await loadMergedParentSelfEntries(false);
       const { id, counsellorId, counsellorName, reason } = req.body;
       const targetId = id || req.body.entryId;
       if (!targetId) {
@@ -1067,8 +1231,9 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
 
       const idx = parentSelfEntriesInMemory.findIndex(e => e.id === targetId);
       const nowStr = new Date().toISOString();
+      let saved: any;
       if (idx >= 0) {
-        parentSelfEntriesInMemory[idx] = {
+        saved = {
           ...parentSelfEntriesInMemory[idx],
           status: "dismissed",
           dismissedBy: counsellorName || counsellorId || "Counsellor",
@@ -1076,27 +1241,30 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
           dismissedAt: nowStr,
           dismissedReason: reason || "Dismissed from live queue"
         };
+        parentSelfEntriesInMemory[idx] = saved;
       } else {
-        parentSelfEntriesInMemory.push({
+        saved = {
           id: targetId,
           status: "dismissed",
           dismissedBy: counsellorName || counsellorId || "Counsellor",
           dismissedById: counsellorId || "COUNSELLOR-01",
           dismissedAt: nowStr,
           dismissedReason: reason || "Dismissed from live queue"
-        });
+        };
+        parentSelfEntriesInMemory.push(saved);
       }
       saveParentSelfEntriesToDisk(parentSelfEntriesInMemory);
-      return res.json({ success: true, entry: parentSelfEntriesInMemory.find(e => e.id === targetId) });
+      syncParentEntryToMongoAsync(saved);
+      return res.json({ success: true, entry: saved });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message });
     }
   });
 
   // POST /api/parent-self-entry/restore (Restore dismissed lead back to active pending pool)
-  app.post("/api/parent-self-entry/restore", (req, res) => {
+  app.post("/api/parent-self-entry/restore", async (req, res) => {
     try {
-      parentSelfEntriesInMemory = loadParentSelfEntriesFromDisk();
+      parentSelfEntriesInMemory = await loadMergedParentSelfEntries(false);
       const { id } = req.body;
       const targetId = id || req.body.entryId;
       if (!targetId) {
@@ -1112,6 +1280,7 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
         delete (item as any).dismissedReason;
         parentSelfEntriesInMemory[idx] = item;
         saveParentSelfEntriesToDisk(parentSelfEntriesInMemory);
+        syncParentEntryToMongoAsync(item);
         return res.json({ success: true, entry: item });
       }
       return res.status(404).json({ success: false, error: "Entry not found to restore." });
@@ -1121,9 +1290,9 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
   });
 
   // GET /api/parent-self-entry/dismissed (View all dismissed leads across the school)
-  app.get("/api/parent-self-entry/dismissed", (_req, res) => {
+  app.get("/api/parent-self-entry/dismissed", async (_req, res) => {
     try {
-      parentSelfEntriesInMemory = loadParentSelfEntriesFromDisk();
+      parentSelfEntriesInMemory = await loadMergedParentSelfEntries(false);
       const dismissed = parentSelfEntriesInMemory.filter(e => e.status === "dismissed");
       return res.json({ success: true, entries: dismissed });
     } catch (err: any) {
@@ -1131,9 +1300,9 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
     }
   });
 
-  app.delete("/api/parent-self-entry/:id", (req, res) => {
+  app.delete("/api/parent-self-entry/:id", async (req, res) => {
     try {
-      parentSelfEntriesInMemory = loadParentSelfEntriesFromDisk();
+      parentSelfEntriesInMemory = await loadMergedParentSelfEntries(false);
       const targetId = req.params.id;
       parentSelfEntriesInMemory = parentSelfEntriesInMemory.map(e => e.id === targetId ? {
         ...e,
@@ -1141,37 +1310,59 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
         dismissedAt: new Date().toISOString()
       } : e);
       saveParentSelfEntriesToDisk(parentSelfEntriesInMemory);
+      const updatedItem = parentSelfEntriesInMemory.find(e => e.id === targetId);
+      if (updatedItem) {
+        syncParentEntryToMongoAsync(updatedItem);
+      } else {
+        deleteParentEntryFromMongoAsync(targetId);
+      }
       return res.json({ success: true, id: targetId });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message });
     }
   });
 
-  app.post("/api/parent-self-entry/clear-pending", (req, res) => {
+  app.post("/api/parent-self-entry/clear-pending", async (req, res) => {
     try {
-      parentSelfEntriesInMemory = loadParentSelfEntriesFromDisk();
+      parentSelfEntriesInMemory = await loadMergedParentSelfEntries(false);
       const { ids, counsellorId, counsellorName } = req.body;
       const nowStr = new Date().toISOString();
       const byName = counsellorName || counsellorId || "Counsellor";
+      const modified: any[] = [];
       if (Array.isArray(ids) && ids.length > 0) {
         const idSet = new Set(ids);
-        parentSelfEntriesInMemory = parentSelfEntriesInMemory.map(e => idSet.has(e.id) ? {
-          ...e,
-          status: "dismissed",
-          dismissedBy: byName,
-          dismissedById: counsellorId || "COUNSELLOR-01",
-          dismissedAt: nowStr
-        } : e);
+        parentSelfEntriesInMemory = parentSelfEntriesInMemory.map(e => {
+          if (idSet.has(e.id)) {
+            const next = {
+              ...e,
+              status: "dismissed",
+              dismissedBy: byName,
+              dismissedById: counsellorId || "COUNSELLOR-01",
+              dismissedAt: nowStr
+            };
+            modified.push(next);
+            return next;
+          }
+          return e;
+        });
       } else {
-        parentSelfEntriesInMemory = parentSelfEntriesInMemory.map(e => e.status === "pending" ? {
-          ...e,
-          status: "dismissed",
-          dismissedBy: byName,
-          dismissedById: counsellorId || "COUNSELLOR-01",
-          dismissedAt: nowStr
-        } : e);
+        parentSelfEntriesInMemory = parentSelfEntriesInMemory.map(e => {
+          if (e.status === "pending") {
+            const next = {
+              ...e,
+              status: "dismissed",
+              dismissedBy: byName,
+              dismissedById: counsellorId || "COUNSELLOR-01",
+              dismissedAt: nowStr
+            };
+            modified.push(next);
+            return next;
+          }
+          return e;
+        });
       }
       saveParentSelfEntriesToDisk(parentSelfEntriesInMemory);
+      modified.forEach(syncParentEntryToMongoAsync);
       return res.json({ success: true });
     } catch (err: any) {
       return res.status(500).json({ success: false, error: err.message });

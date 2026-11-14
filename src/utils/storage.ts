@@ -575,10 +575,17 @@ export const loadCounselling = (): CounsellingEnquiry[] => {
     }
   }
 
-  // 1. First prioritize active saved items in LocalStorage if present
+  // 1. First prioritize active saved items in LocalStorage if present (migrate & drop legacy duplicate key)
   let raw = typeof window !== "undefined" ? localStorage.getItem(KEYS.COUNSELLING) : null;
-  if (!raw && typeof window !== "undefined") {
-    raw = localStorage.getItem("it_command_counselling_forms");
+  if (typeof window !== "undefined") {
+    const legacyRaw = localStorage.getItem("it_command_counselling_forms");
+    if (!raw && legacyRaw) {
+      raw = legacyRaw;
+      try { localStorage.setItem(KEYS.COUNSELLING, legacyRaw); } catch {}
+    }
+    if (legacyRaw !== null) {
+      try { localStorage.removeItem("it_command_counselling_forms"); } catch {}
+    }
   }
 
   if (raw !== null) {
@@ -625,8 +632,14 @@ export const cleanEnquiryForStorage = (item: CounsellingEnquiry): CounsellingEnq
   if (!item) return item;
   if (item.audioRecording) {
     const copyRec = { ...item.audioRecording };
-    // Only strip audioData if it exceeds 350KB to protect localStorage limits
-    if (copyRec.audioData && typeof copyRec.audioData === "string" && copyRec.audioData.length > 350 * 1024) {
+    const hasExternalOrIdbRef = Boolean(
+      copyRec.storageKey ||
+      copyRec.driveFileUrl ||
+      copyRec.audioUrl ||
+      copyRec.fileName
+    );
+    // Full audio lives in IndexedDB / Cloudflare R2 / Drive / Server; strip base64 blobs > 32KB (or when backed externally) to prevent 5MB localStorage overflow
+    if (copyRec.audioData && typeof copyRec.audioData === "string" && (hasExternalOrIdbRef || copyRec.audioData.length > 32 * 1024)) {
       delete (copyRec as any).audioData;
     }
     // Only set /api/audios/ fallback if running on local dev server
@@ -651,10 +664,15 @@ export const saveCounselling = (enquiries: CounsellingEnquiry[]) => {
     localStorage.removeItem("sgs_wiping_database");
   }
 
+  // Always remove legacy duplicate keys first to free browser 5MB localStorage quota
+  try {
+    localStorage.removeItem("it_command_counselling_forms");
+    localStorage.removeItem("parent_self_entries");
+  } catch {}
+
   try {
     const safeList = deduped.map(cleanEnquiryForStorage);
     localStorage.setItem(KEYS.COUNSELLING, JSON.stringify(safeList));
-    localStorage.setItem("it_command_counselling_forms", JSON.stringify(safeList));
   } catch (err) {
     try {
       const stripped = deduped.map(e => {
@@ -666,7 +684,6 @@ export const saveCounselling = (enquiries: CounsellingEnquiry[]) => {
         return c;
       });
       localStorage.setItem(KEYS.COUNSELLING, JSON.stringify(stripped));
-      localStorage.setItem("it_command_counselling_forms", JSON.stringify(stripped));
     } catch {}
   }
 };
@@ -1230,7 +1247,15 @@ export function recordDismissedParentEntryId(id: string, counsellorId?: string):
 export function loadParentSelfEntries(counsellorId?: string): any[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = localStorage.getItem("sgs_parent_self_entries");
+    const raw = localStorage.getItem("sgs_parent_self_entries") || localStorage.getItem("parent_self_entries");
+    if (localStorage.getItem("parent_self_entries") !== null) {
+      try {
+        if (!localStorage.getItem("sgs_parent_self_entries") && raw) {
+          localStorage.setItem("sgs_parent_self_entries", raw);
+        }
+        localStorage.removeItem("parent_self_entries");
+      } catch {}
+    }
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
@@ -1245,6 +1270,7 @@ export function loadParentSelfEntries(counsellorId?: string): any[] {
 export function saveParentSelfEntries(entries: any[]): void {
   if (typeof window === "undefined" || !Array.isArray(entries)) return;
   try {
+    try { localStorage.removeItem("parent_self_entries"); } catch {}
     const serialized = JSON.stringify(entries);
     if (localStorage.getItem("sgs_parent_self_entries") !== serialized) {
       localStorage.setItem("sgs_parent_self_entries", serialized);
