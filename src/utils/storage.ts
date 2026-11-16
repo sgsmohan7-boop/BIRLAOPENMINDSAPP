@@ -405,6 +405,7 @@ export const recordDeletedEnquiryId = (id: string, enquiryNo?: string) => {
     if (id) set.add(id.toLowerCase());
     if (enquiryNo) set.add(enquiryNo.toLowerCase());
     localStorage.setItem(DELETED_ENQUIRIES_KEY, JSON.stringify(Array.from(set)));
+    window.dispatchEvent(new Event("sgs_deleted_enquiries_updated"));
   } catch {}
 };
 
@@ -417,6 +418,7 @@ export const recordDeletedEnquiryIds = (ids: string[]) => {
       if (i) set.add(String(i).toLowerCase());
     });
     localStorage.setItem(DELETED_ENQUIRIES_KEY, JSON.stringify(Array.from(set)));
+    window.dispatchEvent(new Event("sgs_deleted_enquiries_updated"));
   } catch {}
 };
 
@@ -429,6 +431,7 @@ export const replaceDeletedEnquiryIds = (ids: string[]) => {
       if (clean) set.add(clean);
     });
     localStorage.setItem(DELETED_ENQUIRIES_KEY, JSON.stringify(Array.from(set)));
+    window.dispatchEvent(new Event("sgs_deleted_enquiries_updated"));
   } catch {}
 };
 

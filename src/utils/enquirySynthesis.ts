@@ -159,6 +159,21 @@ export function synthesizeAndMergeEnquiries(
       .map((x) => String(x).trim().toLowerCase())
   );
 
+  // Extract parent_self_entries IDs embedded in collision tombstones like "enq-2026-06__pse-2026-453-..."
+  const deletedParentIdSet = new Set<string>();
+  deletedSet.forEach((key) => {
+    if (key.includes("__")) {
+      const idx = key.indexOf("__");
+      const suffix = key.slice(idx + 2).trim();
+      if (suffix.startsWith("pse-") || suffix.startsWith("onl-")) {
+        deletedParentIdSet.add(suffix);
+      }
+    }
+    if (key.startsWith("pse-") || key.startsWith("onl-")) {
+      deletedParentIdSet.add(key);
+    }
+  });
+
   const isDeleted = (e?: { id?: string; enquiryNo?: string; sourceParentEntryId?: string } | null): boolean => {
     if (!e) return true;
     const eId = (e.id || "").trim().toLowerCase();
@@ -166,8 +181,8 @@ export function synthesizeAndMergeEnquiries(
     const eSrc = (e.sourceParentEntryId || "").trim().toLowerCase();
     return Boolean(
       (eId && deletedSet.has(eId)) ||
-      (eNo && deletedSet.has(eNo)) ||
-      (eSrc && deletedSet.has(eSrc))
+      (eNo && !eId.includes("__") && deletedSet.has(eNo)) ||
+      (eSrc && (deletedSet.has(eSrc) || deletedParentIdSet.has(eSrc)))
     );
   };
 
@@ -248,8 +263,10 @@ export function synthesizeAndMergeEnquiries(
     const isEligible = entry.status === "completed" || entry.status === "claimed" || Boolean(entry.claimedBy);
     if (!isEligible) continue;
 
+    const entryIdLower = String(entry.id || "").trim().toLowerCase();
     if (
-      deletedSet.has(String(entry.id || "").trim().toLowerCase()) ||
+      (entryIdLower && (deletedSet.has(entryIdLower) || deletedParentIdSet.has(entryIdLower))) ||
+      (entry.onlineRefNo && deletedSet.has(entry.onlineRefNo.trim().toLowerCase())) ||
       (entry.completedEnquiryNo && deletedSet.has(entry.completedEnquiryNo.trim().toLowerCase()))
     ) {
       continue;
@@ -287,6 +304,9 @@ export function synthesizeAndMergeEnquiries(
       while (usedIds.has(docId.toLowerCase())) {
         docId = `${displayEnqNo}__${entry.id}_${guard++}`;
       }
+    }
+    if (deletedSet.has(docId.toLowerCase())) {
+      continue;
     }
     usedIds.add(docId.toLowerCase());
 

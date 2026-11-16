@@ -24,11 +24,20 @@ interface ReceptionQueueModalProps {
   entries: ParentSelfEntry[];
   onClaimEntry: (entry: ParentSelfEntry) => void;
   onDismissEntry?: (entryId: string) => void;
+  onDeleteClaimedEntry?: (entryId: string) => void;
   onClearAllClaimedEntries?: () => void;
   onOpenQrPoster: () => void;
   currentCounsellorName?: string;
   currentCounsellorId?: string;
   userRole?: string;
+  isCloudSynced?: boolean;
+}
+
+function toLocalYMD(date: Date): string {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 export default function ReceptionQueueModal({
@@ -37,34 +46,47 @@ export default function ReceptionQueueModal({
   entries = [],
   onClaimEntry,
   onDismissEntry,
+  onDeleteClaimedEntry,
   onClearAllClaimedEntries,
   onOpenQrPoster,
   currentCounsellorName = "Counsellor",
   currentCounsellorId,
-  userRole
+  userRole,
+  isCloudSynced = false
 }: ReceptionQueueModalProps) {
   const [activeTab, setActiveTab] = useState<"pending" | "claimed">("pending");
   const [searchQuery, setSearchQuery] = useState("");
   const [claimedFilter, setClaimedFilter] = useState<"today" | "all">("today");
+  const [confirmClearAll, setConfirmClearAll] = useState(false);
 
   if (!isOpen) return null;
 
   const now = new Date();
-  const todayDMY = now.toLocaleDateString("en-GB").replace(/\//g, "-");
-  const todayYMD = now.toISOString().split("T")[0];
+  const todayDMY = `${String(now.getDate()).padStart(2, "0")}-${String(now.getMonth() + 1).padStart(2, "0")}-${now.getFullYear()}`;
+  const todayYMD = toLocalYMD(now);
 
   const isEntryToday = (e: ParentSelfEntry) => {
     const eDate = e.dateKey || e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
     if (eDate === todayYMD || eDate === todayDMY) return true;
     if (e.claimedAt) {
-      const cDate = new Date(e.claimedAt).toISOString().split("T")[0];
-      if (cDate === todayYMD) return true;
+      const parsedClaim = new Date(e.claimedAt);
+      if (!isNaN(parsedClaim.getTime()) && toLocalYMD(parsedClaim) === todayYMD) {
+        return true;
+      }
     }
     const time = new Date(e.claimedAt || e.submittedAt).getTime();
     if (!isNaN(time) && now.getTime() - time < 24 * 60 * 60 * 1000) {
       return true;
     }
     return false;
+  };
+
+  const isSkippedByMe = (e: ParentSelfEntry) => {
+    if (!currentCounsellorId) return false;
+    const targetLower = currentCounsellorId.trim().toLowerCase();
+    return Array.isArray(e.skippedByCounsellorIds) && e.skippedByCounsellorIds.some(
+      (id) => String(id || "").trim().toLowerCase() === targetLower
+    );
   };
 
   const isClaimedByMe = (e: ParentSelfEntry) => {
@@ -87,8 +109,20 @@ export default function ReceptionQueueModal({
     return idMatch || nameMatch;
   };
 
-  const dismissedSet = new Set(getDismissedParentEntryIds());
-  const pendingList = [...entries.filter(e => e.status === "pending" && !dismissedSet.has(e.id))].sort((a, b) => {
+  // Match Reception Lounge rules strictly: walk-in only, cloud-authoritative skips when synced
+  const localDismissedSet = isCloudSynced
+    ? new Set<string>()
+    : new Set(getDismissedParentEntryIds(currentCounsellorId));
+
+  const pendingList = [
+    ...entries.filter(
+      e =>
+        (!e.status || e.status === "pending") &&
+        e.enquiryType !== "online" &&
+        !localDismissedSet.has(e.id) &&
+        !isSkippedByMe(e)
+    )
+  ].sort((a, b) => {
     // Group by day, order by dailyTokenNo ascending (1, 2, 3...)
     const aDate = a.dateKey || a.entryDate || (a.formattedDate ? a.formattedDate.split(" ")[0] : "");
     const bDate = b.dateKey || b.entryDate || (b.formattedDate ? b.formattedDate.split(" ")[0] : "");
@@ -98,10 +132,13 @@ export default function ReceptionQueueModal({
     return new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime();
   });
 
-  const allClaimedList = [...entries.filter(e => e.status === "claimed")].sort((a, b) => {
-    return new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime();
+  const allClaimedList = [
+    ...entries.filter(e => e.status === "claimed" && e.enquiryType !== "online")
+  ].sort((a, b) => {
+    return new Date(b.claimedAt || b.submittedAt).getTime() - new Date(a.claimedAt || a.submittedAt).getTime();
   });
 
+  const myClaimedList = allClaimedList.filter(isClaimedByMe);
   const todayClaimedList = allClaimedList.filter(isEntryToday);
 
   // Default to today's 24-hr session claims so the desk stays fresh and resets each morning
@@ -171,7 +208,10 @@ export default function ReceptionQueueModal({
           <div className="flex items-center gap-2 w-full sm:w-auto">
             <button
               type="button"
-              onClick={() => setActiveTab("pending")}
+              onClick={() => {
+                setActiveTab("pending");
+                setConfirmClearAll(false);
+              }}
               className={`px-4 py-2 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-2 ${
                 activeTab === "pending"
                   ? "bg-orange-600 text-white shadow-md"
@@ -188,7 +228,10 @@ export default function ReceptionQueueModal({
 
             <button
               type="button"
-              onClick={() => setActiveTab("claimed")}
+              onClick={() => {
+                setActiveTab("claimed");
+                setConfirmClearAll(false);
+              }}
               className={`px-4 py-2 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-2 ${
                 activeTab === "claimed"
                   ? "bg-emerald-600 text-white shadow-md"
@@ -216,7 +259,7 @@ export default function ReceptionQueueModal({
           </div>
         </div>
 
-        {/* Sub-bar for Claimed Tab: Today vs All-Time Archive filter + Clear Testing Tokens */}
+        {/* Sub-bar for Claimed Tab: Today vs All-Time Archive filter + Clear My Test Tokens */}
         {activeTab === "claimed" && (
           <div className="px-5 py-2.5 bg-slate-950 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
             <div className="flex items-center gap-2">
@@ -230,7 +273,7 @@ export default function ReceptionQueueModal({
                     : "bg-slate-800 text-slate-400 hover:text-white"
                 }`}
               >
-                <span>📅 Today's Claims ({todayClaimedList.length})</span>
+                <span>📅 Today&apos;s Claims ({todayClaimedList.length})</span>
                 <span className="text-[10px] bg-black/20 px-1 py-0.2 rounded">Active 24h</span>
               </button>
               <button
@@ -247,20 +290,41 @@ export default function ReceptionQueueModal({
             </div>
 
             <div className="flex items-center gap-2">
-              {onClearAllClaimedEntries && allClaimedList.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (window.confirm(`Are you sure you want to delete/clear all ${allClaimedList.length} claimed test tokens?`)) {
-                      onClearAllClaimedEntries();
-                    }
-                  }}
-                  className="px-3 py-1 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-sm"
-                  title="Permanently delete all claimed test tokens"
-                >
-                  <Trash2 size={13} />
-                  <span>🧹 Clear Test Tokens ({allClaimedList.length})</span>
-                </button>
+              {onClearAllClaimedEntries && myClaimedList.length > 0 && (
+                confirmClearAll ? (
+                  <div className="flex items-center gap-1.5 bg-rose-950/80 border border-rose-500/60 rounded-lg px-2 py-1">
+                    <span className="text-[11px] font-bold text-rose-200">
+                      Clear {myClaimedList.length} mine?
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setConfirmClearAll(false);
+                        onClearAllClaimedEntries();
+                      }}
+                      className="px-2 py-0.5 bg-rose-600 hover:bg-rose-700 text-white rounded text-[11px] font-black cursor-pointer"
+                    >
+                      Confirm
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmClearAll(false)}
+                      className="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-[11px] font-bold cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmClearAll(true)}
+                    className="px-3 py-1 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-sm"
+                    title="Permanently delete your claimed tokens"
+                  >
+                    <Trash2 size={13} />
+                    <span>🧹 Clear My Claimed ({myClaimedList.length})</span>
+                  </button>
+                )
               )}
               <span className="text-[10px] text-slate-500 hidden sm:inline">
                 ⚡ Automatically resets daily at midnight • Forms safely recorded in Admission Enquiries
@@ -305,7 +369,7 @@ export default function ReceptionQueueModal({
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
               {displayList.map((entry) => {
-                const isPending = entry.status === "pending";
+                const isPending = !entry.status || entry.status === "pending";
                 return (
                   <div
                     key={entry.id}
@@ -417,7 +481,7 @@ export default function ReceptionQueueModal({
                             type="button"
                             onClick={() => onDismissEntry(entry.id)}
                             className="p-2.5 bg-slate-800 hover:bg-rose-500/30 text-slate-400 hover:text-rose-300 rounded-xl transition-all cursor-pointer border border-slate-700"
-                            title="Dismiss entry if parent departed"
+                            title="Skip for my profile or cancel token"
                           >
                             <X size={15} />
                           </button>
@@ -437,10 +501,16 @@ export default function ReceptionQueueModal({
                           <span>📝 Re-Open / Continue Admission Form</span>
                           <ArrowRight size={14} />
                         </button>
-                        {onDismissEntry && (
+                        {(onDeleteClaimedEntry || onDismissEntry) && (
                           <button
                             type="button"
-                            onClick={() => onDismissEntry(entry.id)}
+                            onClick={() => {
+                              if (onDeleteClaimedEntry) {
+                                onDeleteClaimedEntry(entry.id);
+                              } else if (onDismissEntry) {
+                                onDismissEntry(entry.id);
+                              }
+                            }}
                             className="p-2.5 bg-slate-800 hover:bg-rose-500/30 text-slate-400 hover:text-rose-300 rounded-xl transition-all cursor-pointer border border-slate-700"
                             title="Delete / Clear this test token"
                           >

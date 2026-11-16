@@ -437,6 +437,48 @@ export default function App() {
   const normalizedMigratedIdsRef = React.useRef<Set<string>>(new Set());
   const cloudFormsRef = React.useRef<CounsellingEnquiry[] | null>(null);
   const cloudParentsRef = React.useRef<ParentSelfEntry[] | null>(null);
+  const counsellingEnquiriesRef = React.useRef<CounsellingEnquiry[]>(counsellingEnquiries);
+  const parentSelfEntriesRef = React.useRef<ParentSelfEntry[]>(parentSelfEntries);
+  const rawFormDocIdsRef = React.useRef<Map<string, Set<string>>>(new Map());
+  const pendingDeletedIdsRef = React.useRef<Map<string, number>>(new Map());
+
+  counsellingEnquiriesRef.current = counsellingEnquiries;
+  parentSelfEntriesRef.current = parentSelfEntries;
+
+  const extractDeletedDocTokens = React.useCallback(
+    (d: { id?: string; enquiryNo?: string; sourceParentEntryId?: string }): string[] => {
+      const tokens: string[] = [];
+      const pushTok = (val?: string) => {
+        const clean = String(val || "").trim().toLowerCase();
+        if (clean) tokens.push(clean);
+      };
+      pushTok(d?.id);
+      pushTok(d?.enquiryNo);
+      pushTok(d?.sourceParentEntryId);
+      const idStr = String(d?.id || "").trim().toLowerCase();
+      if (idStr.includes("__")) {
+        const suffix = idStr.slice(idStr.indexOf("__") + 2).trim();
+        if (suffix.startsWith("pse-") || suffix.startsWith("onl-")) {
+          pushTok(suffix);
+        }
+      }
+      return tokens;
+    },
+    []
+  );
+
+  const mergeWithPendingDeletes = React.useCallback((serverIds: string[]): string[] => {
+    const now = Date.now();
+    const serverSet = new Set(serverIds.map((x) => String(x || "").trim().toLowerCase()).filter(Boolean));
+    for (const [k, exp] of pendingDeletedIdsRef.current.entries()) {
+      if (exp <= now || serverSet.has(k)) {
+        pendingDeletedIdsRef.current.delete(k);
+      } else {
+        serverSet.add(k);
+      }
+    }
+    return Array.from(serverSet);
+  }, []);
 
   const isLegacyTestOrGhostItem = (item: Partial<CounsellingEnquiry> | null | undefined): boolean => {
     if (!item || !item.studentName || !item.studentName.trim()) return true;
@@ -483,12 +525,19 @@ export default function App() {
 
         const idLower = (localItem.id || "").trim().toLowerCase();
         const noLower = (localItem.enquiryNo || "").trim().toLowerCase();
-        if ((idLower && deletedSet.has(idLower)) || (noLower && deletedSet.has(noLower))) continue;
+        const srcLower = (localItem.sourceParentEntryId || "").trim().toLowerCase();
+        if (
+          (idLower && deletedSet.has(idLower)) ||
+          (noLower && !idLower.includes("__") && deletedSet.has(noLower)) ||
+          (srcLower && deletedSet.has(srcLower))
+        ) {
+          continue;
+        }
 
         const isExplicitlyUnsynced = unsyncedIdSet.has(idLower) || unsyncedIdSet.has(noLower);
 
-        // Cached synthetic parent rows (__pe-...) are derived dynamically from parent_self_entries; never re-push as missing forms unless explicitly saved offline
-        if (!isExplicitlyUnsynced && (idLower.includes("__pe-") || idLower.includes("__onl-") || localItem.counsellorObservations === "Walk-in parent registered via kiosk" || localItem.counsellorObservations === "Admissions counselling meeting completed")) {
+        // Cached synthetic parent rows (__pse-...) are derived dynamically from parent_self_entries; never re-push as missing forms unless explicitly saved offline
+        if (!isExplicitlyUnsynced && (idLower.includes("__pe-") || idLower.includes("__pse-") || idLower.includes("__onl-") || localItem.counsellorObservations === "Walk-in parent registered via kiosk" || localItem.counsellorObservations === "Admissions counselling meeting completed")) {
           if (localItem.sourceParentEntryId || idLower.includes("__")) {
             continue;
           }
@@ -654,41 +703,56 @@ export default function App() {
 
     try {
       const [cloudDeletedDocs, cloudEnquiries, cloudAccounts, cloudAllParents] = await Promise.all([
-        fetchCollectionDocs<{ id: string; enquiryNo?: string }>("deleted_counselling_forms", forceServer),
+        fetchCollectionDocs<{ id: string; enquiryNo?: string; sourceParentEntryId?: string }>("deleted_counselling_forms", forceServer),
         fetchCollectionDocs<CounsellingEnquiry>("counselling_forms", forceServer),
         fetchCollectionDocs<CounsellorAccount>("counsellor_accounts", forceServer),
         fetchCollectionDocs<ParentSelfEntry>("parent_self_entries", forceServer)
       ]);
 
-      // 1. Replace local deleted IDs with server-authoritative deletions (preserving only actively unsynced local state)
+      // 1. Replace local deleted IDs with server-authoritative deletions (preserving actively pending deletes)
       if (Array.isArray(cloudDeletedDocs)) {
-        const delIds = cloudDeletedDocs.flatMap(d => [d.id, d.enquiryNo]).filter(Boolean) as string[];
+        const delIds = mergeWithPendingDeletes(cloudDeletedDocs.flatMap(extractDeletedDocTokens));
         replaceDeletedEnquiryIds(delIds);
         deletedFormsLoadedRef.current = true;
       }
 
-      // 2. Replace local parent_self_entries with authoritative cloud snapshot (full list: pending, claimed, completed, dismissed)
+      // 2. Replace local parent_self_entries with authoritative cloud snapshot (filtered by deleted tombstones)
       if (Array.isArray(cloudAllParents)) {
-        cloudParentsRef.current = cloudAllParents;
-        setParentSelfEntries(cloudAllParents);
-        saveParentSelfEntries(cloudAllParents);
+        const deletedSetForParents = new Set(getDeletedEnquiryIds().map(x => x.toLowerCase()));
+        const filteredParents = cloudAllParents.filter(p => p && !deletedSetForParents.has((p.id || "").trim().toLowerCase()));
+        cloudParentsRef.current = filteredParents;
+        setParentSelfEntries(filteredParents);
+        saveParentSelfEntries(filteredParents);
       }
 
       // 3. Compute unified enquiries deterministically from authoritative server docs
       if (Array.isArray(cloudEnquiries)) {
         const deletedSet = new Set(getDeletedEnquiryIds().map(x => x.toLowerCase()));
         const cleanCloudForms = cloudEnquiries
-          .filter(e => e && (!e.id || !deletedSet.has(e.id.toLowerCase())) && (!e.enquiryNo || !deletedSet.has(e.enquiryNo.toLowerCase())))
+          .filter(e => {
+            if (!e) return false;
+            const eId = (e.id || "").trim().toLowerCase();
+            const eNo = (e.enquiryNo || "").trim().toLowerCase();
+            const eSrc = (e.sourceParentEntryId || "").trim().toLowerCase();
+            if (eId && deletedSet.has(eId)) return false;
+            if (eNo && !eId.includes("__") && deletedSet.has(eNo)) return false;
+            if (eSrc && deletedSet.has(eSrc)) return false;
+            return true;
+          })
           .map(e => {
-            const preferredDocId = (e.id && e.id.includes("__")) ? e.id : (e.enquiryNo || e.id);
+            const rawDocId = (e.id || "").trim();
+            const preferredDocId = (rawDocId && rawDocId.includes("__")) ? rawDocId : (e.enquiryNo || rawDocId);
+            if (rawDocId && preferredDocId) {
+              const key = preferredDocId.trim().toLowerCase();
+              if (!rawFormDocIdsRef.current.has(key)) rawFormDocIdsRef.current.set(key, new Set());
+              rawFormDocIdsRef.current.get(key)!.add(rawDocId);
+            }
             const { normalized } = normalizeEnquiryCounsellor({ ...e, id: preferredDocId });
             return normalized;
           });
 
         cloudFormsRef.current = cleanCloudForms;
-        const effectiveParents = Array.isArray(cloudAllParents)
-          ? cloudAllParents
-          : (cloudParentsRef.current ?? loadParentSelfEntries());
+        const effectiveParents = cloudParentsRef.current ?? loadParentSelfEntries();
 
         setCounsellingEnquiries(prev => {
           const baseLocal = prev && prev.length > 0 ? prev : loadCounselling();
@@ -1080,12 +1144,12 @@ export default function App() {
       ];
 
       const counsellingUnsubs = isTeacherRole ? [] : [
-        syncCollection<{ id: string; enquiryNo?: string }>("deleted_counselling_forms", (deletedDocs, meta) => {
+        syncCollection<{ id: string; enquiryNo?: string; sourceParentEntryId?: string }>("deleted_counselling_forms", (deletedDocs, meta) => {
           if (Array.isArray(deletedDocs)) {
-            const rawIds = deletedDocs.flatMap(d => [d.id, d.enquiryNo]).filter(Boolean) as string[];
+            const rawIds = deletedDocs.flatMap(extractDeletedDocTokens);
             if (!meta?.fromCache) {
               deletedFormsLoadedRef.current = true;
-              replaceDeletedEnquiryIds(rawIds);
+              replaceDeletedEnquiryIds(mergeWithPendingDeletes(rawIds));
             } else if (rawIds.length > 0) {
               recordDeletedEnquiryIds(rawIds);
             }
@@ -1109,14 +1173,16 @@ export default function App() {
           if (!Array.isArray(parentDocs)) return;
           // Never overwrite already-verified server state with a stale IndexedDB cache snapshot
           if (meta?.fromCache && cloudSyncVerifiedRef.current && cloudParentsRef.current !== null) return;
-          cloudParentsRef.current = parentDocs;
-          setParentSelfEntries(parentDocs);
-          saveParentSelfEntries(parentDocs);
+          const deletedSetForParents = new Set(getDeletedEnquiryIds().map(x => x.toLowerCase()));
+          const filteredParents = parentDocs.filter(p => p && !deletedSetForParents.has((p.id || "").trim().toLowerCase()));
+          cloudParentsRef.current = filteredParents;
+          setParentSelfEntries(filteredParents);
+          saveParentSelfEntries(filteredParents);
           if (cloudFormsRef.current !== null) {
             setCounsellingEnquiries((prev) => {
               const unified = computeCloudAuthoritativeEnquiries(
                 cloudFormsRef.current || [],
-                parentDocs,
+                filteredParents,
                 prev || [],
                 deletedFormsLoadedRef.current && !meta?.fromCache
               );
@@ -1150,22 +1216,42 @@ export default function App() {
           if (!meta?.fromCache) {
             items.forEach(item => {
               if (item.id && /_(\d{10,})$/.test(item.id)) {
-                deleteDocument("counselling_forms", item.id);
+                deleteDocument("counselling_forms", item.id).catch(() => {});
               }
-              const eId = (item.id || "").toLowerCase();
-              const eNo = (item.enquiryNo || "").toLowerCase();
-              if ((eId && deletedSet.has(eId)) || (eNo && deletedSet.has(eNo))) {
-                if (item.id) deleteDocument("counselling_forms", item.id);
-                if (item.enquiryNo) deleteDocument("counselling_forms", item.enquiryNo);
+              const eId = (item.id || "").trim().toLowerCase();
+              const eNo = (item.enquiryNo || "").trim().toLowerCase();
+              const eSrc = (item.sourceParentEntryId || "").trim().toLowerCase();
+              if (
+                (eId && deletedSet.has(eId)) ||
+                (eNo && !eId.includes("__") && deletedSet.has(eNo)) ||
+                (eSrc && deletedSet.has(eSrc))
+              ) {
+                if (item.id) deleteDocument("counselling_forms", item.id).catch(() => {});
+                if (item.enquiryNo && !eId.includes("__")) deleteDocument("counselling_forms", item.enquiryNo).catch(() => {});
               }
             });
           }
 
           // Standardize ID & normalize counsellor without dropping colliding students
           const nonDeletedItems = items
-            .filter(e => e && (!e.id || !deletedSet.has(e.id.toLowerCase())) && (!e.enquiryNo || !deletedSet.has(e.enquiryNo.toLowerCase())))
+            .filter(e => {
+              if (!e) return false;
+              const eId = (e.id || "").trim().toLowerCase();
+              const eNo = (e.enquiryNo || "").trim().toLowerCase();
+              const eSrc = (e.sourceParentEntryId || "").trim().toLowerCase();
+              if (eId && deletedSet.has(eId)) return false;
+              if (eNo && !eId.includes("__") && deletedSet.has(eNo)) return false;
+              if (eSrc && deletedSet.has(eSrc)) return false;
+              return true;
+            })
             .map(e => {
-              const preferredDocId = (e.id && e.id.includes("__")) ? e.id : (e.enquiryNo || e.id);
+              const rawDocId = (e.id || "").trim();
+              const preferredDocId = (rawDocId && rawDocId.includes("__")) ? rawDocId : (e.enquiryNo || rawDocId);
+              if (rawDocId && preferredDocId) {
+                const key = preferredDocId.trim().toLowerCase();
+                if (!rawFormDocIdsRef.current.has(key)) rawFormDocIdsRef.current.set(key, new Set());
+                rawFormDocIdsRef.current.get(key)!.add(rawDocId);
+              }
               const base = { ...e, id: preferredDocId };
               const { normalized, wasChanged } = normalizeEnquiryCounsellor(base);
               if (wasChanged && !meta?.fromCache && normalized.id && !normalizedMigratedIdsRef.current.has(normalized.id)) {
@@ -1451,11 +1537,13 @@ export default function App() {
 
     // Unmark from deleted records & track pending cloud sync until confirmed in Firestore
     unmarkDeletedEnquiryId(cleanEnquiry.id, cleanEnquiry.enquiryNo);
+    if (cleanEnquiry.id) pendingDeletedIdsRef.current.delete(cleanEnquiry.id.trim().toLowerCase());
+    if (cleanEnquiry.enquiryNo) pendingDeletedIdsRef.current.delete(cleanEnquiry.enquiryNo.trim().toLowerCase());
     markEnquiryUnsynced(cleanEnquiry.id, cleanEnquiry.enquiryNo);
     if (isFirebaseConfigured()) {
-      deleteDocument("deleted_counselling_forms", (cleanEnquiry.id || "").toLowerCase());
+      deleteDocument("deleted_counselling_forms", (cleanEnquiry.id || "").toLowerCase()).catch(() => {});
       if (cleanEnquiry.enquiryNo) {
-        deleteDocument("deleted_counselling_forms", cleanEnquiry.enquiryNo.toLowerCase());
+        deleteDocument("deleted_counselling_forms", cleanEnquiry.enquiryNo.toLowerCase()).catch(() => {});
       }
     }
 
@@ -1611,91 +1699,196 @@ export default function App() {
     } catch (_) {}
   };
 
-  const handleDeleteCounselling = (id: string) => {
-    setCounsellingEnquiries((prev) => {
-      const base = prev && prev.length > 0 ? prev : loadCounselling();
-      const target = base.find((e) => e.id === id || e.enquiryNo === id);
-      if (target) {
-        recordDeletedEnquiryId(target.id, target.enquiryNo);
-      } else {
-        recordDeletedEnquiryId(id);
-      }
-      const nextList = base.filter((e) => e.id !== id && e.enquiryNo !== id);
-      saveCounselling(nextList);
+  const executeCounsellingDelete = (rawIds: string[]) => {
+    if (!Array.isArray(rawIds) || rawIds.length === 0) return;
 
+    const currentList =
+      counsellingEnquiriesRef.current && counsellingEnquiriesRef.current.length > 0
+        ? counsellingEnquiriesRef.current
+        : loadCounselling();
+    const currentParents =
+      parentSelfEntriesRef.current && parentSelfEntriesRef.current.length > 0
+        ? parentSelfEntriesRef.current
+        : loadParentSelfEntries();
+
+    const exactRemoveIdsLower = new Set<string>();
+    const primaryRemoveNosLower = new Set<string>();
+    const parentIdsToRemoveLower = new Set<string>();
+    const tombstoneTokens = new Set<string>();
+    const expiry = Date.now() + 60000;
+
+    rawIds.forEach((rawIdInput) => {
+      const rawId = String(rawIdInput || "").trim();
+      if (!rawId) return;
+      const rawIdLower = rawId.toLowerCase();
+
+      // Match exact ID first so colliding ENQ numbers never delete the wrong sibling/student
+      const target =
+        currentList.find((e) => (e.id || "").trim().toLowerCase() === rawIdLower) ||
+        (cloudFormsRef.current || []).find((e) => (e.id || "").trim().toLowerCase() === rawIdLower) ||
+        currentList.find((e) => (e.enquiryNo || "").trim().toLowerCase() === rawIdLower);
+
+      const effectiveId = (target?.id || rawId).trim();
+      const effectiveIdLower = effectiveId.toLowerCase();
+      const isCollisionSuffixed = effectiveId.includes("__");
+      const effectiveNo = (target?.enquiryNo || (!isCollisionSuffixed ? rawId : "")).trim();
+      const effectiveNoLower = effectiveNo.toLowerCase();
+
+      exactRemoveIdsLower.add(rawIdLower);
+      exactRemoveIdsLower.add(effectiveIdLower);
+      tombstoneTokens.add(rawIdLower);
+      tombstoneTokens.add(effectiveIdLower);
+      if (!isCollisionSuffixed && effectiveNoLower) {
+        primaryRemoveNosLower.add(effectiveNoLower);
+        tombstoneTokens.add(effectiveNoLower);
+      }
+
+      // Resolve any linked parent_self_entries record (via sourceParentEntryId, __PSE suffix, or exact same student match)
+      const matchedParentIds = new Set<string>();
+      if (target?.sourceParentEntryId) {
+        matchedParentIds.add(target.sourceParentEntryId.trim());
+      }
+      if (effectiveId.includes("__")) {
+        const suffix = effectiveId.slice(effectiveId.indexOf("__") + 2).trim();
+        if (/^(pse|onl)-/i.test(suffix)) {
+          // Strip optional collision guard suffix (_2, _3...) if appended after a PSE timestamp id
+          const cleanSuffix = suffix.replace(/_(\d{1,2})$/, "");
+          matchedParentIds.add(cleanSuffix);
+        }
+      }
+      currentParents.forEach((p) => {
+        if (!p || !p.id) return;
+        const pIdLower = p.id.trim().toLowerCase();
+        if (matchedParentIds.has(p.id) || pIdLower === rawIdLower || pIdLower === effectiveIdLower) {
+          matchedParentIds.add(p.id);
+          return;
+        }
+        if (
+          !isCollisionSuffixed &&
+          p.completedEnquiryNo &&
+          effectiveNoLower &&
+          p.completedEnquiryNo.trim().toLowerCase() === effectiveNoLower &&
+          (!target || isSameStudentRecord(target, p))
+        ) {
+          matchedParentIds.add(p.id);
+          return;
+        }
+        if (
+          target &&
+          p.status !== "pending" &&
+          p.status !== "dismissed" &&
+          (p.studentName || "").trim().toLowerCase() === (target.studentName || "").trim().toLowerCase() &&
+          isSameStudentRecord(target, p)
+        ) {
+          matchedParentIds.add(p.id);
+        }
+      });
+
+      matchedParentIds.forEach((pid) => {
+        parentIdsToRemoveLower.add(pid.toLowerCase());
+        tombstoneTokens.add(pid.toLowerCase());
+      });
+
+      const firstParentId = Array.from(matchedParentIds)[0];
+      unmarkEnquiryUnsynced(rawId, target?.id, isCollisionSuffixed ? undefined : target?.enquiryNo, firstParentId);
+
+      // Persist deletion to Express server
       try {
-        fetch(`/api/counselling/${encodeURIComponent(target?.id || id)}`, { method: "DELETE" }).catch(() => {});
+        fetch(`/api/counselling/${encodeURIComponent(effectiveId)}?collision=${isCollisionSuffixed ? "1" : "0"}`, {
+          method: "DELETE"
+        }).catch(() => {});
       } catch (_) {}
 
+      matchedParentIds.forEach((pid) => {
+        try {
+          fetch(`/api/parent-self-entry/${encodeURIComponent(pid)}`, { method: "DELETE" }).catch(() => {});
+        } catch (_) {}
+      });
+
+      // Persist permanent deletion + tombstone in Firestore
       if (isFirebaseConfigured()) {
-        deleteDocument("counselling_forms", id);
-        if (target?.id) {
-          deleteDocument("counselling_forms", target.id);
-        }
-        if (target?.enquiryNo) {
-          deleteDocument("counselling_forms", target.enquiryNo);
+        const rawDocIds = rawFormDocIdsRef.current.get(effectiveIdLower);
+        if (rawDocIds) {
+          rawDocIds.forEach((origDocId) => {
+            deleteDocument("counselling_forms", origDocId).catch(() => {});
+          });
+          rawFormDocIdsRef.current.delete(effectiveIdLower);
         }
 
-        const delId = (target?.id || id).toLowerCase();
-        saveDocument("deleted_counselling_forms", delId, {
-          id: delId,
-          enquiryNo: (target?.enquiryNo || id).toLowerCase(),
-          deletedAt: Date.now()
+        deleteDocument("counselling_forms", rawId).catch(() => {});
+        if (target?.id && target.id !== rawId) {
+          deleteDocument("counselling_forms", target.id).catch(() => {});
+        }
+        if (!isCollisionSuffixed && target?.enquiryNo) {
+          deleteDocument("counselling_forms", target.enquiryNo).catch(() => {});
+        }
+
+        matchedParentIds.forEach((pid) => {
+          deleteDocument("parent_self_entries", pid).catch(() => {});
         });
+
+        const delDocId = effectiveIdLower.replace(/\//g, "_");
+        const delPayload: Record<string, any> = {
+          id: delDocId,
+          deletedAt: Date.now()
+        };
+        if (!isCollisionSuffixed && effectiveNoLower) {
+          delPayload.enquiryNo = effectiveNoLower;
+        }
+        if (firstParentId) {
+          delPayload.sourceParentEntryId = firstParentId.toLowerCase();
+        }
+        saveDocument("deleted_counselling_forms", delDocId, delPayload).catch(() => {});
       }
-      return nextList;
     });
+
+    tombstoneTokens.forEach((tok) => {
+      pendingDeletedIdsRef.current.set(tok, expiry);
+    });
+    recordDeletedEnquiryIds(Array.from(tombstoneTokens));
+
+    const filterEnquiryList = (list: CounsellingEnquiry[]) =>
+      list.filter((e) => {
+        if (!e) return false;
+        const eIdLower = (e.id || "").trim().toLowerCase();
+        const eNoLower = (e.enquiryNo || "").trim().toLowerCase();
+        const eSrcLower = (e.sourceParentEntryId || "").trim().toLowerCase();
+        if (eIdLower && exactRemoveIdsLower.has(eIdLower)) return false;
+        if (eNoLower && !eIdLower.includes("__") && primaryRemoveNosLower.has(eNoLower)) return false;
+        if (eSrcLower && parentIdsToRemoveLower.has(eSrcLower)) return false;
+        return true;
+      });
+
+    if (cloudFormsRef.current) {
+      cloudFormsRef.current = filterEnquiryList(cloudFormsRef.current);
+    }
+
+    const nextEnquiries = filterEnquiryList(currentList);
+    saveCounselling(nextEnquiries);
+    setCounsellingEnquiries(nextEnquiries);
+
+    if (parentIdsToRemoveLower.size > 0) {
+      if (cloudParentsRef.current) {
+        cloudParentsRef.current = cloudParentsRef.current.filter(
+          (p) => !p || !parentIdsToRemoveLower.has((p.id || "").trim().toLowerCase())
+        );
+      }
+      const nextParents = currentParents.filter(
+        (p) => !p || !parentIdsToRemoveLower.has((p.id || "").trim().toLowerCase())
+      );
+      saveParentSelfEntries(nextParents);
+      setParentSelfEntries(nextParents);
+    }
+  };
+
+  const handleDeleteCounselling = (id: string) => {
+    if (!id) return;
+    executeCounsellingDelete([id]);
   };
 
   const handleDeleteMultipleCounselling = (ids: string[]) => {
     if (!Array.isArray(ids) || ids.length === 0) return;
-    setCounsellingEnquiries((prev) => {
-      const base = prev && prev.length > 0 ? prev : loadCounselling();
-      const idsSet = new Set(ids);
-
-      base.forEach((e) => {
-        if (idsSet.has(e.id) || idsSet.has(e.enquiryNo)) {
-          recordDeletedEnquiryId(e.id, e.enquiryNo);
-          try {
-            fetch(`/api/counselling/${encodeURIComponent(e.id)}`, { method: "DELETE" }).catch(() => {});
-          } catch (_) {}
-
-          if (isFirebaseConfigured()) {
-            deleteDocument("counselling_forms", e.id);
-            if (e.enquiryNo) {
-              deleteDocument("counselling_forms", e.enquiryNo);
-            }
-
-            const delId = e.id.toLowerCase();
-            saveDocument("deleted_counselling_forms", delId, {
-              id: delId,
-              enquiryNo: (e.enquiryNo || e.id).toLowerCase(),
-              deletedAt: Date.now()
-            });
-          }
-        }
-      });
-
-      ids.forEach((id) => {
-        recordDeletedEnquiryId(id);
-        try {
-          fetch(`/api/counselling/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
-        } catch (_) {}
-        if (isFirebaseConfigured()) {
-          deleteDocument("counselling_forms", id);
-          const delId = id.toLowerCase();
-          saveDocument("deleted_counselling_forms", delId, {
-            id: delId,
-            enquiryNo: id.toLowerCase(),
-            deletedAt: Date.now()
-          });
-        }
-      });
-
-      const nextList = base.filter((e) => !idsSet.has(e.id) && !idsSet.has(e.enquiryNo));
-      saveCounselling(nextList);
-      return nextList;
-    });
+    executeCounsellingDelete(ids);
   };
 
 

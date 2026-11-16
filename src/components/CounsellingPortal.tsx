@@ -438,9 +438,83 @@ export default function CounsellingPortal({
   const [selectedEnquiryIds, setSelectedEnquiryIds] = useState<string[]>([]);
   const [allowCounsellorMultiDelete, setAllowCounsellorMultiDeleteState] = useState<boolean>(() => getAllowCounsellorMultiDelete());
   const [isBulkDeleteModalOpen, setIsBulkDeleteModalOpen] = useState<boolean>(false);
+  const [deletedEnquiryVersion, setDeletedEnquiryVersion] = useState<number>(0);
 
   // Derived Multi-Delete Access Permission
   const canUseMultiDelete = userRole !== "Counsellor" || allowCounsellorMultiDelete;
+
+  React.useEffect(() => {
+    const handleDeletedUpdate = () => setDeletedEnquiryVersion(v => v + 1);
+    if (typeof window !== "undefined") {
+      window.addEventListener("sgs_deleted_enquiries_updated", handleDeletedUpdate);
+    }
+    return () => {
+      if (typeof window !== "undefined") {
+        window.removeEventListener("sgs_deleted_enquiries_updated", handleDeletedUpdate);
+      }
+    };
+  }, []);
+
+  // Sync Super Admin "Counsellor Multi-Delete" permission across all Counsellor & Admin portals in real time
+  React.useEffect(() => {
+    if (!isFirebaseConfigured()) return;
+    let unsub: (() => void) | undefined;
+    try {
+      unsub = syncCollection<{ id: string; allowCounsellorMultiDelete?: boolean }>(
+        "system_metadata",
+        (docs) => {
+          if (!Array.isArray(docs)) return;
+          const settingsDoc = docs.find((d) => d && d.id === "counselling_settings");
+          if (settingsDoc && typeof settingsDoc.allowCounsellorMultiDelete === "boolean") {
+            setAllowCounsellorMultiDeleteState(settingsDoc.allowCounsellorMultiDelete);
+            setAllowCounsellorMultiDelete(settingsDoc.allowCounsellorMultiDelete);
+          }
+        },
+        []
+      );
+    } catch (err) {
+      console.warn("Counselling settings sync notice:", err);
+    }
+    return () => {
+      if (unsub) unsub();
+    };
+  }, []);
+
+  const handleToggleCounsellorMultiDelete = () => {
+    const next = !allowCounsellorMultiDelete;
+    setAllowCounsellorMultiDeleteState(next);
+    setAllowCounsellorMultiDelete(next);
+    if (isFirebaseConfigured()) {
+      saveDocument("system_metadata", "counselling_settings", {
+        id: "counselling_settings",
+        allowCounsellorMultiDelete: next,
+        updatedAt: Date.now()
+      }).catch(() => {});
+    }
+  };
+
+  const filterNonDeletedParentEntries = React.useCallback((entries: ParentSelfEntry[]): ParentSelfEntry[] => {
+    const deletedSet = new Set(
+      getDeletedEnquiryIds().map(x => String(x || "").trim().toLowerCase()).filter(Boolean)
+    );
+    if (deletedSet.size === 0) return entries;
+    const deletedParentIds = new Set<string>();
+    deletedSet.forEach(k => {
+      if (k.startsWith("pse-") || k.startsWith("onl-")) {
+        deletedParentIds.add(k);
+      } else if (k.includes("__")) {
+        const suffix = k.slice(k.indexOf("__") + 2).trim();
+        if (suffix.startsWith("pse-") || suffix.startsWith("onl-")) {
+          deletedParentIds.add(suffix);
+        }
+      }
+    });
+    return (entries || []).filter(p => {
+      if (!p || !p.id) return false;
+      const pid = p.id.trim().toLowerCase();
+      return !deletedSet.has(pid) && !deletedParentIds.has(pid);
+    });
+  }, []);
 
   // 5 KPI Metric Cards Date-Wise Drill-Down State
   type MetricCardType = "total" | "entrance" | "followup" | "confirmed" | "notInterested";
@@ -461,11 +535,11 @@ export default function CounsellingPortal({
 
   React.useEffect(() => {
     if (Array.isArray(parentSelfEntriesProp) && (parentSelfEntriesProp.length > 0 || firestoreParentsSyncedRef.current)) {
-      const authoritative = deduplicateParentEntries(parentSelfEntriesProp, true);
+      const authoritative = filterNonDeletedParentEntries(deduplicateParentEntries(parentSelfEntriesProp, true));
       saveParentSelfEntries(authoritative);
       setParentSelfEntries(authoritative);
     }
-  }, [parentSelfEntriesProp]);
+  }, [parentSelfEntriesProp, filterNonDeletedParentEntries]);
 
   // Safe enquiries source: unified deterministic cloud merger + linked sibling audio hydration
   const safeEnquiries = useMemo(() => {
@@ -542,7 +616,7 @@ export default function CounsellingPortal({
 
       return e;
     });
-  }, [enquiries, parentSelfEntries]);
+  }, [enquiries, parentSelfEntries, deletedEnquiryVersion]);
 
 
   // Counsellor Accounts State (Loaded from Main App / Storage)
@@ -913,7 +987,7 @@ export default function CounsellingPortal({
             localStorage.removeItem("sgs_dismissed_parent_entries");
           } catch {}
           pushUnsyncedParentEntriesToCloud(cloudEntries, parentSelfEntries || []);
-          const authoritative = deduplicateParentEntries(cloudEntries, true);
+          const authoritative = filterNonDeletedParentEntries(deduplicateParentEntries(cloudEntries, true));
           saveParentSelfEntries(authoritative);
           setParentSelfEntries(authoritative);
           notifyParentEntriesChanged(authoritative);
@@ -1026,9 +1100,11 @@ export default function CounsellingPortal({
                   if (!meta?.fromCache) {
                     pushUnsyncedParentEntriesToCloud(firestoreEntries, currentLocal);
                   }
-                  const authoritative = firestoreEntries.length > 0
-                    ? deduplicateParentEntries(firestoreEntries, true)
-                    : deduplicateParentEntries(currentLocal, Boolean(firestoreParentsSyncedRef.current));
+                  const authoritative = filterNonDeletedParentEntries(
+                    firestoreEntries.length > 0
+                      ? deduplicateParentEntries(firestoreEntries, true)
+                      : deduplicateParentEntries(currentLocal, Boolean(firestoreParentsSyncedRef.current))
+                  );
                   saveParentSelfEntries(authoritative);
                   return authoritative;
                 });
@@ -1053,7 +1129,7 @@ export default function CounsellingPortal({
             const serverEntries = await fetchCollectionDocs<ParentSelfEntry>("parent_self_entries", true);
             if (Array.isArray(serverEntries)) {
               firestoreParentsSyncedRef.current = true;
-              const authoritative = deduplicateParentEntries(serverEntries, true);
+              const authoritative = filterNonDeletedParentEntries(deduplicateParentEntries(serverEntries, true));
               saveParentSelfEntries(authoritative);
               setParentSelfEntries(authoritative);
               notifyParentEntriesChanged(authoritative);
@@ -1281,13 +1357,14 @@ export default function CounsellingPortal({
 
   const isEntryToday = (e: ParentSelfEntry) => {
     const now = new Date();
-    const todayDMY = now.toLocaleDateString("en-GB").replace(/\//g, "-");
-    const todayYMD = now.toISOString().split("T")[0];
+    const toLocal = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const todayDMY = `${String(now.getDate()).padStart(2, "0")}-${String(now.getMonth() + 1).padStart(2, "0")}-${now.getFullYear()}`;
+    const todayYMD = toLocal(now);
     const eDate = e.dateKey || e.entryDate || (e.formattedDate ? e.formattedDate.split(" ")[0] : "");
     if (eDate === todayYMD || eDate === todayDMY) return true;
     if (e.claimedAt) {
-      const cDate = new Date(e.claimedAt).toISOString().split("T")[0];
-      if (cDate === todayYMD) return true;
+      const cParsed = new Date(e.claimedAt);
+      if (!isNaN(cParsed.getTime()) && toLocal(cParsed) === todayYMD) return true;
     }
     const time = new Date(e.claimedAt || e.submittedAt).getTime();
     if (!isNaN(time) && now.getTime() - time < 24 * 60 * 60 * 1000) {
@@ -2508,25 +2585,84 @@ export default function CounsellingPortal({
     }
   };
 
+  const pruneLinkedParentEntriesForTargets = React.useCallback((targets: CounsellingEnquiry[]) => {
+    if (!Array.isArray(targets) || targets.length === 0) return;
+    const removeIdsLower = new Set<string>();
+    const currentEntries = Array.isArray(parentSelfEntries) ? parentSelfEntries : [];
+
+    targets.forEach((target) => {
+      if (!target) return;
+      const tId = (target.id || "").trim();
+      const tIdLower = tId.toLowerCase();
+      const tNoLower = (target.enquiryNo || "").trim().toLowerCase();
+      const isCollision = tId.includes("__");
+      if (target.sourceParentEntryId) {
+        removeIdsLower.add(target.sourceParentEntryId.trim().toLowerCase());
+      }
+      if (isCollision) {
+        const suffix = tIdLower.slice(tIdLower.indexOf("__") + 2).trim();
+        if (suffix.startsWith("pse-") || suffix.startsWith("onl-")) {
+          removeIdsLower.add(suffix.replace(/_(\d{1,2})$/, ""));
+        }
+      }
+      currentEntries.forEach((p) => {
+        if (!p || !p.id) return;
+        const pid = p.id.trim().toLowerCase();
+        if (pid === tIdLower || (target.sourceParentEntryId && pid === target.sourceParentEntryId.trim().toLowerCase())) {
+          removeIdsLower.add(pid);
+          return;
+        }
+        if (
+          !isCollision &&
+          p.completedEnquiryNo &&
+          tNoLower &&
+          p.completedEnquiryNo.trim().toLowerCase() === tNoLower &&
+          isSameStudentRecord(target, p)
+        ) {
+          removeIdsLower.add(pid);
+          return;
+        }
+        if (
+          p.status !== "pending" &&
+          p.status !== "dismissed" &&
+          (p.studentName || "").trim().toLowerCase() === (target.studentName || "").trim().toLowerCase() &&
+          isSameStudentRecord(target, p)
+        ) {
+          removeIdsLower.add(pid);
+        }
+      });
+    });
+
+    if (removeIdsLower.size > 0) {
+      const nextParents = currentEntries.filter(
+        (p) => !p || !removeIdsLower.has((p.id || "").trim().toLowerCase())
+      );
+      saveParentSelfEntries(nextParents);
+      setParentSelfEntries(nextParents);
+      notifyParentEntriesChanged(nextParents);
+    }
+  }, [parentSelfEntries, notifyParentEntriesChanged]);
+
   const handleConfirmDeleteEnquiry = async () => {
     if (!enquiryToDelete) return;
     const target = enquiryToDelete;
     setEnquiryToDelete(null);
-    try {
-      if (target.id) {
-        await deleteAudioRecordingBlob(target.id);
-      }
-      if (target.audioRecording?.id) {
-        await deleteAudioRecordingBlob(target.audioRecording.id);
-      }
-      if (target.audioRecording?.storageKey) {
-        await deleteAudioRecordingBlob(target.audioRecording.storageKey);
-      }
-    } catch (e) {
-      console.warn("Audio cleanup notice:", e);
+
+    const audioKeys = new Set<string>();
+    if (target.id) audioKeys.add(target.id);
+    if (target.audioRecording?.id) audioKeys.add(target.audioRecording.id);
+    if (target.audioRecording?.storageKey) audioKeys.add(target.audioRecording.storageKey);
+    if (audioKeys.size > 0) {
+      await Promise.allSettled(Array.from(audioKeys).map((k) => deleteAudioRecordingBlob(k)));
     }
+
+    pruneLinkedParentEntriesForTargets([target]);
+    setSelectedEnquiryIds((prev) => prev.filter((id) => id !== target.id));
+    if (selectedEnquiry?.id === target.id) setSelectedEnquiry(null);
+    if (inspectingEnquiry?.id === target.id) setInspectingEnquiry(null);
+
     onDeleteEnquiry(target.id);
-    setDeleteToast(`Enquiry ${target.enquiryNo} (${target.studentName}) deleted successfully!`);
+    setDeleteToast(`Enquiry ${target.enquiryNo} (${target.studentName}) deleted permanently!`);
     setTimeout(() => setDeleteToast(null), 3500);
   };
 
@@ -3300,15 +3436,37 @@ export default function CounsellingPortal({
     }
   };
 
-  const handleConfirmBulkDelete = () => {
+  const handleConfirmBulkDelete = async () => {
     if (selectedEnquiryIds.length === 0) return;
-    if (onDeleteMultipleEnquiries) {
-      onDeleteMultipleEnquiries(selectedEnquiryIds);
-    } else {
-      selectedEnquiryIds.forEach(id => onDeleteEnquiry(id));
-    }
+    const idsToDelete = [...selectedEnquiryIds];
+    const idSet = new Set(idsToDelete);
+    const targets = safeEnquiries.filter((e) => idSet.has(e.id));
+
     setSelectedEnquiryIds([]);
     setIsBulkDeleteModalOpen(false);
+    if (selectedEnquiry && idSet.has(selectedEnquiry.id)) setSelectedEnquiry(null);
+    if (inspectingEnquiry && idSet.has(inspectingEnquiry.id)) setInspectingEnquiry(null);
+
+    const audioKeys = new Set<string>();
+    targets.forEach((t) => {
+      if (t.id) audioKeys.add(t.id);
+      if (t.audioRecording?.id) audioKeys.add(t.audioRecording.id);
+      if (t.audioRecording?.storageKey) audioKeys.add(t.audioRecording.storageKey);
+    });
+    if (audioKeys.size > 0) {
+      await Promise.allSettled(Array.from(audioKeys).map((k) => deleteAudioRecordingBlob(k)));
+    }
+
+    pruneLinkedParentEntriesForTargets(targets);
+
+    if (onDeleteMultipleEnquiries) {
+      onDeleteMultipleEnquiries(idsToDelete);
+    } else {
+      idsToDelete.forEach((id) => onDeleteEnquiry(id));
+    }
+
+    setDeleteToast(`🗑️ ${idsToDelete.length} selected enquiry record${idsToDelete.length === 1 ? "" : "s"} deleted permanently!`);
+    setTimeout(() => setDeleteToast(null), 3500);
   };
 
   const getFollowUpStatusInfo = (followUpDateStr?: string) => {
@@ -6500,11 +6658,7 @@ Warm regards,
               {userRole !== "Counsellor" && (
                 <button
                   type="button"
-                  onClick={() => {
-                    const next = !allowCounsellorMultiDelete;
-                    setAllowCounsellorMultiDeleteState(next);
-                    setAllowCounsellorMultiDelete(next);
-                  }}
+                  onClick={handleToggleCounsellorMultiDelete}
                   className={`px-3 py-2 rounded-xl text-xs font-bold transition-all border flex items-center gap-1.5 shrink-0 cursor-pointer ${
                     allowCounsellorMultiDelete
                       ? "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800 hover:bg-emerald-100"
@@ -6972,11 +7126,7 @@ Warm regards,
                 </span>
                 <button
                   type="button"
-                  onClick={() => {
-                    const next = !allowCounsellorMultiDelete;
-                    setAllowCounsellorMultiDeleteState(next);
-                    setAllowCounsellorMultiDelete(next);
-                  }}
+                  onClick={handleToggleCounsellorMultiDelete}
                   className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
                     allowCounsellorMultiDelete ? "bg-emerald-500" : "bg-slate-600"
                   }`}
@@ -10026,6 +10176,7 @@ Warm regards,
         entries={parentSelfEntries}
         onClaimEntry={handleClaimAndAutoFill}
         onDismissEntry={handleDismissParentEntry}
+        onDeleteClaimedEntry={handlePermanentDeleteEntry}
         onClearAllClaimedEntries={handleClearAllClaimed}
         onOpenQrPoster={() => {
           setIsReceptionQueueModalOpen(false);
@@ -10035,6 +10186,7 @@ Warm regards,
         currentCounsellorName={activeCounsellor?.name}
         currentCounsellorId={activeCounsellor?.id}
         userRole={userRole}
+        isCloudSynced={firestoreParentsSyncedRef.current}
       />
 
       {/* Day-Wise, Weekly & Monthly Token List Report Modal */}

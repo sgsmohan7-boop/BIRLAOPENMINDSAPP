@@ -2877,11 +2877,16 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
   app.get("/api/counselling", (req, res) => {
     const list = readCounsellingData();
     const deleted = readDeletedEnquiries();
-    const deletedSet = new Set(deleted.map(d => String(d).toLowerCase()));
+    const deletedSet = new Set(deleted.map(d => String(d || "").trim().toLowerCase()).filter(Boolean));
     const activeList = list.filter(e => {
-      const eId = (e.id || "").toLowerCase();
-      const eNo = (e.enquiryNo || "").toLowerCase();
-      return (!eId || !deletedSet.has(eId)) && (!eNo || !deletedSet.has(eNo));
+      if (!e) return false;
+      const eId = (e.id || "").trim().toLowerCase();
+      const eNo = (e.enquiryNo || "").trim().toLowerCase();
+      const eSrc = (e.sourceParentEntryId || "").trim().toLowerCase();
+      if (eId && deletedSet.has(eId)) return false;
+      if (eNo && !eId.includes("__") && deletedSet.has(eNo)) return false;
+      if (eSrc && deletedSet.has(eSrc)) return false;
+      return true;
     });
     return res.json({ success: true, enquiries: activeList, deletedIds: deleted });
   });
@@ -2893,23 +2898,37 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
       let current = readCounsellingData();
       let deleted = readDeletedEnquiries();
       let deletedUpdated = false;
+      const isBulkArray = Array.isArray(payload);
+      const deletedSet = new Set(deleted.map(d => String(d || "").trim().toLowerCase()).filter(Boolean));
 
-      const itemsToSave = Array.isArray(payload) ? payload : [payload];
+      const itemsToSave = isBulkArray ? payload : [payload];
       itemsToSave.forEach((enquiry) => {
         if (!enquiry || (!enquiry.id && !enquiry.enquiryNo)) return;
-        const eId = (enquiry.id || "").toLowerCase();
-        const eNo = (enquiry.enquiryNo || "").toLowerCase();
+        const eId = (enquiry.id || "").trim().toLowerCase();
+        const eNo = (enquiry.enquiryNo || "").trim().toLowerCase();
+        const eSrc = (enquiry.sourceParentEntryId || "").trim().toLowerCase();
+        const isCollision = eId.includes("__");
 
         // Release central lock now that it's formally saved
         if (enquiry.enquiryNo) centralEnquiryReservations.delete(enquiry.enquiryNo);
         if (enquiry.siblingEnquiryNo) centralEnquiryReservations.delete(enquiry.siblingEnquiryNo);
 
-        // If single enquiry post (non-array payload), user is explicitly editing/saving it, so unmark
-        if (!Array.isArray(payload) && (eId || eNo)) {
+        if (isBulkArray) {
+          if (
+            (eId && deletedSet.has(eId)) ||
+            (eNo && !isCollision && deletedSet.has(eNo)) ||
+            (eSrc && deletedSet.has(eSrc))
+          ) {
+            return;
+          }
+        } else if (eId || eNo) {
+          // If single enquiry post (non-array payload), user is explicitly editing/saving it, so unmark
           const prevLen = deleted.length;
           deleted = deleted.filter(d => {
-            const dl = d.toLowerCase();
-            return dl !== eId && dl !== eNo;
+            const dl = d.trim().toLowerCase();
+            if (dl === eId) return false;
+            if (!isCollision && dl === eNo) return false;
+            return true;
           });
           if (deleted.length !== prevLen) {
             deletedUpdated = true;
@@ -2917,8 +2936,8 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
         }
 
         const idx = current.findIndex(e => 
-          (enquiry.id && e.id === enquiry.id) || 
-          (enquiry.enquiryNo && e.enquiryNo && e.enquiryNo.toLowerCase() === eNo)
+          (enquiry.id && e.id && e.id.trim().toLowerCase() === eId) || 
+          (!isCollision && enquiry.enquiryNo && e.enquiryNo && !(e.id || "").includes("__") && e.enquiryNo.trim().toLowerCase() === eNo)
         );
 
         if (enquiry.audioRecording) {
@@ -2986,21 +3005,31 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
   // DELETE /api/counselling/:id
   app.delete("/api/counselling/:id", (req, res) => {
     try {
-      const targetId = String(req.params.id || "").toLowerCase();
+      const targetId = String(req.params.id || "").trim().toLowerCase();
+      const isCollision = req.query.collision === "1" || targetId.includes("__");
       let current = readCounsellingData();
       let deleted = readDeletedEnquiries();
+      const deletedLowerSet = new Set(deleted.map(d => String(d || "").trim().toLowerCase()));
+      const pushDeletedToken = (val?: string) => {
+        const clean = String(val || "").trim().toLowerCase();
+        if (clean && !deletedLowerSet.has(clean)) {
+          deletedLowerSet.add(clean);
+          deleted.push(clean);
+        }
+      };
 
       if (targetId) {
-        if (!deleted.map(d => d.toLowerCase()).includes(targetId)) {
-          deleted.push(targetId);
-        }
-        const target = current.find(e => (e.id || "").toLowerCase() === targetId || (e.enquiryNo || "").toLowerCase() === targetId);
+        pushDeletedToken(targetId);
+        const target =
+          current.find(e => (e.id || "").trim().toLowerCase() === targetId) ||
+          (!isCollision ? current.find(e => (e.enquiryNo || "").trim().toLowerCase() === targetId) : undefined);
         if (target) {
-          if (target.id && !deleted.map(d => d.toLowerCase()).includes(target.id.toLowerCase())) {
-            deleted.push(target.id.toLowerCase());
+          pushDeletedToken(target.id);
+          if (!isCollision && !(target.id || "").includes("__")) {
+            pushDeletedToken(target.enquiryNo);
           }
-          if (target.enquiryNo && !deleted.map(d => d.toLowerCase()).includes(target.enquiryNo.toLowerCase())) {
-            deleted.push(target.enquiryNo.toLowerCase());
+          if (target.sourceParentEntryId) {
+            pushDeletedToken(target.sourceParentEntryId);
           }
           if (target.audioRecording?.fileName) {
             const fname = target.audioRecording.fileName;
@@ -3020,7 +3049,13 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
         writeDeletedEnquiries(deleted);
       }
 
-      const nextList = current.filter(e => (e.id || "").toLowerCase() !== targetId && (e.enquiryNo || "").toLowerCase() !== targetId);
+      const nextList = current.filter(e => {
+        const eId = (e.id || "").trim().toLowerCase();
+        const eNo = (e.enquiryNo || "").trim().toLowerCase();
+        if (eId === targetId) return false;
+        if (!isCollision && !eId.includes("__") && eNo === targetId) return false;
+        return true;
+      });
       writeCounsellingData(nextList);
 
       return res.json({ success: true, deletedId: targetId, deletedIds: deleted });
