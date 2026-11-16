@@ -8,13 +8,13 @@ import React, { useState, useEffect } from "react";
 import Login from "./components/Login";
 import AppUpdateNotifier from "./components/AppUpdateNotifier";
 
-// Resilient Lazy Import Wrapper: Automatically retries up to 3 times on Vite dev-server rebuilds or transient network hiccups
+// Resilient Lazy Import Wrapper: Retries on Vite dev-server transforms or slow Wi-Fi, then auto-recovers once cleanly on stale chunks
 function lazyWithRetry<T extends React.ComponentType<any>>(
   factory: () => Promise<{ default: T }>,
   componentName: string
 ): React.LazyExoticComponent<T> {
   return React.lazy(async () => {
-    const delays = [400, 1000, 2000];
+    const delays = [600, 1200, 2000, 3000];
     let lastError: any;
     for (let attempt = 0; attempt <= delays.length; attempt++) {
       try {
@@ -27,6 +27,22 @@ function lazyWithRetry<T extends React.ComponentType<any>>(
         }
       }
     }
+
+    const msg = String(lastError?.message || lastError || "");
+    const isDynamicFetchFailure = /dynamically imported module|Loading chunk|Importing a module script failed|Failed to fetch|MIME type|Unexpected token '<|Outdated Optimize Dep|504/i.test(msg);
+    if (isDynamicFetchFailure && typeof window !== "undefined") {
+      try {
+        const key = "bomis_chunk_recover_ts";
+        const last = parseInt(sessionStorage.getItem(key) || "0", 10);
+        if (!last || Date.now() - last > 15000) {
+          sessionStorage.setItem(key, String(Date.now()));
+          console.warn(`[DynamicImportRetry] Triggering automatic clean reload for ${componentName}...`);
+          window.location.reload();
+          return new Promise<{ default: T }>(() => {});
+        }
+      } catch {}
+    }
+
     console.error(`[DynamicImportRetry] All attempts exhausted for ${componentName}:`, lastError);
     throw lastError;
   });
@@ -740,8 +756,10 @@ export default function App() {
     };
   }, [isLoggedIn, isParentKioskMode, userRole, performAuthoritativeCloudSync]);
 
-  const handleSyncRefresh = async () => {
+  const handleSyncRefresh = async (): Promise<boolean> => {
+    if (isSyncRefreshing) return false;
     setIsSyncRefreshing(true);
+    let firestoreEnquiriesSynced = false;
     try {
       // 1. Load cached state briefly only if cloud hasn't verified yet
       if (!cloudSyncVerifiedRef.current) {
@@ -755,7 +773,7 @@ export default function App() {
       }
 
       // 2. Authoritative Server-Fresh Pull via getDocsFromServer (bypasses stale IndexedDB / localStorage)
-      const firestoreEnquiriesSynced = await performAuthoritativeCloudSync(true);
+      firestoreEnquiriesSynced = await performAuthoritativeCloudSync(true);
 
       // 3. Only hit local Express fallbacks if Firestore server pull did not complete
       if (!firestoreParentsSyncedOrCloudLoaded(cloudParentsRef.current)) {
@@ -805,8 +823,10 @@ export default function App() {
       }
 
       await new Promise((resolve) => setTimeout(resolve, 400));
+      return firestoreEnquiriesSynced;
     } catch (err) {
       console.error("Sync state refresh failed:", err);
+      return false;
     } finally {
       setIsSyncRefreshing(false);
     }

@@ -34,9 +34,31 @@ export class PortalErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error(`[PortalErrorBoundary] Intercepted runtime error in [${this.props.sectionName || "Section"}]:`, error, errorInfo);
     this.setState({ errorInfo });
+
+    const msg = error?.message || String(error || "");
+    const isDynamicFetchFailure = /dynamically imported module|Loading chunk|Importing a module script failed|Failed to fetch/i.test(msg);
+    if (isDynamicFetchFailure && typeof window !== "undefined") {
+      try {
+        const key = "bomis_chunk_recover_ts";
+        const last = parseInt(sessionStorage.getItem(key) || "0", 10);
+        if (!last || Date.now() - last > 15000) {
+          sessionStorage.setItem(key, String(Date.now()));
+          setTimeout(() => {
+            window.location.reload();
+          }, 500);
+        }
+      } catch {}
+    }
   }
 
   handleReset = () => {
+    const msg = this.state.error?.message || String(this.state.error || "");
+    const isDynamicFetchFailure = /dynamically imported module|Loading chunk|Importing a module script failed|Failed to fetch/i.test(msg);
+    if (isDynamicFetchFailure && typeof window !== "undefined") {
+      window.location.reload();
+      return;
+    }
+
     this.setState({ hasError: false, error: null, errorInfo: null });
 
     if (this.props.onReset) {
@@ -51,6 +73,8 @@ export class PortalErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.hasError) {
       const name = this.props.sectionName || "Department Module";
+      const errMsg = this.state.error?.message || String(this.state.error || "");
+      const isNetworkOrChunkError = /dynamically imported module|Loading chunk|Importing a module script failed|Failed to fetch/i.test(errMsg);
       return (
         <div className="min-h-[400px] w-full flex items-center justify-center p-6 bg-slate-900/40 backdrop-blur-xs font-sans animate-fade-in">
           <div className="max-w-md w-full bg-slate-900 border border-amber-500/30 rounded-2xl p-6 shadow-2xl text-center space-y-4">
@@ -63,17 +87,19 @@ export class PortalErrorBoundary extends Component<Props, State> {
                 Resilient Fault Isolation
               </span>
               <h3 className="text-base font-bold text-white tracking-wide pt-1">
-                {name} Encountered a Temporary View Issue
+                {isNetworkOrChunkError ? `Refreshing ${name} Connection...` : `${name} Encountered a Temporary View Issue`}
               </h3>
               <p className="text-xs text-slate-400 leading-relaxed">
-                The rest of the application and your login session remain 100% active and secure. You can safely reset this section without losing your work.
+                {isNetworkOrChunkError
+                  ? "A new app update or temporary slow network interrupted module loading. Your session and data are 100% safe — click below to reload."
+                  : "The rest of the application and your login session remain 100% active and secure. You can safely reset this section without losing your work."}
               </p>
             </div>
 
             {this.state.error && (
               <div className="p-3 bg-slate-950/70 border border-slate-800 rounded-xl text-left">
                 <p className="text-[11px] font-mono text-amber-300/90 truncate">
-                  {this.state.error.message || String(this.state.error)}
+                  {errMsg}
                 </p>
               </div>
             )}
@@ -85,19 +111,24 @@ export class PortalErrorBoundary extends Component<Props, State> {
                 className="flex-1 py-2.5 px-4 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 text-white rounded-xl text-xs font-bold transition-all shadow-md active:scale-95 flex items-center justify-center gap-2 cursor-pointer"
               >
                 <RefreshCw size={14} />
-                <span>Recover This Section</span>
+                <span>{isNetworkOrChunkError ? "Reload Section Now" : "Recover This Section"}</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => {
                   try {
-                    window.location.hash = "";
-                    window.location.reload();
+                    if (typeof window !== "undefined") {
+                      if (typeof caches !== "undefined") {
+                        caches.keys().then(ks => Promise.all(ks.map(k => caches.delete(k)))).finally(() => window.location.reload());
+                      } else {
+                        window.location.reload();
+                      }
+                    }
                   } catch {}
                 }}
                 className="py-2.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl text-xs font-semibold transition-all border border-slate-700 active:scale-95 cursor-pointer"
-                title="Reload full page"
+                title="Clear stale cache and reload full page"
               >
                 Full Reload
               </button>

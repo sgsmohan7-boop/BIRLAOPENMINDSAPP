@@ -230,7 +230,7 @@ interface CounsellingPortalProps {
   standalone?: boolean;
   theme?: "light" | "dark";
   toggleTheme?: () => void;
-  onSyncRefresh?: () => void;
+  onSyncRefresh?: () => void | Promise<boolean | void>;
   isCloudSyncing?: boolean;
   lastCloudSyncAt?: string | null;
 }
@@ -829,6 +829,15 @@ export default function CounsellingPortal({
   const backfilledParentEntriesRef = React.useRef<Set<string>>(new Set());
   const firestoreParentsSyncedRef = React.useRef<boolean>(false);
   const lastParentSigRef = React.useRef<string>("");
+  const lastManualDeptRefreshAtRef = React.useRef<number>(0);
+
+  React.useEffect(() => {
+    const resetRefreshCooldown = () => {
+      lastManualDeptRefreshAtRef.current = 0;
+    };
+    window.addEventListener("online", resetRefreshCooldown);
+    return () => window.removeEventListener("online", resetRefreshCooldown);
+  }, []);
 
   const notifyParentEntriesChanged = React.useCallback((nextList: ParentSelfEntry[]) => {
     if (!onParentSelfEntriesChange) return;
@@ -873,7 +882,23 @@ export default function CounsellingPortal({
   }, []);
 
   const handleRefreshDept = async () => {
+    if (isRefreshingDept || isCloudSyncing) return;
+
+    const REFRESH_DEPT_COOLDOWN_MS = 30 * 1000;
+    const elapsedSinceLastSuccess = Date.now() - lastManualDeptRefreshAtRef.current;
+    if (lastManualDeptRefreshAtRef.current > 0 && elapsedSinceLastSuccess < REFRESH_DEPT_COOLDOWN_MS) {
+      const secsAgo = Math.max(1, Math.floor(elapsedSinceLastSuccess / 1000));
+      const waitSecs = Math.max(1, Math.ceil((REFRESH_DEPT_COOLDOWN_MS - elapsedSinceLastSuccess) / 1000));
+      setDeleteToast(`⚡ Cloud synced ${secsAgo}s ago — live updates arrive automatically! (Wait ${waitSecs}s)`);
+      setTimeout(() => {
+        setDeleteToast(null);
+      }, 2800);
+      return;
+    }
+
     setIsRefreshingDept(true);
+    let parentsPulled = !isFirebaseConfigured();
+    let enquiriesPulled = !onSyncRefresh;
 
     // 1. Authoritative server-fresh Firestore pull for ALL parent_self_entries (pending, claimed, completed, dismissed, skipped)
     if (isFirebaseConfigured()) {
@@ -881,6 +906,7 @@ export default function CounsellingPortal({
       try {
         const cloudEntries = await fetchCollectionDocs<ParentSelfEntry>("parent_self_entries", true);
         if (Array.isArray(cloudEntries)) {
+          parentsPulled = true;
           firestoreParentsSyncedRef.current = true;
           try {
             localStorage.removeItem("sgs_dismissed_parent_entries");
@@ -916,8 +942,14 @@ export default function CounsellingPortal({
 
     if (onSyncRefresh) {
       try {
-        await Promise.resolve(onSyncRefresh());
+        const synced = await Promise.resolve(onSyncRefresh());
+        enquiriesPulled = synced === true;
       } catch {}
+    }
+
+    const cloudPullSucceeded = parentsPulled && enquiriesPulled;
+    if (cloudPullSucceeded) {
+      lastManualDeptRefreshAtRef.current = Date.now();
     }
 
     const currentViewName = 
@@ -926,14 +958,18 @@ export default function CounsellingPortal({
       activeView === "accounts" ? "Counsellor Accounts" :
       activeView === "print" ? "Print Preview" : "Enquiries Dashboard";
 
-    setDeleteToast(`🔄 Cloud data synced from BOMISDATABASE! (Stayed on ${currentViewName})`);
+    setDeleteToast(
+      cloudPullSucceeded
+        ? `🔄 Cloud data synced from BOMISDATABASE! (Stayed on ${currentViewName})`
+        : `⚠️ Network slow or offline — could not reach cloud server. Please retry.`
+    );
 
     setTimeout(() => {
       setIsRefreshingDept(false);
     }, 600);
     setTimeout(() => {
       setDeleteToast(null);
-    }, 3500);
+    }, 3200);
   };
 
 

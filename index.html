@@ -63,20 +63,44 @@
           } catch(e) {}
           window.location.reload();
         }
-        // Auto-recover once if a stale cached HTML or outdated Vite dep fails module load
+        // Auto-recover once if a stale cached HTML, server-restart script blip, or outdated Vite dep fails module load
+        function showReloadPrompt() {
+          if (window.__APP_MOUNTED__) return;
+          var splash = document.getElementById('splash-screen');
+          if (!splash) return;
+          var sub = splash.querySelector('.splash-subtitle');
+          if (sub) sub.textContent = 'Taking longer than expected. Click below to refresh cleanly.';
+          if (!document.getElementById('splash-reload-btn')) {
+            var btn = document.createElement('button');
+            btn.id = 'splash-reload-btn';
+            btn.textContent = 'Reload Application';
+            btn.style.cssText = 'margin-top:16px;padding:10px 20px;background:#ea580c;color:#fff;border:none;border-radius:10px;font-weight:700;font-size:13px;cursor:pointer;';
+            btn.onclick = cleanReload;
+            splash.appendChild(btn);
+          }
+          if (window.__BOOT_ERRORS__ && window.__BOOT_ERRORS__.length > 0 && !document.getElementById('splash-error-log')) {
+            var errBox = document.createElement('pre');
+            errBox.id = 'splash-error-log';
+            errBox.textContent = window.__BOOT_ERRORS__.join('\n');
+            errBox.style.cssText = 'margin-top:14px;max-width:460px;max-height:120px;overflow:auto;padding:10px 12px;background:rgba(15,23,42,0.08);color:#b91c1c;border-radius:8px;font-size:11px;text-align:left;white-space:pre-wrap;word-break:break-word;';
+            splash.appendChild(errBox);
+          }
+        }
         function tryRecoverOnce(reason) {
           try {
             var msg = String(reason || '');
             if (msg && window.__BOOT_ERRORS__.indexOf(msg) === -1 && window.__BOOT_ERRORS__.length < 6) {
               window.__BOOT_ERRORS__.push(msg);
             }
-            if (/dynamically imported module|Loading chunk|Importing a module script failed|Failed to fetch|MIME type|Unexpected token '<|Outdated Optimize Dep|504/i.test(msg)) {
+            if (/Failed to load SCRIPT|dynamically imported module|Loading chunk|Importing a module script failed|Failed to fetch|MIME type|Unexpected token '<|Outdated Optimize Dep|504/i.test(msg)) {
               var key = 'bomis_chunk_recover_ts';
               var last = parseInt(sessionStorage.getItem(key) || '0', 10);
               if (!last || Date.now() - last > 15000) {
                 sessionStorage.setItem(key, String(Date.now()));
-                cleanReload();
+                setTimeout(cleanReload, 1200);
+                return;
               }
+              setTimeout(showReloadPrompt, 2000);
             }
           } catch(e) {}
         }
@@ -93,30 +117,8 @@
           var msg = (reason && (reason.message || String(reason))) || '';
           if (msg) tryRecoverOnce(msg);
         });
-        // If React hasn't mounted after 18s, offer a visible Reload button + show any captured boot error
-        setTimeout(function() {
-          if (window.__APP_MOUNTED__) return;
-          var splash = document.getElementById('splash-screen');
-          if (splash) {
-            var sub = splash.querySelector('.splash-subtitle');
-            if (sub) sub.textContent = 'Taking longer than expected. Click below to refresh cleanly.';
-            if (!document.getElementById('splash-reload-btn')) {
-              var btn = document.createElement('button');
-              btn.id = 'splash-reload-btn';
-              btn.textContent = 'Reload Application';
-              btn.style.cssText = 'margin-top:16px;padding:10px 20px;background:#ea580c;color:#fff;border:none;border-radius:10px;font-weight:700;font-size:13px;cursor:pointer;';
-              btn.onclick = cleanReload;
-              splash.appendChild(btn);
-            }
-            if (window.__BOOT_ERRORS__ && window.__BOOT_ERRORS__.length > 0 && !document.getElementById('splash-error-log')) {
-              var errBox = document.createElement('pre');
-              errBox.id = 'splash-error-log';
-              errBox.textContent = window.__BOOT_ERRORS__.join('\n');
-              errBox.style.cssText = 'margin-top:14px;max-width:460px;max-height:120px;overflow:auto;padding:10px 12px;background:rgba(15,23,42,0.08);color:#b91c1c;border-radius:8px;font-size:11px;text-align:left;white-space:pre-wrap;word-break:break-word;';
-              splash.appendChild(errBox);
-            }
-          }
-        }, 18000);
+        // If React hasn't mounted after 10s, offer a visible Reload button + show any captured boot error
+        setTimeout(showReloadPrompt, 10000);
       })();
     </script>
 
