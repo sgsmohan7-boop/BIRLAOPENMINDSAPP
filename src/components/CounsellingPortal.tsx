@@ -455,11 +455,9 @@ export default function CounsellingPortal({
 
   React.useEffect(() => {
     if (Array.isArray(parentSelfEntriesProp) && parentSelfEntriesProp.length > 0) {
-      setParentSelfEntries(prev => {
-        const combined = deduplicateParentEntries([...parentSelfEntriesProp, ...(prev || [])]);
-        saveParentSelfEntries(combined);
-        return combined;
-      });
+      const authoritative = deduplicateParentEntries(parentSelfEntriesProp);
+      saveParentSelfEntries(authoritative);
+      setParentSelfEntries(authoritative);
     }
   }, [parentSelfEntriesProp]);
 
@@ -824,6 +822,7 @@ export default function CounsellingPortal({
 
   const [isRefreshingDept, setIsRefreshingDept] = useState(false);
   const backfilledParentEntriesRef = React.useRef<Set<string>>(new Set());
+  const firestoreParentsSyncedRef = React.useRef<boolean>(false);
   const lastParentSigRef = React.useRef<string>("");
 
   const notifyParentEntriesChanged = React.useCallback((nextList: ParentSelfEntry[]) => {
@@ -852,7 +851,7 @@ export default function CounsellingPortal({
       const localRank = getParentEntryStatusRank(effectiveLocal.status);
       const cloudRank = getParentEntryStatusRank(cloudEntry?.status);
 
-      if (!cloudEntry || localRank > cloudRank) {
+      if (cloudEntry && localRank > cloudRank) {
         const sig = `${effectiveLocal.id}:${effectiveLocal.status || "pending"}`;
         if (!backfilledParentEntriesRef.current.has(sig)) {
           backfilledParentEntriesRef.current.add(sig);
@@ -886,23 +885,25 @@ export default function CounsellingPortal({
       } catch {}
     }
 
-    // 2. Authoritative Express API check (0 Firestore reads — syncs MongoDB & server entries immediately)
-    try {
-      const res = await fetch("/api/parent-self-entry");
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success && Array.isArray(json.entries)) {
-          let mergedOut: ParentSelfEntry[] | null = null;
-          setParentSelfEntries(prev => {
-            const combined = deduplicateParentEntries([...(prev || []), ...json.entries]);
-            saveParentSelfEntries(combined);
-            mergedOut = combined;
-            return combined;
-          });
-          if (mergedOut) notifyParentEntriesChanged(mergedOut);
+    // 2. Express API fallback (only merges if Firestore snapshot hasn't loaded yet)
+    if (!firestoreParentsSyncedRef.current) {
+      try {
+        const res = await fetch("/api/parent-self-entry");
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && Array.isArray(json.entries) && !firestoreParentsSyncedRef.current) {
+            let mergedOut: ParentSelfEntry[] | null = null;
+            setParentSelfEntries(prev => {
+              const combined = deduplicateParentEntries([...(prev || []), ...json.entries]);
+              saveParentSelfEntries(combined);
+              mergedOut = combined;
+              return combined;
+            });
+            if (mergedOut) notifyParentEntriesChanged(mergedOut);
+          }
         }
-      }
-    } catch {}
+      } catch {}
+    }
 
     if (onSyncRefresh) {
       try {
@@ -963,12 +964,16 @@ export default function CounsellingPortal({
             "parent_self_entries",
             (firestoreEntries: any[]) => {
               if (Array.isArray(firestoreEntries)) {
+                firestoreParentsSyncedRef.current = true;
                 setParentSelfEntries(prev => {
                   const currentLocal = prev || [];
                   pushUnsyncedParentEntriesToCloud(firestoreEntries, currentLocal);
-                  const combined = deduplicateParentEntries([...firestoreEntries, ...currentLocal]);
-                  saveParentSelfEntries(combined);
-                  return combined;
+                  // Treat Firestore snapshot as authoritative when non-empty so deleted/stale laptop caches cannot inflate counts
+                  const authoritative = firestoreEntries.length > 0
+                    ? deduplicateParentEntries(firestoreEntries)
+                    : deduplicateParentEntries(currentLocal);
+                  saveParentSelfEntries(authoritative);
+                  return authoritative;
                 });
               }
             },
@@ -1000,25 +1005,27 @@ export default function CounsellingPortal({
         }
       }
 
-      // 2. Express API check (0 Firestore reads — syncs entries submitted on server & MongoDB even during Firestore quota limits)
-      try {
-        const res = await fetch("/api/parent-self-entry");
-        if (res.ok) {
-          const json = await res.json();
-          if (json.success && Array.isArray(json.entries)) {
-            let nextCombined: ParentSelfEntry[] | null = null;
-            setParentSelfEntries(prev => {
-              const combined = deduplicateParentEntries([...(prev || []), ...json.entries]);
-              saveParentSelfEntries(combined);
-              nextCombined = combined;
-              return combined;
-            });
-            if (nextCombined) {
-              notifyParentEntriesChanged(nextCombined);
+      // 2. Express API fallback (only when Firestore realtime listener hasn't delivered authoritative state yet)
+      if (!firestoreParentsSyncedRef.current) {
+        try {
+          const res = await fetch("/api/parent-self-entry");
+          if (res.ok) {
+            const json = await res.json();
+            if (json.success && Array.isArray(json.entries) && !firestoreParentsSyncedRef.current) {
+              let nextCombined: ParentSelfEntry[] | null = null;
+              setParentSelfEntries(prev => {
+                const combined = deduplicateParentEntries([...(prev || []), ...json.entries]);
+                saveParentSelfEntries(combined);
+                nextCombined = combined;
+                return combined;
+              });
+              if (nextCombined) {
+                notifyParentEntriesChanged(nextCombined);
+              }
             }
           }
-        }
-      } catch {}
+        } catch {}
+      }
     };
 
     attachFirestoreListener();

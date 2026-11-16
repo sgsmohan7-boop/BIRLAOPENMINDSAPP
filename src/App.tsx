@@ -321,7 +321,7 @@ export default function App() {
         const pRes = await fetch("/api/parent-self-entry");
         if (pRes.ok) {
           const pJson = await pRes.json();
-          if (pJson.success && Array.isArray(pJson.entries) && active) {
+          if (pJson.success && Array.isArray(pJson.entries) && active && cloudParentsRef.current === null) {
             setParentSelfEntries(prev => {
               const map = new Map<string, ParentSelfEntry>();
               [...(prev || []), ...pJson.entries].forEach((e: ParentSelfEntry) => {

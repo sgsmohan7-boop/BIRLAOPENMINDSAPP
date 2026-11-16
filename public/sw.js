@@ -1,7 +1,7 @@
 // Birla Open Minds Progressive Web App Service Worker
-const CACHE_NAME = 'bomis-pwa-cache-v3';
+const CACHE_NAME = 'bomis-pwa-cache-v4';
 
-self.addEventListener('install', (event) => {
+self.addEventListener('install', () => {
   self.skipWaiting();
 });
 
@@ -16,10 +16,12 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // If in dev, preview or cloud run container, bypass service worker completely
+  // Never intercept dev/preview, APIs, HTML navigation, or external Google/Firestore traffic
   if (
     url.hostname.includes('run.app') ||
     url.hostname.includes('localhost') ||
+    url.hostname.includes('googleapis.com') ||
+    url.hostname.includes('firebaseio.com') ||
     url.pathname.startsWith('/src/') ||
     url.pathname.startsWith('/@') ||
     url.pathname.startsWith('/node_modules/') ||
@@ -30,8 +32,8 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Network-first for all other requests
+  // Strictly network-first for static assets only
   event.respondWith(
-    fetch(event.request).catch(() => caches.match(event.request))
+    fetch(event.request, { cache: 'no-store' }).catch(() => caches.match(event.request))
   );
 });

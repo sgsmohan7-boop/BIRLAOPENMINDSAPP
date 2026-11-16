@@ -18,10 +18,14 @@ export default defineConfig(() => {
     fs.copyFileSync(sourceIconPath, targetIconPath);
   }
 
+  const isProdBuild = process.env.NODE_ENV === 'production' || process.argv.includes('build');
+  const buildId = isProdBuild ? `prod-${Date.now()}` : 'dev-epoch';
+
   return {
     base: '/',
     define: {
-      'process.env.GOOGLE_MAPS_PLATFORM_KEY': JSON.stringify(process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_PLATFORM_KEY || 'AIzaSyBTrMUwQ5igCTHC5LTR9XQp8YSFlH2Acsw')
+      'process.env.GOOGLE_MAPS_PLATFORM_KEY': JSON.stringify(process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_PLATFORM_KEY || 'AIzaSyBTrMUwQ5igCTHC5LTR9XQp8YSFlH2Acsw'),
+      '__BOMIS_BUILD_ID__': JSON.stringify(buildId)
     },
     plugins: [react(), tailwindcss()],
     optimizeDeps: {
