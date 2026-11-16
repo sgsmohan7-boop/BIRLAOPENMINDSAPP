@@ -7,10 +7,12 @@ const DATA_CACHE_KEYS = [
   "it_command_counselling_forms",
   "sgs_parent_self_entries",
   "parent_self_entries",
+  "sgs_deleted_enquiry_ids",
   "sgs_deleted_enquiries",
   "sgs_archived_dismissed_entries",
   "sgs_dismissed_parent_entries",
   "it_command_center_data",
+  "it_command_counsellor_accounts",
   "sgs_counsellor_accounts",
   "sgs_management_accounts",
   "sgs_it_staff_accounts",
@@ -27,7 +29,7 @@ const DATA_CACHE_KEYS = [
 ];
 
 // Manual schema bump for dev + automatic per-build ID in production (vite.config.ts)
-const SCHEMA_EPOCH = "v2026_11_16_bomis_01";
+const SCHEMA_EPOCH = "v2026_11_16_bomis_02";
 
 export function runCacheEpochGuard(): void {
   if (typeof window === "undefined") return;

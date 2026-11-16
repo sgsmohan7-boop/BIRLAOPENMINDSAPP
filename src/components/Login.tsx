@@ -31,7 +31,7 @@ import {
   Sliders,
   Globe
 } from "lucide-react";
-import { collection, getDocs } from "firebase/firestore";
+import { collection, getDocs, getDocsFromServer } from "firebase/firestore";
 import { SchoolBranch, COUNSELLORS_LIST, CounsellorProfile, CounsellorAccount, ManagementAccount, loadManagementAccounts, saveManagementAccounts, mergeWithDefaultManagementAccounts, ITStaffAccount } from "../types";
 import { signInAsDesktopUser, loginWithEmail, getUserIAMRole, isFirebaseConfigured, isFirestoreQuotaExhausted, db } from "../utils/firebase";
 import { loadCounsellorAccounts, saveCounsellorAccounts, mergeWithDefaultCounsellorAccounts, getDeletedCounsellorAccountIds, recordDeletedCounsellorAccountIds, loadITStaffAccounts, saveITStaffAccounts, mergeWithDefaultITStaffAccounts } from "../utils/storage";
@@ -759,11 +759,36 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
       return accList.find(a => (a.id || "").toLowerCase().replace(/[^a-z0-9]/g, "") === uNorm);
     };
 
-    // 1. Search in live state and localStorage
-    const localCounsellors = loadCounsellorAccounts();
-    let found = matchAccount([...activeCounsellorAccounts, ...localCounsellors]);
+    // 1. Always fetch latest counsellor_accounts from Firestore server first (with 1.8s guard) so password updates & profiles match across laptops
+    let found: CounsellorAccount | undefined;
+    if (isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
+      try {
+        const snap = await Promise.race([
+          getDocsFromServer(collection(db, "counsellor_accounts")),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 1800))
+        ]);
+        if (snap && "forEach" in snap) {
+          const fsItems: CounsellorAccount[] = [];
+          snap.forEach(d => fsItems.push({ id: d.id, ...d.data() } as CounsellorAccount));
+          if (fsItems.length > 0) {
+            const merged = mergeWithDefaultCounsellorAccounts(fsItems);
+            setLiveCounsellorAccounts(merged);
+            saveCounsellorAccounts(merged);
+            found = matchAccount(merged);
+          }
+        }
+      } catch (err) {
+        console.warn("Firestore live counsellor accounts query notice:", err);
+      }
+    }
 
-    // 2. Query live server repo if not found locally
+    // 2. Fall back to live state and localStorage if offline or not found
+    if (!found) {
+      const localCounsellors = loadCounsellorAccounts();
+      found = matchAccount([...activeCounsellorAccounts, ...localCounsellors]);
+    }
+
+    // 3. Query local server repo if still not found
     if (!found) {
       try {
         const res = await fetch("/api/accounts");
@@ -782,7 +807,7 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
       }
     }
 
-    // 3. Query Firestore directly if configured
+    // 4. Cached Firestore query fallback if server call timed out
     if (!found && isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
       try {
         const snap = await getDocs(collection(db, "counsellor_accounts"));

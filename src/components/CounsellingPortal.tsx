@@ -123,12 +123,12 @@ function getParentEntryStatusRank(status?: string): number {
   return 0;
 }
 
-function deduplicateParentEntries(entries: ParentSelfEntry[]): ParentSelfEntry[] {
-  const globalDismissedSet = new Set(getDismissedParentEntryIds());
+function deduplicateParentEntries(entries: ParentSelfEntry[], treatFirestoreAuthoritative = false): ParentSelfEntry[] {
+  const globalDismissedSet = treatFirestoreAuthoritative ? new Set<string>() : new Set(getDismissedParentEntryIds());
   const map = new Map<string, ParentSelfEntry>();
   for (const rawItem of entries) {
     if (!rawItem || !rawItem.id) continue;
-    // Never mutate source objects in place; enforce global dismissed state cleanly
+    // Never mutate source objects in place; enforce global dismissed state cleanly when offline/local-only
     const item: ParentSelfEntry = globalDismissedSet.has(rawItem.id)
       ? { ...rawItem, status: "dismissed" }
       : { ...rawItem };
@@ -231,6 +231,8 @@ interface CounsellingPortalProps {
   theme?: "light" | "dark";
   toggleTheme?: () => void;
   onSyncRefresh?: () => void;
+  isCloudSyncing?: boolean;
+  lastCloudSyncAt?: string | null;
 }
 
 const CLASS_OPTIONS = [
@@ -406,7 +408,9 @@ export default function CounsellingPortal({
   counsellorAccounts,
   onSaveCounsellorAccount,
   onDeleteCounsellorAccount,
-  onSyncRefresh
+  onSyncRefresh,
+  isCloudSyncing = false,
+  lastCloudSyncAt = null
 }: CounsellingPortalProps) {
   const [activeView, setActiveView] = useState<"list" | "form" | "print" | "accounts" | "audio-desk">("list");
   const [searchQuery, setSearchQuery] = useState("");
@@ -416,6 +420,7 @@ export default function CounsellingPortal({
   const [filterAuditStatus, setFilterAuditStatus] = useState<string>("ALL");
   const [filterDate, setFilterDate] = useState<string>("");
   const [filterDatePreset, setFilterDatePreset] = useState<"ALL" | "TODAY" | "YESTERDAY" | "custom">("ALL");
+  const [filterAcademicYear, setFilterAcademicYear] = useState<string>("ALL");
   const [adminFilterCounsellor, setAdminFilterCounsellor] = useState<string>("ALL");
   const [selectedEnquiry, setSelectedEnquiry] = useState<CounsellingEnquiry | null>(null);
   const [inspectingEnquiry, setInspectingEnquiry] = useState<CounsellingEnquiry | null>(null);
@@ -454,8 +459,8 @@ export default function CounsellingPortal({
   );
 
   React.useEffect(() => {
-    if (Array.isArray(parentSelfEntriesProp) && parentSelfEntriesProp.length > 0) {
-      const authoritative = deduplicateParentEntries(parentSelfEntriesProp);
+    if (Array.isArray(parentSelfEntriesProp) && (parentSelfEntriesProp.length > 0 || firestoreParentsSyncedRef.current)) {
+      const authoritative = deduplicateParentEntries(parentSelfEntriesProp, true);
       saveParentSelfEntries(authoritative);
       setParentSelfEntries(authoritative);
     }
@@ -870,17 +875,21 @@ export default function CounsellingPortal({
   const handleRefreshDept = async () => {
     setIsRefreshingDept(true);
 
-    // 1. Scoped Firestore pull for ONLY pending parent_self_entries (minimal daily read usage)
+    // 1. Authoritative server-fresh Firestore pull for ALL parent_self_entries (pending, claimed, completed, dismissed, skipped)
     if (isFirebaseConfigured()) {
       clearQuotaExhausted();
       try {
-        const cloudEntries = await fetchPendingParentEntriesFromFirestore<ParentSelfEntry>();
+        const cloudEntries = await fetchCollectionDocs<ParentSelfEntry>("parent_self_entries", true);
         if (Array.isArray(cloudEntries)) {
+          firestoreParentsSyncedRef.current = true;
+          try {
+            localStorage.removeItem("sgs_dismissed_parent_entries");
+          } catch {}
           pushUnsyncedParentEntriesToCloud(cloudEntries, parentSelfEntries || []);
-          const combined = deduplicateParentEntries([...cloudEntries, ...(parentSelfEntries || [])]);
-          saveParentSelfEntries(combined);
-          setParentSelfEntries(combined);
-          notifyParentEntriesChanged(combined);
+          const authoritative = deduplicateParentEntries(cloudEntries, true);
+          saveParentSelfEntries(authoritative);
+          setParentSelfEntries(authoritative);
+          notifyParentEntriesChanged(authoritative);
         }
       } catch {}
     }
@@ -917,11 +926,11 @@ export default function CounsellingPortal({
       activeView === "accounts" ? "Counsellor Accounts" :
       activeView === "print" ? "Print Preview" : "Enquiries Dashboard";
 
-    setDeleteToast(`🔄 Department data refreshed! (Stayed on ${currentViewName})`);
+    setDeleteToast(`🔄 Cloud data synced from BOMISDATABASE! (Stayed on ${currentViewName})`);
 
     setTimeout(() => {
       setIsRefreshingDept(false);
-    }, 800);
+    }, 600);
     setTimeout(() => {
       setDeleteToast(null);
     }, 3500);
@@ -962,16 +971,27 @@ export default function CounsellingPortal({
         try {
           unsubscribeFirestore = syncCollection(
             "parent_self_entries",
-            (firestoreEntries: any[]) => {
+            (firestoreEntries: any[], meta?: { fromCache?: boolean }) => {
               if (Array.isArray(firestoreEntries)) {
-                firestoreParentsSyncedRef.current = true;
+                if (meta?.fromCache && firestoreParentsSyncedRef.current) {
+                  // Already holding server-verified state; never regress to stale cache
+                  return;
+                }
+                if (!meta?.fromCache) {
+                  firestoreParentsSyncedRef.current = true;
+                  try {
+                    localStorage.removeItem("sgs_dismissed_parent_entries");
+                  } catch {}
+                }
+
                 setParentSelfEntries(prev => {
                   const currentLocal = prev || [];
-                  pushUnsyncedParentEntriesToCloud(firestoreEntries, currentLocal);
-                  // Treat Firestore snapshot as authoritative when non-empty so deleted/stale laptop caches cannot inflate counts
+                  if (!meta?.fromCache) {
+                    pushUnsyncedParentEntriesToCloud(firestoreEntries, currentLocal);
+                  }
                   const authoritative = firestoreEntries.length > 0
-                    ? deduplicateParentEntries(firestoreEntries)
-                    : deduplicateParentEntries(currentLocal);
+                    ? deduplicateParentEntries(firestoreEntries, true)
+                    : deduplicateParentEntries(currentLocal, Boolean(firestoreParentsSyncedRef.current));
                   saveParentSelfEntries(authoritative);
                   return authoritative;
                 });
@@ -988,18 +1008,18 @@ export default function CounsellingPortal({
     const fetchServerEntries = async (includeFirestoreCheck = false) => {
       if (typeof document !== "undefined" && document.hidden) return;
 
-      // 1. Ensure self-healing real-time onSnapshot listener is attached; only run one-off Firestore query when explicitly requested
+      // 1. Ensure self-healing real-time onSnapshot listener is attached; only run server query when explicitly requested
       if (isFirebaseConfigured()) {
         attachFirestoreListener();
         if (includeFirestoreCheck && !isFirestoreQuotaExhausted()) {
           try {
-            const pendingCloud = await fetchPendingParentEntriesFromFirestore<ParentSelfEntry>();
-            if (Array.isArray(pendingCloud) && pendingCloud.length > 0) {
-              setParentSelfEntries(prev => {
-                const combined = deduplicateParentEntries([...pendingCloud, ...(prev || [])]);
-                saveParentSelfEntries(combined);
-                return combined;
-              });
+            const serverEntries = await fetchCollectionDocs<ParentSelfEntry>("parent_self_entries", true);
+            if (Array.isArray(serverEntries)) {
+              firestoreParentsSyncedRef.current = true;
+              const authoritative = deduplicateParentEntries(serverEntries, true);
+              saveParentSelfEntries(authoritative);
+              setParentSelfEntries(authoritative);
+              notifyParentEntriesChanged(authoritative);
             }
           } catch {}
         }
@@ -1031,12 +1051,26 @@ export default function CounsellingPortal({
     attachFirestoreListener();
     fetchServerEntries(false);
 
-    // Express server poll fallback (zero Firestore read cost — keeps parent QR tickets flowing 24/7)
+    // Express server poll fallback (zero Firestore read cost — keeps parent QR tickets flowing when offline)
     const interval = setInterval(() => fetchServerEntries(false), 8000);
 
     const handleRealtimeEntry = (evt?: any) => {
-      const localStored = loadParentSelfEntries();
       const incoming = evt?.detail || evt?.entry;
+      if (firestoreParentsSyncedRef.current) {
+        if (incoming && incoming.id) {
+          let nextCombined: ParentSelfEntry[] | null = null;
+          setParentSelfEntries(prev => {
+            const combined = deduplicateParentEntries([incoming, ...(prev || [])], true);
+            saveParentSelfEntries(combined);
+            nextCombined = combined;
+            return combined;
+          });
+          if (nextCombined) notifyParentEntriesChanged(nextCombined);
+        }
+        return;
+      }
+
+      const localStored = loadParentSelfEntries();
       if (incoming || localStored.length > 0) {
         let nextCombined: ParentSelfEntry[] | null = null;
         setParentSelfEntries(prev => {
@@ -1052,6 +1086,7 @@ export default function CounsellingPortal({
     };
 
     const handleStorageSync = (evt: StorageEvent) => {
+      if (firestoreParentsSyncedRef.current) return;
       if (evt.key && evt.key !== "sgs_parent_self_entries") return;
       const localStored = loadParentSelfEntries();
       if (localStored.length > 0) {
@@ -1104,12 +1139,21 @@ export default function CounsellingPortal({
     };
   }, []);
 
+  const isSkippedForCounsellor = (e: ParentSelfEntry, counsellorId?: string): boolean => {
+    if (!e || !counsellorId) return false;
+    const targetLower = counsellorId.trim().toLowerCase();
+    return Array.isArray(e.skippedByCounsellorIds) && e.skippedByCounsellorIds.some(
+      (id) => String(id || "").trim().toLowerCase() === targetLower
+    );
+  };
+
   // 1. Reception Walk-in Queue (Strictly In-Person Visits with Daily Tokens)
   const pendingParentEntries = useMemo(() => {
     const counsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR";
-    const dismissedSet = new Set(getDismissedParentEntryIds(counsellorId));
+    const useLocalDismissFallback = !firestoreParentsSyncedRef.current;
+    const dismissedSet = useLocalDismissFallback ? new Set(getDismissedParentEntryIds(counsellorId)) : new Set<string>();
     return (parentSelfEntries || [])
-      .filter(e => (!e.status || e.status === "pending") && e.enquiryType !== "online" && !dismissedSet.has(e.id))
+      .filter(e => (!e.status || e.status === "pending") && e.enquiryType !== "online" && !dismissedSet.has(e.id) && !isSkippedForCounsellor(e, counsellorId))
       .sort((a, b) => {
         const aDate = a.dateKey || a.entryDate || (a.formattedDate ? a.formattedDate.split(" ")[0] : "");
         const bDate = b.dateKey || b.entryDate || (b.formattedDate ? b.formattedDate.split(" ")[0] : "");
@@ -1123,34 +1167,38 @@ export default function CounsellingPortal({
   // 2. Online Leads Pool (Remote / Website / WhatsApp QR Enquiries with ONL-YYYY-XX numbers)
   const pendingOnlineEntries = useMemo(() => {
     const counsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR";
-    const dismissedSet = new Set(getDismissedParentEntryIds(counsellorId));
+    const useLocalDismissFallback = !firestoreParentsSyncedRef.current;
+    const dismissedSet = useLocalDismissFallback ? new Set(getDismissedParentEntryIds(counsellorId)) : new Set<string>();
     return (parentSelfEntries || [])
-      .filter(e => e.status === "pending" && e.enquiryType === "online" && !dismissedSet.has(e.id))
+      .filter(e => e.status === "pending" && e.enquiryType === "online" && !dismissedSet.has(e.id) && !isSkippedForCounsellor(e, counsellorId))
       .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
   }, [parentSelfEntries, activeCounsellor, counsellorDismissVersion]);
 
-  // 3. Dismissed Leads & Tokens Archive (Synced globally via Firestore + isolated per-counsellor for personal skips)
+  // 3. Dismissed Leads & Tokens Archive (100% Cloud-Authoritative via Firestore when synced, with offline local archive fallback)
   const dismissedParentEntries = useMemo(() => {
     const counsellorId = activeCounsellor ? activeCounsellor.id : undefined;
     const counsellorIdLower = (counsellorId || "").trim().toLowerCase();
-    const dismissedIds = new Set(getDismissedParentEntryIds(counsellorId));
-    const globalDismissedIds = new Set(getDismissedParentEntryIds());
-    const archivedFromDisk = loadDismissedParentEntries();
+    const useLocalDismissFallback = !firestoreParentsSyncedRef.current;
+    const dismissedIds = useLocalDismissFallback ? new Set(getDismissedParentEntryIds(counsellorId)) : new Set<string>();
     const map = new Map<string, ParentSelfEntry>();
 
-    // Seed from archived disk entries without leaking another counsellor's personal skip on shared browsers
-    archivedFromDisk.forEach(e => {
-      if (!e || !e.id) return;
-      const isGlobalDismiss = e.status === "dismissed" || globalDismissedIds.has(e.id);
-      const isOwnSkip = !counsellorIdLower || dismissedIds.has(e.id) || (e.dismissedById || "").trim().toLowerCase() === counsellorIdLower;
-      if (isGlobalDismiss || isOwnSkip) {
-        map.set(e.id, { ...e, status: "dismissed" });
-      }
-    });
+    // Only consult disk archive if Firestore hasn't synced yet (prevents stale per-laptop Dismissed (7) divergence)
+    if (useLocalDismissFallback) {
+      const globalDismissedIds = new Set(getDismissedParentEntryIds());
+      const archivedFromDisk = loadDismissedParentEntries();
+      archivedFromDisk.forEach(e => {
+        if (!e || !e.id) return;
+        const isGlobalDismiss = e.status === "dismissed" || globalDismissedIds.has(e.id);
+        const isOwnSkip = !counsellorIdLower || dismissedIds.has(e.id) || isSkippedForCounsellor(e, counsellorId) || (e.dismissedById || "").trim().toLowerCase() === counsellorIdLower;
+        if (isGlobalDismiss || isOwnSkip) {
+          map.set(e.id, { ...e, status: "dismissed" });
+        }
+      });
+    }
 
-    // Seed from Firestore-synced parentSelfEntries with global dismissed status or personal skip
+    // Seed authoritatively from Firestore-synced parentSelfEntries
     (parentSelfEntries || []).forEach(e => {
-      if (e && e.id && (e.status === "dismissed" || dismissedIds.has(e.id))) {
+      if (e && e.id && (e.status === "dismissed" || dismissedIds.has(e.id) || isSkippedForCounsellor(e, counsellorId))) {
         map.set(e.id, { ...e, status: "dismissed" });
       }
     });
@@ -1253,31 +1301,55 @@ export default function CounsellingPortal({
     }).catch(() => {});
   };
 
-  // 1. Skip for My Profile (Keeps token active & waiting for other counsellors!)
-  const handleSkipForMyProfile = (entryId: string) => {
+  // 1. Skip for My Profile (Keeps token active & waiting for other counsellors, synced across all devices for THIS counsellor)
+  const handleSkipForMyProfile = async (entryId: string) => {
     const counsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR";
     const counsellorName = activeCounsellor ? activeCounsellor.name : "Admissions Desk";
     
-    // Save to this counsellor's personal dismissed list only
+    // Save locally and also persist per-counsellor skip list to Firestore so other laptops hide it for this account
     recordDismissedParentEntryId(entryId, counsellorId);
 
     const nowStr = new Date().toISOString();
     const target = parentSelfEntries.find(e => e.id === entryId);
+    const existingSkips = Array.isArray(target?.skippedByCounsellorIds) ? target!.skippedByCounsellorIds : [];
+    const nextSkipped = Array.from(
+      new Set([
+        ...existingSkips.filter((id) => String(id || "").trim().toLowerCase() !== counsellorId.trim().toLowerCase()),
+        counsellorId
+      ])
+    );
+
     if (target) {
       const skippedItem: ParentSelfEntry = {
         ...target,
         dismissedBy: counsellorName,
         dismissedById: counsellorId,
         dismissedAt: nowStr,
-        dismissedReason: `Skipped by ${counsellorName} (Still waiting for other counsellors)`
+        dismissedReason: `Skipped by ${counsellorName} (Still waiting for other counsellors)`,
+        skippedByCounsellorIds: nextSkipped
       };
       saveDismissedParentEntry(skippedItem);
+
+      const updated = parentSelfEntries.map(e =>
+        e.id === entryId ? { ...e, skippedByCounsellorIds: nextSkipped } : e
+      );
+      setParentSelfEntries(updated);
+      saveParentSelfEntries(updated);
+      notifyParentEntriesChanged(updated);
     }
 
     // Force queue refresh for this counsellor
     setCounsellorDismissVersion(v => v + 1);
 
-    setDeleteToast(`✓ Token #${target?.dailyTokenNo || ""} hidden from your queue. Still ACTIVE for other counsellors.`);
+    try {
+      if (isFirebaseConfigured()) {
+        await saveDocument("parent_self_entries", entryId, {
+          skippedByCounsellorIds: nextSkipped
+        });
+      }
+    } catch {}
+
+    setDeleteToast(`✓ Token #${target?.dailyTokenNo || ""} hidden from your profile across all devices. Still ACTIVE for other counsellors.`);
     setTimeout(() => setDeleteToast(null), 4000);
   };
 
@@ -1384,13 +1456,22 @@ export default function CounsellingPortal({
     unrecordDismissedParentEntryId(entry.id, counsellorId);
     removeDismissedParentEntryFromArchive(entry.id);
 
+    const existingEntry = parentSelfEntries.find(e => e.id === entry.id) || entry;
+    const counsellorIdLower = (counsellorId || "").trim().toLowerCase();
+    const nextSkipped = Array.isArray(existingEntry.skippedByCounsellorIds)
+      ? existingEntry.skippedByCounsellorIds.filter(
+          (id) => String(id || "").trim().toLowerCase() !== counsellorIdLower
+        )
+      : [];
+
     const updated = parentSelfEntries.map(e => e.id === entry.id ? {
       ...e,
       status: "pending" as const,
       dismissedBy: undefined,
       dismissedById: undefined,
       dismissedAt: undefined,
-      dismissedReason: undefined
+      dismissedReason: undefined,
+      skippedByCounsellorIds: nextSkipped
     } : e);
     setParentSelfEntries(updated);
     saveParentSelfEntries(updated);
@@ -1404,7 +1485,8 @@ export default function CounsellingPortal({
           dismissedBy: null,
           dismissedById: null,
           dismissedAt: null,
-          dismissedReason: null
+          dismissedReason: null,
+          skippedByCounsellorIds: nextSkipped
         });
       }
     } catch {}
@@ -3084,6 +3166,21 @@ export default function CounsellingPortal({
     }
   };
 
+  // Dynamic Academic Year breakdown across active counsellor/admin scope
+  const academicYearOptions = useMemo(() => {
+    const counts = new Map<string, number>([
+      ["2026-2027", 0],
+      ["2027-2028", 0],
+    ]);
+    counsellorScopeEnquiries.forEach(item => {
+      const ay = (item.academicYear || "").trim() || "2026-2027";
+      counts.set(ay, (counts.get(ay) || 0) + 1);
+    });
+    return Array.from(counts.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([year, count]) => ({ year, count }));
+  }, [counsellorScopeEnquiries]);
+
   // Filtered list
   const filteredEnquiries = useMemo(() => {
     return counsellorScopeEnquiries.filter(item => {
@@ -3101,6 +3198,8 @@ export default function CounsellingPortal({
 
       const matchStatus = filterStatus === "ALL" || item.admissionStatus === filterStatus;
       const matchClass = filterClass === "ALL" || item.applyingForClass === filterClass;
+      const itemAcademicYear = (item.academicYear || "").trim() || "2026-2027";
+      const matchAcademicYear = filterAcademicYear === "ALL" || itemAcademicYear === filterAcademicYear;
 
       const matchAudit = filterAuditStatus === "ALL" ||
         (filterAuditStatus === "WITH_AUDIO" && !!item.audioRecording) ||
@@ -3129,9 +3228,9 @@ export default function CounsellingPortal({
           Boolean((item as any).entryDate === filterDmy);
       }
 
-      return matchQuery && matchStatus && matchClass && matchAudit && matchChannel && matchDate;
+      return matchQuery && matchStatus && matchClass && matchAcademicYear && matchAudit && matchChannel && matchDate;
     });
-  }, [counsellorScopeEnquiries, searchQuery, filterStatus, filterChannel, filterClass, filterAuditStatus, filterDate]);
+  }, [counsellorScopeEnquiries, searchQuery, filterStatus, filterChannel, filterClass, filterAcademicYear, filterAuditStatus, filterDate]);
 
   // Statistics for active scope
   const stats = useMemo(() => {
@@ -3987,15 +4086,35 @@ Warm regards,
               <span>Home</span>
             </button>
 
+            <div
+              className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-bold border ${
+                isCloudSyncing || isRefreshingDept
+                  ? "bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-700"
+                  : "bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-700"
+              }`}
+              title={
+                isCloudSyncing || isRefreshingDept
+                  ? "Fetching latest cloud records from BOMISDATABASE..."
+                  : `Synced cleanly with BOMISDATABASE${lastCloudSyncAt ? ` at ${lastCloudSyncAt}` : ""}`
+              }
+            >
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  isCloudSyncing || isRefreshingDept ? "bg-amber-500 animate-ping" : "bg-emerald-500"
+                }`}
+              />
+              <span>{isCloudSyncing || isRefreshingDept ? "Syncing Cloud..." : "Cloud Live"}</span>
+            </div>
+
             <button
               type="button"
               onClick={handleRefreshDept}
-              disabled={isRefreshingDept}
+              disabled={isRefreshingDept || isCloudSyncing}
               className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-extrabold transition-all shadow cursor-pointer active:scale-95 disabled:opacity-60"
-              title="Refresh Counselling Department Data & Stay on Page"
+              title="Force Fresh Pull from Cloud Database (Stay on Page)"
             >
-              <RefreshCw size={14} className={isRefreshingDept ? "animate-spin text-emerald-200" : ""} />
-              <span>{isRefreshingDept ? "Refreshing..." : "Refresh Dept"}</span>
+              <RefreshCw size={14} className={isRefreshingDept || isCloudSyncing ? "animate-spin text-emerald-200" : ""} />
+              <span>{isRefreshingDept || isCloudSyncing ? "Syncing..." : "Refresh Dept"}</span>
             </button>
 
             {toggleTheme && (
@@ -6204,6 +6323,25 @@ Warm regards,
                 </div>
               )}
 
+              {/* Academic Year Filter (All Years default so nothing is hidden) */}
+              <select
+                value={filterAcademicYear}
+                onChange={(e) => setFilterAcademicYear(e.target.value)}
+                className={`border rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-orange-500 shrink-0 cursor-pointer transition-all ${
+                  filterAcademicYear !== "ALL"
+                    ? "bg-orange-50 dark:bg-orange-950/60 border-orange-400 dark:border-orange-700 text-orange-800 dark:text-orange-200"
+                    : "bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300"
+                }`}
+                title="Filter Enquiries by Academic Year"
+              >
+                <option value="ALL">🎓 All Years ({counsellorScopeEnquiries.length})</option>
+                {academicYearOptions.map(({ year, count }) => (
+                  <option key={year} value={year}>
+                    AY {year} ({count})
+                  </option>
+                ))}
+              </select>
+
               {/* Channel Filter: All Channels vs Walk-in vs Online */}
               <select
                 value={filterChannel}
@@ -6429,9 +6567,11 @@ Warm regards,
                       <p className="font-semibold text-slate-700 dark:text-slate-300">
                         {filterDate
                           ? `No enquiries found registered on ${filterDate.split("-").reverse().join("-")}.`
-                          : userRole === "Counsellor"
-                            ? `No enquiries registered for ${activeCounsellor?.name || "your account"} yet.`
-                            : "No counselling enquiries found matching the selected filters."}
+                          : filterAcademicYear !== "ALL"
+                            ? `No enquiries found for Academic Year ${filterAcademicYear} with current filters.`
+                            : userRole === "Counsellor"
+                              ? `No enquiries registered for ${activeCounsellor?.name || "your account"} yet.`
+                              : "No counselling enquiries found matching the selected filters."}
                       </p>
                       {filterDate ? (
                         <button
@@ -6443,6 +6583,14 @@ Warm regards,
                           className="mt-3 px-3.5 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-xs shadow-sm transition-all cursor-pointer"
                         >
                           Clear Date Filter (Show All Dates)
+                        </button>
+                      ) : filterAcademicYear !== "ALL" ? (
+                        <button
+                          type="button"
+                          onClick={() => setFilterAcademicYear("ALL")}
+                          className="mt-3 px-3.5 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-xl font-bold text-xs shadow-sm transition-all cursor-pointer"
+                        >
+                          Show All Academic Years
                         </button>
                       ) : (
                         <button 

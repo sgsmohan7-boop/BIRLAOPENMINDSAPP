@@ -420,24 +420,30 @@ export function markWriteQuotaExhausted(durationMs = 60000) {
   }
 }
 
+export type CollectionSyncMeta = {
+  fromCache: boolean;
+  hasPendingWrites: boolean;
+};
+
 type SharedCollectionEntry = {
-  subscribers: Set<(data: any[]) => void>;
+  subscribers: Set<(data: any[], meta?: CollectionSyncMeta) => void>;
   unsub: (() => void) | null;
   reconnectTimer: ReturnType<typeof setTimeout> | null;
   lastCloudData: any[] | null;
+  lastMeta: CollectionSyncMeta;
 };
 
 const sharedCollectionListeners = new Map<string, SharedCollectionEntry>();
 
-// Real-Time Syncing Helpers with Multiplexed Listeners & Calm Backoff
+// Real-Time Syncing Helpers with Multiplexed Listeners, Cache Metadata & Calm Backoff
 export function syncCollection<T>(
   collectionName: string,
-  onUpdate: (data: T[]) => void,
+  onUpdate: (data: T[], meta?: CollectionSyncMeta) => void,
   fallbackData: T[]
 ): () => void {
   if (!isFirebaseConfigured() || !isAllowedFirestoreCollection(collectionName)) {
     if (fallbackData && fallbackData.length > 0) {
-      onUpdate(fallbackData);
+      onUpdate(fallbackData, { fromCache: true, hasPendingWrites: false });
     }
     return () => {};
   }
@@ -448,19 +454,20 @@ export function syncCollection<T>(
       subscribers: new Set(),
       unsub: null,
       reconnectTimer: null,
-      lastCloudData: null
+      lastCloudData: null,
+      lastMeta: { fromCache: true, hasPendingWrites: false }
     };
     sharedCollectionListeners.set(collectionName, entry);
   }
 
-  const wrappedCallback = onUpdate as (data: any[]) => void;
+  const wrappedCallback = onUpdate as (data: any[], meta?: CollectionSyncMeta) => void;
   entry.subscribers.add(wrappedCallback);
 
   // Deliver already-synced cloud data immediately if available, else initial fallback once
   if (entry.lastCloudData !== null) {
-    wrappedCallback(entry.lastCloudData);
+    wrappedCallback(entry.lastCloudData, entry.lastMeta);
   } else if (fallbackData && fallbackData.length > 0) {
-    wrappedCallback(fallbackData);
+    wrappedCallback(fallbackData, { fromCache: true, hasPendingWrites: false });
   }
 
   const scheduleReconnect = (delayMs: number) => {
@@ -487,6 +494,7 @@ export function syncCollection<T>(
     const colRef = collection(db, collectionName);
     current.unsub = onSnapshot(
       colRef,
+      { includeMetadataChanges: true },
       (snapshot) => {
         const latest = sharedCollectionListeners.get(collectionName);
         if (!latest || latest.subscribers.size === 0) return;
@@ -495,10 +503,15 @@ export function syncCollection<T>(
         snapshot.forEach((d) => {
           items.push({ id: d.id, ...d.data() });
         });
+        const meta: CollectionSyncMeta = {
+          fromCache: Boolean(snapshot.metadata?.fromCache),
+          hasPendingWrites: Boolean(snapshot.metadata?.hasPendingWrites)
+        };
         latest.lastCloudData = items;
+        latest.lastMeta = meta;
         latest.subscribers.forEach((cb) => {
           try {
-            cb(items);
+            cb(items, meta);
           } catch (cbErr) {
             console.warn(`Subscriber error on ${collectionName}:`, cbErr);
           }
@@ -667,41 +680,87 @@ export function prepareEnquiryForFirestore(targetEnquiry: CounsellingEnquiry): a
   return firestoreEnquiry;
 }
 
-// Fetch documents from Firestore (uses smart SDK cache+live connection by default; forceRetry forces server fetch only when read quota is not exhausted)
+const inFlightServerFetches = new Map<string, Promise<any[] | null>>();
+const recentServerFetchCache = new Map<string, { ts: number; data: any[] }>();
+
+// Fetch documents from Firestore (forceRetry = true bypasses IndexedDB local cache and queries live server, deduplicated within 5s)
 export async function fetchCollectionDocs<T>(collectionName: string, forceRetry = false): Promise<T[] | null> {
   if (!isFirebaseConfigured()) return null;
   if (isFirestoreReadQuotaExhausted()) return null;
-  const colRef = collection(db, collectionName);
-  try {
-    try {
-      enableNetwork(db).catch(() => {});
-    } catch {}
-    const snap = forceRetry ? await getDocsFromServer(colRef) : await getDocs(colRef);
-    clearQuotaExhausted();
-    const items: T[] = [];
-    snap.forEach((d) => {
-      items.push({ id: d.id, ...d.data() } as T);
-    });
-    return items;
-  } catch (serverErr: any) {
-    if (isQuotaError(serverErr)) {
-      markQuotaExhausted(300000);
-      return null;
+
+  if (forceRetry) {
+    const recent = recentServerFetchCache.get(collectionName);
+    if (recent && Date.now() - recent.ts < 5000) {
+      return recent.data as T[];
     }
-    if (forceRetry) {
+    const existingFlight = inFlightServerFetches.get(collectionName);
+    if (existingFlight) {
+      return (await existingFlight) as T[] | null;
+    }
+  }
+
+  const colRef = collection(db, collectionName);
+  const runFetch = async (): Promise<T[] | null> => {
+    try {
       try {
-        const snap = await getDocs(colRef);
-        const items: T[] = [];
-        snap.forEach((d) => {
-          items.push({ id: d.id, ...d.data() } as T);
-        });
-        return items;
-      } catch {
+        enableNetwork(db).catch(() => {});
+      } catch {}
+      const snap = forceRetry ? await getDocsFromServer(colRef) : await getDocs(colRef);
+      clearQuotaExhausted();
+      const items: T[] = [];
+      snap.forEach((d) => {
+        items.push({ id: d.id, ...d.data() } as T);
+      });
+
+      // If this was a live server fetch, keep shared listener cache aligned and cache briefly for parallel callers
+      if (forceRetry) {
+        recentServerFetchCache.set(collectionName, { ts: Date.now(), data: items });
+        const entry = sharedCollectionListeners.get(collectionName);
+        if (entry) {
+          const meta: CollectionSyncMeta = { fromCache: false, hasPendingWrites: false };
+          entry.lastCloudData = items;
+          entry.lastMeta = meta;
+          entry.subscribers.forEach((cb) => {
+            try {
+              cb(items, meta);
+            } catch {}
+          });
+        }
+      }
+
+      return items;
+    } catch (serverErr: any) {
+      if (isQuotaError(serverErr)) {
+        markQuotaExhausted(300000);
         return null;
       }
+      if (forceRetry) {
+        try {
+          const snap = await getDocs(colRef);
+          const items: T[] = [];
+          snap.forEach((d) => {
+            items.push({ id: d.id, ...d.data() } as T);
+          });
+          return items;
+        } catch {
+          return null;
+        }
+      }
+      return null;
+    } finally {
+      if (forceRetry) {
+        inFlightServerFetches.delete(collectionName);
+      }
     }
-    return null;
+  };
+
+  if (forceRetry) {
+    const promise = runFetch();
+    inFlightServerFetches.set(collectionName, promise);
+    return await promise;
   }
+
+  return await runFetch();
 }
 
 // Fetch only pending reception/online parent tokens from Firestore (minimal read units)

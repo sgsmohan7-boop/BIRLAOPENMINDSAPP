@@ -386,6 +386,7 @@ export interface ParentSelfEntry {
   dismissedById?: string; // counsellorId
   dismissedAt?: string; // ISO string
   dismissedReason?: string;
+  skippedByCounsellorIds?: string[]; // Cloud-synced list of counsellor IDs who chose Skip for My Profile
   dailyTokenNo?: number; // Daily arrival token/S.No for physical walk-ins (omitted for online enquiries)
   entryDate?: string; // "DD-MM-YYYY" e.g. "27-10-2026"
   dateKey?: string; // "YYYY-MM-DD" e.g. "2026-10-27"

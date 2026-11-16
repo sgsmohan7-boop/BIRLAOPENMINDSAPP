@@ -55,7 +55,7 @@ const ParentFormMobileOnly = lazyWithRetry(() => import("./components/ParentForm
 import PortalErrorBoundary from "./components/PortalErrorBoundary";
 
 
-import { loadData, saveData, calculateExpiryDate, resetToDefaults, clearAllData, loadCounselling, saveCounselling, deduplicateEnquiries, loadCounsellorAccounts, saveCounsellorAccounts, mergeWithDemoEnquiries, mergeWithDefaultCounsellorAccounts, recordDeletedCounsellorAccountId, unrecordDeletedCounsellorAccountId, recordDeletedCounsellorAccountIds, recordDeletedEnquiryId, recordDeletedEnquiryIds, getDeletedEnquiryIds, unmarkDeletedEnquiryId, mergeWithDefaultITStaffAccounts, saveITStaffAccounts, loadITStaffAccounts, recordDeletedITStaffAccountId, getUnsyncedEnquiryIds, markEnquiryUnsynced, unmarkEnquiryUnsynced, loadParentSelfEntries, saveParentSelfEntries } from "./utils/storage";
+import { loadData, saveData, calculateExpiryDate, resetToDefaults, clearAllData, loadCounselling, saveCounselling, deduplicateEnquiries, loadCounsellorAccounts, saveCounsellorAccounts, mergeWithDemoEnquiries, mergeWithDefaultCounsellorAccounts, recordDeletedCounsellorAccountId, unrecordDeletedCounsellorAccountId, recordDeletedCounsellorAccountIds, recordDeletedEnquiryId, recordDeletedEnquiryIds, replaceDeletedEnquiryIds, getDeletedEnquiryIds, unmarkDeletedEnquiryId, mergeWithDefaultITStaffAccounts, saveITStaffAccounts, loadITStaffAccounts, recordDeletedITStaffAccountId, getUnsyncedEnquiryIds, markEnquiryUnsynced, unmarkEnquiryUnsynced, loadParentSelfEntries, saveParentSelfEntries } from "./utils/storage";
 import { isObsoleteOrDuplicateCounsellorAccount, cleanAndNormalizeCounsellorAccounts, normalizeAllEnquiries, normalizeEnquiryCounsellor, normalizeCounsellorIdentity } from "./utils/counsellorNormalizer";
 import { synthesizeAndMergeEnquiries, isSameStudentRecord, extractEnquirySerialNum, formatCanonicalEnquiryNo } from "./utils/enquirySynthesis";
 import { AlertTriangle, X, Bell, ArrowRight, RefreshCw, Share2, Smartphone } from "lucide-react";
@@ -274,10 +274,13 @@ export default function App() {
   const [isPortalLinksModalOpen, setIsPortalLinksModalOpen] = useState(false);
   const [isAppInstallModalOpen, setIsAppInstallModalOpen] = useState(false);
 
-  // Real-time server pull for accounts and counselling data on authenticated load (never on Parent Kiosk mobile QR form)
+  // Real-time server fallback ONLY when Firestore is unconfigured, offline, or quota-exhausted (never pollutes live cloud laptops with stale local JSON)
   useEffect(() => {
     if (isParentKioskMode || !isLoggedIn) return;
     let active = true;
+    const isOffline = typeof navigator !== "undefined" && !navigator.onLine;
+    const shouldUseLocalFallbackImmediately = !isFirebaseConfigured() || isFirestoreQuotaExhausted() || isOffline;
+
     const fetchServerAccounts = async () => {
       try {
         const res = await fetch("/api/accounts");
@@ -313,10 +316,12 @@ export default function App() {
         console.warn("Server accounts fetch warning:", e);
       }
     };
-    fetchServerAccounts();
+    if (shouldUseLocalFallbackImmediately) {
+      fetchServerAccounts();
+    }
 
-    // Always pull live server parent_self_entries (0 Firestore reads) and pull /api/counselling when Firestore is unconfigured or read-quota limited
     const fetchLocalServerParentEntries = async () => {
+      if (cloudParentsRef.current !== null) return;
       try {
         const pRes = await fetch("/api/parent-self-entry");
         if (pRes.ok) {
@@ -335,14 +340,14 @@ export default function App() {
         }
       } catch {}
     };
-    fetchLocalServerParentEntries();
 
     const fetchLocalServerCounselling = async () => {
+      if (cloudFormsRef.current !== null || cloudSyncVerifiedRef.current) return;
       try {
         const res = await fetch("/api/counselling");
         if (res.ok) {
           const json = await res.json();
-          if (json.success && active) {
+          if (json.success && active && cloudFormsRef.current === null && !cloudSyncVerifiedRef.current) {
             if (Array.isArray(json.deletedIds) && json.deletedIds.length > 0) {
               recordDeletedEnquiryIds(json.deletedIds);
             }
@@ -372,23 +377,23 @@ export default function App() {
     };
 
     let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
-    if (!isFirebaseConfigured() || isFirestoreQuotaExhausted()) {
+    if (shouldUseLocalFallbackImmediately) {
+      fetchLocalServerParentEntries();
       fetchLocalServerCounselling();
     } else {
-      // If Firestore snapshot hasn't arrived after 3.5s (e.g. quota exhaustion during attach), pull server cache transparently
+      // Only fall back to local Express cache if live Firestore hasn't responded even after 10s
       fallbackTimer = setTimeout(() => {
-        if (active && cloudFormsRef.current === null) {
-          fetchLocalServerCounselling();
+        if (active && !cloudSyncVerifiedRef.current) {
+          if (cloudParentsRef.current === null) fetchLocalServerParentEntries();
+          if (cloudFormsRef.current === null) fetchLocalServerCounselling();
         }
-      }, 3500);
+      }, 10000);
     }
 
     const handleQuotaExhaustedEvent = () => {
       if (active) {
-        fetchLocalServerParentEntries();
-        if (cloudFormsRef.current === null) {
-          fetchLocalServerCounselling();
-        }
+        if (cloudParentsRef.current === null) fetchLocalServerParentEntries();
+        if (cloudFormsRef.current === null) fetchLocalServerCounselling();
       }
     };
     window.addEventListener("firestore-quota-exhausted", handleQuotaExhaustedEvent);
@@ -406,8 +411,12 @@ export default function App() {
   const [showUpdateModal, setShowUpdateModal] = useState(false);
   const [isWiping, setIsWiping] = useState(false);
   const [isSyncRefreshing, setIsSyncRefreshing] = useState(false);
+  const [isCloudSyncing, setIsCloudSyncing] = useState<boolean>(() => isLoggedIn && !isParentKioskMode && isFirebaseConfigured());
+  const [lastCloudSyncAt, setLastCloudSyncAt] = useState<string | null>(null);
 
   const deletedFormsLoadedRef = React.useRef<boolean>(false);
+  const cloudSyncVerifiedRef = React.useRef<boolean>(false);
+  const lastVisibilitySyncRef = React.useRef<number>(Date.now());
   const backfilledIdsRef = React.useRef<Set<string>>(new Set());
   const normalizedMigratedIdsRef = React.useRef<Set<string>>(new Set());
   const cloudFormsRef = React.useRef<CounsellingEnquiry[] | null>(null);
@@ -615,97 +624,161 @@ export default function App() {
     [collectPendingUnsyncedLocals, pushUnsyncedLocalEnquiriesToCloud]
   );
 
+  // Server-authoritative cloud sync across laptops/desktops (bypasses IndexedDB/localStorage caches via getDocsFromServer)
+  const performAuthoritativeCloudSync = React.useCallback(async (forceServer = true): Promise<boolean> => {
+    if (isParentKioskMode || !isLoggedIn || userRole === "Student" || !isFirebaseConfigured()) {
+      setIsCloudSyncing(false);
+      return false;
+    }
+
+    setIsCloudSyncing(true);
+    if (forceServer) {
+      clearQuotaExhausted();
+    }
+
+    try {
+      const [cloudDeletedDocs, cloudEnquiries, cloudAccounts, cloudAllParents] = await Promise.all([
+        fetchCollectionDocs<{ id: string; enquiryNo?: string }>("deleted_counselling_forms", forceServer),
+        fetchCollectionDocs<CounsellingEnquiry>("counselling_forms", forceServer),
+        fetchCollectionDocs<CounsellorAccount>("counsellor_accounts", forceServer),
+        fetchCollectionDocs<ParentSelfEntry>("parent_self_entries", forceServer)
+      ]);
+
+      // 1. Replace local deleted IDs with server-authoritative deletions (preserving only actively unsynced local state)
+      if (Array.isArray(cloudDeletedDocs)) {
+        const delIds = cloudDeletedDocs.flatMap(d => [d.id, d.enquiryNo]).filter(Boolean) as string[];
+        replaceDeletedEnquiryIds(delIds);
+        deletedFormsLoadedRef.current = true;
+      }
+
+      // 2. Replace local parent_self_entries with authoritative cloud snapshot (full list: pending, claimed, completed, dismissed)
+      if (Array.isArray(cloudAllParents)) {
+        cloudParentsRef.current = cloudAllParents;
+        setParentSelfEntries(cloudAllParents);
+        saveParentSelfEntries(cloudAllParents);
+      }
+
+      // 3. Compute unified enquiries deterministically from authoritative server docs
+      if (Array.isArray(cloudEnquiries)) {
+        const deletedSet = new Set(getDeletedEnquiryIds().map(x => x.toLowerCase()));
+        const cleanCloudForms = cloudEnquiries
+          .filter(e => e && (!e.id || !deletedSet.has(e.id.toLowerCase())) && (!e.enquiryNo || !deletedSet.has(e.enquiryNo.toLowerCase())))
+          .map(e => {
+            const preferredDocId = (e.id && e.id.includes("__")) ? e.id : (e.enquiryNo || e.id);
+            const { normalized } = normalizeEnquiryCounsellor({ ...e, id: preferredDocId });
+            return normalized;
+          });
+
+        cloudFormsRef.current = cleanCloudForms;
+        const effectiveParents = Array.isArray(cloudAllParents)
+          ? cloudAllParents
+          : (cloudParentsRef.current ?? loadParentSelfEntries());
+
+        setCounsellingEnquiries(prev => {
+          const baseLocal = prev && prev.length > 0 ? prev : loadCounselling();
+          const unified = computeCloudAuthoritativeEnquiries(
+            cleanCloudForms,
+            effectiveParents,
+            baseLocal,
+            deletedFormsLoadedRef.current
+          );
+          saveCounselling(unified);
+          return unified;
+        });
+
+        cloudSyncVerifiedRef.current = true;
+        setLastCloudSyncAt(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+      }
+
+      // 4. Sync authoritative counsellor accounts
+      if (Array.isArray(cloudAccounts) && cloudAccounts.length > 0) {
+        const mergedAccs = cleanAndNormalizeCounsellorAccounts(mergeWithDefaultCounsellorAccounts(cloudAccounts));
+        setCounsellorAccounts(mergedAccs);
+        saveCounsellorAccounts(mergedAccs);
+      }
+
+      return Array.isArray(cloudEnquiries);
+    } catch (err) {
+      console.warn("Authoritative server cloud sync notice:", err);
+      return false;
+    } finally {
+      setIsCloudSyncing(false);
+    }
+  }, [isParentKioskMode, isLoggedIn, userRole, computeCloudAuthoritativeEnquiries]);
+
+  // Run authoritative server sync automatically on Login/Boot, long idle wake (>15 min), and network reconnect
+  useEffect(() => {
+    if (isParentKioskMode || !isLoggedIn || userRole === "Student" || userRole === "Teacher") {
+      setIsCloudSyncing(false);
+      return;
+    }
+
+    performAuthoritativeCloudSync(true);
+
+    const handleVisibilityRefresh = () => {
+      if (typeof document !== "undefined" && !document.hidden) {
+        const elapsed = Date.now() - lastVisibilitySyncRef.current;
+        if (elapsed > 15 * 60 * 1000) {
+          lastVisibilitySyncRef.current = Date.now();
+          performAuthoritativeCloudSync(true);
+        }
+      } else if (typeof document !== "undefined" && document.hidden) {
+        lastVisibilitySyncRef.current = Date.now();
+      }
+    };
+
+    const handleOnlineReconnect = () => {
+      lastVisibilitySyncRef.current = Date.now();
+      performAuthoritativeCloudSync(true);
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityRefresh);
+    window.addEventListener("online", handleOnlineReconnect);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityRefresh);
+      window.removeEventListener("online", handleOnlineReconnect);
+    };
+  }, [isLoggedIn, isParentKioskMode, userRole, performAuthoritativeCloudSync]);
+
   const handleSyncRefresh = async () => {
     setIsSyncRefreshing(true);
     try {
-      // 1. Load cached state first
-      const localData = loadData();
-      setTickets(localData.tickets);
-      setHistory(localData.history);
-      setInventory(localData.inventory);
-      setRooms(localData.rooms);
-      setAllocations(localData.allocations);
-      setWarranty(localData.warranty);
-      const currentLocalEnquiries = loadCounselling();
-      setCounsellingEnquiries(currentLocalEnquiries);
-      setCounsellorAccounts(loadCounsellorAccounts());
+      // 1. Load cached state briefly only if cloud hasn't verified yet
+      if (!cloudSyncVerifiedRef.current) {
+        const localData = loadData();
+        setTickets(localData.tickets);
+        setHistory(localData.history);
+        setInventory(localData.inventory);
+        setRooms(localData.rooms);
+        setAllocations(localData.allocations);
+        setWarranty(localData.warranty);
+      }
 
-      // 2. Smart Firestore Pull (uses SDK cache+delta to preserve daily quota) + Express Server fallback
-      let firestoreEnquiriesSynced = false;
-      if (isFirebaseConfigured()) {
-        clearQuotaExhausted();
+      // 2. Authoritative Server-Fresh Pull via getDocsFromServer (bypasses stale IndexedDB / localStorage)
+      const firestoreEnquiriesSynced = await performAuthoritativeCloudSync(true);
+
+      // 3. Only hit local Express fallbacks if Firestore server pull did not complete
+      if (!firestoreParentsSyncedOrCloudLoaded(cloudParentsRef.current)) {
         try {
-          const [cloudDeletedDocs, cloudEnquiries, cloudAccounts, cloudPendingParents] = await Promise.all([
-            fetchCollectionDocs<{ id: string; enquiryNo?: string }>("deleted_counselling_forms", false),
-            fetchCollectionDocs<CounsellingEnquiry>("counselling_forms", false),
-            fetchCollectionDocs<CounsellorAccount>("counsellor_accounts", false),
-            fetchPendingParentEntriesFromFirestore<ParentSelfEntry>()
-          ]);
-
-          if (Array.isArray(cloudDeletedDocs)) {
-            const delIds = cloudDeletedDocs.flatMap(d => [d.id, d.enquiryNo]).filter(Boolean) as string[];
-            if (delIds.length > 0) recordDeletedEnquiryIds(delIds);
-            deletedFormsLoadedRef.current = true;
-          }
-
-          if (Array.isArray(cloudPendingParents)) {
-            setParentSelfEntries(prev => {
-              const map = new Map<string, ParentSelfEntry>();
-              [...(prev || []), ...cloudPendingParents].forEach(p => {
-                if (p && p.id) map.set(p.id, p);
+          const pRes = await fetch("/api/parent-self-entry");
+          if (pRes.ok) {
+            const pJson = await pRes.json();
+            if (pJson.success && Array.isArray(pJson.entries) && cloudParentsRef.current === null) {
+              setParentSelfEntries(prev => {
+                const map = new Map<string, ParentSelfEntry>();
+                [...(prev || []), ...pJson.entries].forEach((e: ParentSelfEntry) => {
+                  if (e && e.id) map.set(e.id, { ...map.get(e.id), ...e });
+                });
+                const merged = Array.from(map.values());
+                saveParentSelfEntries(merged);
+                return merged;
               });
-              const merged = Array.from(map.values());
-              cloudParentsRef.current = merged;
-              saveParentSelfEntries(merged);
-              return merged;
-            });
-          }
-
-          if (Array.isArray(cloudEnquiries)) {
-            firestoreEnquiriesSynced = true;
-            cloudFormsRef.current = cloudEnquiries;
-            const effectiveParents = cloudParentsRef.current ?? loadParentSelfEntries();
-            setCounsellingEnquiries(prev => {
-              const baseLocal = prev && prev.length > 0 ? prev : currentLocalEnquiries;
-              const unified = computeCloudAuthoritativeEnquiries(
-                cloudEnquiries,
-                effectiveParents,
-                baseLocal,
-                deletedFormsLoadedRef.current
-              );
-              saveCounselling(unified);
-              return unified;
-            });
-          }
-
-          if (Array.isArray(cloudAccounts) && cloudAccounts.length > 0) {
-            const mergedAccs = mergeWithDefaultCounsellorAccounts(cloudAccounts);
-            setCounsellorAccounts(mergedAccs);
-            saveCounsellorAccounts(mergedAccs);
+            }
           }
         } catch (_) {}
       }
 
-      // Always sync Express /api/parent-self-entry (0 Firestore reads), and pull /api/counselling if Firestore was unavailable/quota-paused
-      try {
-        const pRes = await fetch("/api/parent-self-entry");
-        if (pRes.ok) {
-          const pJson = await pRes.json();
-          if (pJson.success && Array.isArray(pJson.entries)) {
-            setParentSelfEntries(prev => {
-              const map = new Map<string, ParentSelfEntry>();
-              [...(prev || []), ...pJson.entries].forEach((e: ParentSelfEntry) => {
-                if (e && e.id) map.set(e.id, { ...map.get(e.id), ...e });
-              });
-              const merged = Array.from(map.values());
-              saveParentSelfEntries(merged);
-              return merged;
-            });
-          }
-        }
-      } catch (_) {}
-
-      if (!firestoreEnquiriesSynced) {
+      if (!firestoreEnquiriesSynced && cloudFormsRef.current === null) {
         try {
           const cRes = await fetch("/api/counselling");
           if (cRes.ok) {
@@ -731,27 +804,17 @@ export default function App() {
         } catch (_) {}
       }
 
-      try {
-        const aRes = await fetch("/api/accounts");
-        if (aRes.ok) {
-          const aJson = await aRes.json();
-          if (aJson.success && aJson.accounts && Array.isArray(aJson.accounts.counsellors)) {
-            const extraDeleted = Array.isArray(aJson.accounts.deletedCounsellors) ? aJson.accounts.deletedCounsellors : [];
-            const merged = mergeWithDefaultCounsellorAccounts(aJson.accounts.counsellors, extraDeleted);
-            setCounsellorAccounts(merged);
-            saveCounsellorAccounts(merged);
-          }
-        }
-      } catch (_) {}
-
-      // Settle time for background listeners
-      await new Promise((resolve) => setTimeout(resolve, 600));
+      await new Promise((resolve) => setTimeout(resolve, 400));
     } catch (err) {
       console.error("Sync state refresh failed:", err);
     } finally {
       setIsSyncRefreshing(false);
     }
   };
+
+  function firestoreParentsSyncedOrCloudLoaded(val: ParentSelfEntry[] | null): boolean {
+    return Array.isArray(val);
+  }
 
   // Safely maintain latest tickets for background polling without stale closures
   const ticketsRef = React.useRef(tickets);
@@ -997,11 +1060,13 @@ export default function App() {
       ];
 
       const counsellingUnsubs = isTeacherRole ? [] : [
-        syncCollection<{ id: string; enquiryNo?: string }>("deleted_counselling_forms", (deletedDocs) => {
+        syncCollection<{ id: string; enquiryNo?: string }>("deleted_counselling_forms", (deletedDocs, meta) => {
           if (Array.isArray(deletedDocs)) {
-            deletedFormsLoadedRef.current = true;
-            if (deletedDocs.length > 0) {
-              const rawIds = deletedDocs.flatMap(d => [d.id, d.enquiryNo]).filter(Boolean) as string[];
+            const rawIds = deletedDocs.flatMap(d => [d.id, d.enquiryNo]).filter(Boolean) as string[];
+            if (!meta?.fromCache) {
+              deletedFormsLoadedRef.current = true;
+              replaceDeletedEnquiryIds(rawIds);
+            } else if (rawIds.length > 0) {
               recordDeletedEnquiryIds(rawIds);
             }
             if (cloudFormsRef.current !== null) {
@@ -1011,7 +1076,7 @@ export default function App() {
                   cloudFormsRef.current || [],
                   effectiveParents,
                   prev || [],
-                  true
+                  deletedFormsLoadedRef.current && !meta?.fromCache
                 );
                 saveCounselling(unified);
                 return unified;
@@ -1020,8 +1085,10 @@ export default function App() {
           }
         }, []),
 
-        syncCollection<ParentSelfEntry>("parent_self_entries", (parentDocs) => {
+        syncCollection<ParentSelfEntry>("parent_self_entries", (parentDocs, meta) => {
           if (!Array.isArray(parentDocs)) return;
+          // Never overwrite already-verified server state with a stale IndexedDB cache snapshot
+          if (meta?.fromCache && cloudSyncVerifiedRef.current && cloudParentsRef.current !== null) return;
           cloudParentsRef.current = parentDocs;
           setParentSelfEntries(parentDocs);
           saveParentSelfEntries(parentDocs);
@@ -1031,7 +1098,7 @@ export default function App() {
                 cloudFormsRef.current || [],
                 parentDocs,
                 prev || [],
-                deletedFormsLoadedRef.current
+                deletedFormsLoadedRef.current && !meta?.fromCache
               );
               saveCounselling(unified);
               return unified;
@@ -1039,11 +1106,14 @@ export default function App() {
           }
         }, []),
 
-        syncCollection<CounsellingEnquiry>("counselling_forms", (items) => {
+        syncCollection<CounsellingEnquiry>("counselling_forms", (items, meta) => {
           if (localStorage.getItem("sgs_wiping_database") === "true") {
             setCounsellingEnquiries([]);
             return;
           }
+          // Ignore stale cached snapshots once fresh server data has arrived in this session
+          if (meta?.fromCache && cloudSyncVerifiedRef.current && cloudFormsRef.current !== null) return;
+
           const deletedSet = new Set(getDeletedEnquiryIds().map(x => x.toLowerCase()));
           if (!items) return;
 
@@ -1056,18 +1126,20 @@ export default function App() {
             return;
           }
 
-          // Clean up any legacy timestamp-suffixed or explicitly deleted documents in Firestore
-          items.forEach(item => {
-            if (item.id && /_(\d{10,})$/.test(item.id)) {
-              deleteDocument("counselling_forms", item.id);
-            }
-            const eId = (item.id || "").toLowerCase();
-            const eNo = (item.enquiryNo || "").toLowerCase();
-            if ((eId && deletedSet.has(eId)) || (eNo && deletedSet.has(eNo))) {
-              if (item.id) deleteDocument("counselling_forms", item.id);
-              if (item.enquiryNo) deleteDocument("counselling_forms", item.enquiryNo);
-            }
-          });
+          // Clean up any legacy timestamp-suffixed or explicitly deleted documents in Firestore (only from live server snapshots)
+          if (!meta?.fromCache) {
+            items.forEach(item => {
+              if (item.id && /_(\d{10,})$/.test(item.id)) {
+                deleteDocument("counselling_forms", item.id);
+              }
+              const eId = (item.id || "").toLowerCase();
+              const eNo = (item.enquiryNo || "").toLowerCase();
+              if ((eId && deletedSet.has(eId)) || (eNo && deletedSet.has(eNo))) {
+                if (item.id) deleteDocument("counselling_forms", item.id);
+                if (item.enquiryNo) deleteDocument("counselling_forms", item.enquiryNo);
+              }
+            });
+          }
 
           // Standardize ID & normalize counsellor without dropping colliding students
           const nonDeletedItems = items
@@ -1076,7 +1148,7 @@ export default function App() {
               const preferredDocId = (e.id && e.id.includes("__")) ? e.id : (e.enquiryNo || e.id);
               const base = { ...e, id: preferredDocId };
               const { normalized, wasChanged } = normalizeEnquiryCounsellor(base);
-              if (wasChanged && normalized.id && !normalizedMigratedIdsRef.current.has(normalized.id)) {
+              if (wasChanged && !meta?.fromCache && normalized.id && !normalizedMigratedIdsRef.current.has(normalized.id)) {
                 normalizedMigratedIdsRef.current.add(normalized.id);
                 saveDocument("counselling_forms", normalized.id, prepareEnquiryForFirestore(normalized)).catch(() => {});
               }
@@ -1085,23 +1157,32 @@ export default function App() {
 
           cloudFormsRef.current = nonDeletedItems;
           const effectiveParents = cloudParentsRef.current ?? loadParentSelfEntries();
+          const allowPush = deletedFormsLoadedRef.current && !meta?.fromCache;
 
           setCounsellingEnquiries((prev) => {
             const unified = computeCloudAuthoritativeEnquiries(
               nonDeletedItems,
               effectiveParents,
               prev || [],
-              deletedFormsLoadedRef.current
+              allowPush
             );
             saveCounselling(unified);
 
-            fetch("/api/counselling", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(unified)
-            }).catch(() => {});
+            if (!meta?.fromCache) {
+              fetch("/api/counselling", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(unified)
+              }).catch(() => {});
+            }
             return unified;
           });
+
+          if (!meta?.fromCache) {
+            cloudSyncVerifiedRef.current = true;
+            setIsCloudSyncing(false);
+            setLastCloudSyncAt(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+          }
         }, []),
 
         syncCollection<CounsellorAccount>("counsellor_accounts", (items) => {
@@ -1892,8 +1973,10 @@ export default function App() {
     }
   };
 
-  // Login handler (strictly tab-isolated session)
+  // Login handler (strictly tab-isolated session + immediate server-fresh verification)
   const handleLogin = (branch: SchoolBranch, email: string, role: string, allowedTabsParam?: string[] | null) => {
+    cloudSyncVerifiedRef.current = false;
+    setIsCloudSyncing(isFirebaseConfigured() && role !== "Student" && role !== "Teacher");
     setUserBranch(branch);
     setUserEmail(email);
     setUserRole(role);
@@ -1919,6 +2002,11 @@ export default function App() {
 
   // Logout handler
   const handleLogout = () => {
+    cloudSyncVerifiedRef.current = false;
+    cloudFormsRef.current = null;
+    cloudParentsRef.current = null;
+    deletedFormsLoadedRef.current = false;
+    setIsCloudSyncing(false);
     setIsLoggedIn(false);
     setUserEmail("");
     try {
@@ -2048,6 +2136,8 @@ export default function App() {
               userRole={userRole}
               userEmail={userEmail}
               onSyncRefresh={handleSyncRefresh}
+              isCloudSyncing={isCloudSyncing}
+              lastCloudSyncAt={lastCloudSyncAt}
             />
           </div>
         );
@@ -2114,6 +2204,8 @@ export default function App() {
                 userRole={userRole}
                 userEmail={userEmail}
                 onSyncRefresh={handleSyncRefresh}
+                isCloudSyncing={isCloudSyncing}
+                lastCloudSyncAt={lastCloudSyncAt}
               />
             </div>
           );
@@ -2214,6 +2306,8 @@ export default function App() {
               theme={theme}
               toggleTheme={toggleTheme}
               onSyncRefresh={handleSyncRefresh}
+              isCloudSyncing={isCloudSyncing}
+              lastCloudSyncAt={lastCloudSyncAt}
             />
           </PortalErrorBoundary>
         </div>

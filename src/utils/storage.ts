@@ -420,6 +420,18 @@ export const recordDeletedEnquiryIds = (ids: string[]) => {
   } catch {}
 };
 
+export const replaceDeletedEnquiryIds = (ids: string[]) => {
+  if (typeof window === "undefined" || !Array.isArray(ids)) return;
+  try {
+    const set = new Set<string>();
+    ids.forEach((i) => {
+      const clean = String(i || "").trim().toLowerCase();
+      if (clean) set.add(clean);
+    });
+    localStorage.setItem(DELETED_ENQUIRIES_KEY, JSON.stringify(Array.from(set)));
+  } catch {}
+};
+
 export const unmarkDeletedEnquiryId = (id: string, enquiryNo?: string) => {
   if (typeof window === "undefined") return;
   try {
