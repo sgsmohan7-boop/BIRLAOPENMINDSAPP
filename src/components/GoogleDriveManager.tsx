@@ -42,6 +42,7 @@ import { getAudioRecordingBlob } from "../utils/audioStorage";
 import { CounsellingEnquiry, Ticket, InventoryItem, Room, EmployeeAllocation, WarrantyContract } from "../types";
 import VoiceVaultExplorerModal from "./VoiceVaultExplorerModal";
 import CctvNvrStorageModal from "./CctvNvrStorageModal";
+import firebaseConfig from "../../firebase-applet-config.json";
 
 interface GoogleDriveManagerProps {
   userEmail: string;
@@ -248,7 +249,7 @@ export default function GoogleDriveManager({
         setDomainAuthError({
           show: true,
           domain,
-          projectId: "gen-lang-client-0696149135",
+          projectId: firebaseConfig.projectId,
           message: err.message || "Domain is not authorized in Firebase Console"
         });
       } else if (err.code !== 'auth/popup-closed-by-user') {

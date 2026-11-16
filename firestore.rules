@@ -1,8 +1,48 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Global default-deny safety net: blocks any unknown, dummy, or rogue collections
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
+    }
+
+    function isValidDocId(docId) {
+      return docId is string && docId.size() >= 1 && docId.size() <= 180;
+    }
+
+    function isValidPayload() {
+      return request.resource.data is map && request.resource.data.keys().size() <= 150;
+    }
+
+    function isAllowedCollection(col) {
+      return col in [
+        'test',
+        'system_metadata',
+        'counselling_forms',
+        'counselling',
+        'deleted_counselling_forms',
+        'parent_self_entries',
+        'enquiries',
+        'counsellor_accounts',
+        'deleted_counsellor_accounts',
+        'it_staff_accounts',
+        'deleted_it_staff_accounts',
+        'management_accounts',
+        'deleted_management_accounts',
+        'tickets',
+        'history',
+        'inventory',
+        'rooms',
+        'allocations',
+        'warranty',
+        'transport_fleet'
+      ];
+    }
+
+    match /{col}/{docId} {
+      allow read: if isAllowedCollection(col);
+      allow create, update: if isAllowedCollection(col) && isValidDocId(docId) && isValidPayload();
+      allow delete: if isAllowedCollection(col) && isValidDocId(docId);
     }
   }
 }

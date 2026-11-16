@@ -105,9 +105,43 @@ export async function testFirestoreConnection() {
   }
 }
 
-// Check if Firebase is actually configured or using dummy config
+export const EXPECTED_FIREBASE_PROJECT_ID = "project-0a48d5bf-f17b-4b14-8c2";
+export const EXPECTED_FIRESTORE_DB_ID = "ai-studio-547b32f3-86ab-4b19-8e5e-b9a979bafe60";
+
+export const ALLOWED_FIRESTORE_COLLECTIONS = new Set<string>([
+  "test",
+  "system_metadata",
+  "counselling_forms",
+  "counselling",
+  "deleted_counselling_forms",
+  "parent_self_entries",
+  "enquiries",
+  "counsellor_accounts",
+  "deleted_counsellor_accounts",
+  "it_staff_accounts",
+  "deleted_it_staff_accounts",
+  "management_accounts",
+  "deleted_management_accounts",
+  "tickets",
+  "history",
+  "inventory",
+  "rooms",
+  "allocations",
+  "warranty",
+  "transport_fleet"
+]);
+
+export function isAllowedFirestoreCollection(collectionName: string): boolean {
+  return Boolean(collectionName && ALLOWED_FIRESTORE_COLLECTIONS.has(collectionName));
+}
+
+// Check if Firebase is actually configured and strictly matches the authorized main database
 export function isFirebaseConfigured(): boolean {
-  return !firebaseConfig.apiKey.includes("placeholder");
+  return (
+    !firebaseConfig.apiKey.includes("placeholder") &&
+    firebaseConfig.projectId === EXPECTED_FIREBASE_PROJECT_ID &&
+    firebaseConfig.firestoreDatabaseId === EXPECTED_FIRESTORE_DB_ID
+  );
 }
 
 // Google Sign In integration
@@ -401,7 +435,7 @@ export function syncCollection<T>(
   onUpdate: (data: T[]) => void,
   fallbackData: T[]
 ): () => void {
-  if (!isFirebaseConfigured()) {
+  if (!isFirebaseConfigured() || !isAllowedFirestoreCollection(collectionName)) {
     if (fallbackData && fallbackData.length > 0) {
       onUpdate(fallbackData);
     }
@@ -694,7 +728,7 @@ export async function fetchPendingParentEntriesFromFirestore<T>(): Promise<T[] |
 // Global Single Item Save and Overwrite Helpers
 // NOTE: Decoupled from read quota! Even if daily reads are exhausted, writes MUST still be attempted.
 export async function saveDocument(collectionName: string, id: string, data: any): Promise<boolean> {
-  if (!isFirebaseConfigured()) return false;
+  if (!isFirebaseConfigured() || !isAllowedFirestoreCollection(collectionName)) return false;
   if (isFirestoreWriteQuotaExhausted()) {
     return false;
   }
@@ -718,7 +752,7 @@ export async function saveDocument(collectionName: string, id: string, data: any
 }
 
 export async function deleteDocument(collectionName: string, id: string) {
-  if (!isFirebaseConfigured() || isFirestoreWriteQuotaExhausted()) return;
+  if (!isFirebaseConfigured() || !isAllowedFirestoreCollection(collectionName) || isFirestoreWriteQuotaExhausted()) return;
   const rawId = id && String(id).trim() ? String(id).trim() : "";
   if (!rawId) return;
   const docId = rawId.replace(/\//g, "_");
@@ -737,7 +771,7 @@ export async function deleteDocument(collectionName: string, id: string) {
 
 // Sync whole arrays from local memory if migrating or bulk saving
 export async function syncBulkArrayToFirebase(collectionName: string, items: any[]) {
-  if (!isFirebaseConfigured() || isFirestoreWriteQuotaExhausted()) return;
+  if (!isFirebaseConfigured() || !isAllowedFirestoreCollection(collectionName) || isFirestoreWriteQuotaExhausted()) return;
   try {
     const batch = writeBatch(db);
     items.forEach((item) => {

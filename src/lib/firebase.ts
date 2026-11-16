@@ -37,32 +37,43 @@ if (typeof window !== "undefined") {
   });
 }
 
+export const PRIMARY_FIREBASE_PROJECT_ID = 'project-0a48d5bf-f17b-4b14-8c2';
+export const PRIMARY_FIRESTORE_DB_ID = 'ai-studio-547b32f3-86ab-4b19-8e5e-b9a979bafe60';
+
+if (firebaseConfig.projectId !== PRIMARY_FIREBASE_PROJECT_ID) {
+  console.error(
+    `Blocked unexpected Firebase project "${firebaseConfig.projectId}". Expected "${PRIMARY_FIREBASE_PROJECT_ID}".`
+  );
+}
+
 export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
 let firestoreDb: any;
-const dbId = firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== "(default)"
-  ? firebaseConfig.firestoreDatabaseId
-  : "(default)";
+const dbId =
+  firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)'
+    ? firebaseConfig.firestoreDatabaseId
+    : PRIMARY_FIRESTORE_DB_ID;
 
 try {
   let localCacheCfg: any;
   try {
-    localCacheCfg = (typeof window !== "undefined" && typeof indexedDB !== "undefined")
-      ? persistentLocalCache({ tabManager: persistentMultipleTabManager() })
-      : memoryLocalCache();
+    localCacheCfg =
+      typeof window !== 'undefined' && typeof indexedDB !== 'undefined'
+        ? persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+        : memoryLocalCache();
   } catch {
     localCacheCfg = memoryLocalCache();
   }
-  firestoreDb = initializeFirestore(app, {
-    experimentalAutoDetectLongPolling: true,
-    localCache: localCacheCfg,
-  }, dbId);
+  firestoreDb = initializeFirestore(
+    app,
+    {
+      experimentalAutoDetectLongPolling: true,
+      localCache: localCacheCfg,
+    },
+    dbId
+  );
 } catch {
-  try {
-    firestoreDb = getFirestore(app, dbId);
-  } catch {
-    firestoreDb = getFirestore(app);
-  }
+  firestoreDb = getFirestore(app, dbId);
 }
 
 export const db = firestoreDb;
