@@ -60,7 +60,8 @@ import {
   Globe,
   Zap,
   FolderArchive,
-  Upload
+  Upload,
+  XCircle
 } from "lucide-react";
 import AudioMeetingRecorder from "./AudioMeetingRecorder";
 import ManagementAudioDesk from "./ManagementAudioDesk";
@@ -442,7 +443,7 @@ export default function CounsellingPortal({
   const canUseMultiDelete = userRole !== "Counsellor" || allowCounsellorMultiDelete;
 
   // 5 KPI Metric Cards Date-Wise Drill-Down State
-  type MetricCardType = "total" | "applications" | "entrance" | "followup" | "confirmed";
+  type MetricCardType = "total" | "entrance" | "followup" | "confirmed" | "notInterested";
   const [selectedMetricCard, setSelectedMetricCard] = useState<MetricCardType | null>(null);
   const [metricDatePreset, setMetricDatePreset] = useState<"all" | "today" | "yesterday" | "last7" | "last30" | "thisMonth">("all");
   const [metricSingleDate, setMetricSingleDate] = useState<string>("");
@@ -3275,9 +3276,10 @@ export default function CounsellingPortal({
     const applicationTaken = counsellorScopeEnquiries.filter(e => e.admissionStatus === "Application Taken").length;
     const testRequired = counsellorScopeEnquiries.filter(e => e.admissionStatus === "Entrance Test Required").length;
     const followUp = counsellorScopeEnquiries.filter(e => e.admissionStatus === "Follow-up Required" || e.admissionStatus === "Interested").length;
+    const notInterested = counsellorScopeEnquiries.filter(e => e.admissionStatus === "Not Interested").length;
     const needsAction = counsellorScopeEnquiries.filter(e => e.audioRecording?.reviewStatus === "Follow-up Required" && !e.audioRecording?.counsellorActionTaken).length;
 
-    return { total, confirmed, applicationTaken, testRequired, followUp, needsAction };
+    return { total, confirmed, applicationTaken, testRequired, followUp, notInterested, needsAction };
   }, [counsellorScopeEnquiries]);
 
   // Multi-Selection Handlers
@@ -3522,14 +3524,14 @@ Warm regards,
     switch (selectedMetricCard) {
       case "total":
         return base;
-      case "applications":
-        return base.filter(e => e.admissionStatus === "Application Taken");
       case "entrance":
         return base.filter(e => e.admissionStatus === "Entrance Test Required");
       case "followup":
         return base.filter(e => e.admissionStatus === "Follow-up Required" || e.admissionStatus === "Interested");
       case "confirmed":
         return base.filter(e => e.admissionStatus === "Admission Confirmed");
+      case "notInterested":
+        return base.filter(e => e.admissionStatus === "Not Interested");
       default:
         return base;
     }
@@ -3776,10 +3778,10 @@ Warm regards,
 
     const reportTitleMap: Record<string, string> = {
       total: userRole === "Counsellor" ? "My Enquiries — Date-Wise Report" : "Total Enquiries — Date-Wise Activity Report",
-      applications: "Applications Taken — Date-Wise Report",
       entrance: "Entrance Tests Scheduled & Required — Date-Wise Register",
       followup: "Follow-up Due & Hot Leads — Date-Wise Action Planner",
-      confirmed: "Confirmed Admissions — Date-Wise Enrolment Register"
+      confirmed: "Confirmed Admissions — Date-Wise Enrolment Register",
+      notInterested: "Not Interested Enquiries — Date-Wise Register"
     };
 
     const reportTitle = reportTitleMap[selectedMetricCard] || "Admissions Date-Wise Report";
@@ -3910,6 +3912,7 @@ Warm regards,
           .status-Entrance { background: #f3e8ff; color: #6b21a8; }
           .status-Confirmed { background: #d1fae5; color: #065f46; }
           .status-Followup { background: #ffedd5; color: #9a3412; }
+          .status-NotInterested { background: #ffe4e6; color: #9f1239; }
           .footer-sig {
             margin-top: 25px;
             display: flex;
@@ -3988,7 +3991,7 @@ Warm regards,
                 <td><strong>${item.applyingForClass}</strong></td>
                 <td>${item.fatherName || item.motherName || "Parent"}<br/><span style="font-family: monospace; font-weight: 700;">📞 ${item.contactNo}</span></td>
                 <td>${item.counsellorName || "Counsellor"}<br/><span style="font-family: monospace; font-size: 8px; color:#64748b;">${item.counsellorId || ""}</span></td>
-                <td><span class="badge ${item.admissionStatus === "Admission Confirmed" ? "status-Confirmed" : item.admissionStatus === "Entrance Test Required" ? "status-Entrance" : item.admissionStatus === "Application Taken" ? "status-Application" : "status-Interested"}">${item.admissionStatus}</span></td>
+                <td><span class="badge ${item.admissionStatus === "Admission Confirmed" ? "status-Confirmed" : item.admissionStatus === "Entrance Test Required" ? "status-Entrance" : item.admissionStatus === "Application Taken" ? "status-Application" : item.admissionStatus === "Not Interested" ? "status-NotInterested" : "status-Interested"}">${item.admissionStatus}</span></td>
                 <td style="font-family: monospace;">${item.followUpDate || "—"}</td>
               </tr>
             `).join("")}
@@ -5521,29 +5524,7 @@ Warm regards,
           </div>
         </button>
 
-        {/* Card 2: Applications */}
-        <button
-          type="button"
-          onClick={() => handleCardClick("applications")}
-          className={`text-left p-4 rounded-xl border shadow-sm transition-all duration-200 cursor-pointer group hover:-translate-y-0.5 hover:shadow-md ${
-            selectedMetricCard === "applications"
-              ? "bg-amber-50/90 dark:bg-amber-950/50 border-amber-500 ring-2 ring-amber-500/20 shadow-md"
-              : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-amber-400"
-          }`}
-          title="Click to view Date-wise Applications Taken"
-        >
-          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-bold">
-            <span className="group-hover:text-amber-600 dark:group-hover:text-amber-400 transition-colors">Applications</span>
-            <FileText size={16} className="text-amber-500 group-hover:scale-110 transition-transform" />
-          </div>
-          <p className="text-2xl font-black text-amber-600 dark:text-amber-400 mt-2">{stats.applicationTaken}</p>
-          <div className="mt-2 pt-1.5 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-[11px] text-amber-600 dark:text-amber-400 font-bold">
-            <span>📅 Date Breakdown</span>
-            <span>→</span>
-          </div>
-        </button>
-
-        {/* Card 3: Entrance Test */}
+        {/* Card 2: Entrance Test */}
         <button
           type="button"
           onClick={() => handleCardClick("entrance")}
@@ -5565,7 +5546,7 @@ Warm regards,
           </div>
         </button>
 
-        {/* Card 4: Follow-up Due */}
+        {/* Card 3: Follow-up Due */}
         <button
           type="button"
           onClick={() => {
@@ -5611,6 +5592,28 @@ Warm regards,
             <span>→</span>
           </div>
         </button>
+
+        {/* Card 5: Not Interested (Last, Next to Confirmed) */}
+        <button
+          type="button"
+          onClick={() => handleCardClick("notInterested")}
+          className={`text-left p-4 rounded-xl border shadow-sm transition-all duration-200 cursor-pointer group hover:-translate-y-0.5 hover:shadow-md ${
+            selectedMetricCard === "notInterested"
+              ? "bg-rose-50/90 dark:bg-rose-950/50 border-rose-500 ring-2 ring-rose-500/20 shadow-md"
+              : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-rose-400"
+          }`}
+          title="Click to view Date-wise Not Interested Enquiries"
+        >
+          <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-bold">
+            <span className="group-hover:text-rose-600 dark:group-hover:text-rose-400 transition-colors">Not Interested</span>
+            <XCircle size={16} className="text-rose-500 group-hover:scale-110 transition-transform" />
+          </div>
+          <p className="text-2xl font-black text-rose-600 dark:text-rose-400 mt-2">{stats.notInterested}</p>
+          <div className="mt-2 pt-1.5 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-[11px] text-rose-600 dark:text-rose-400 font-bold">
+            <span>📅 Date Breakdown</span>
+            <span>→</span>
+          </div>
+        </button>
       </div>
 
       {/* MODAL: 5 KPI METRICS DATE-WISE DRILL-DOWN & AUDIT DESK */}
@@ -5624,40 +5627,40 @@ Warm regards,
                   <div className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 ${
                     selectedMetricCard === "total"
                       ? "bg-blue-100 dark:bg-blue-950/80 text-blue-600"
-                      : selectedMetricCard === "applications"
-                      ? "bg-amber-100 dark:bg-amber-950/80 text-amber-600"
                       : selectedMetricCard === "entrance"
                       ? "bg-purple-100 dark:bg-purple-950/80 text-purple-600"
                       : selectedMetricCard === "followup"
                       ? "bg-orange-100 dark:bg-orange-950/80 text-orange-600"
-                      : "bg-emerald-100 dark:bg-emerald-950/80 text-emerald-600"
+                      : selectedMetricCard === "confirmed"
+                      ? "bg-emerald-100 dark:bg-emerald-950/80 text-emerald-600"
+                      : "bg-rose-100 dark:bg-rose-950/80 text-rose-600"
                   }`}>
                     {selectedMetricCard === "total" && <Users size={20} />}
-                    {selectedMetricCard === "applications" && <FileText size={20} />}
                     {selectedMetricCard === "entrance" && <GraduationCap size={20} />}
                     {selectedMetricCard === "followup" && <Clock size={20} />}
                     {selectedMetricCard === "confirmed" && <CheckCircle2 size={20} />}
+                    {selectedMetricCard === "notInterested" && <XCircle size={20} />}
                   </div>
 
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
                         {selectedMetricCard === "total" && (userRole === "Counsellor" ? "My Enquiries — Date-Wise Report" : "Total Enquiries — Date-Wise Report")}
-                        {selectedMetricCard === "applications" && "Applications Taken — Date-Wise Report"}
                         {selectedMetricCard === "entrance" && "Entrance Tests — Date-Wise Schedule & Register"}
                         {selectedMetricCard === "followup" && "Follow-up Due & Hot Leads — Date-Wise Planner"}
                         {selectedMetricCard === "confirmed" && "Confirmed Admissions — Date-Wise Enrolment Log"}
+                        {selectedMetricCard === "notInterested" && "Not Interested Enquiries — Date-Wise Register"}
                       </h3>
                       <span className={`px-2.5 py-0.5 rounded-full text-xs font-black ${
                         selectedMetricCard === "total"
                           ? "bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300"
-                          : selectedMetricCard === "applications"
-                          ? "bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300"
                           : selectedMetricCard === "entrance"
                           ? "bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300"
                           : selectedMetricCard === "followup"
                           ? "bg-orange-100 dark:bg-orange-950 text-orange-700 dark:text-orange-300"
-                          : "bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300"
+                          : selectedMetricCard === "confirmed"
+                          ? "bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300"
+                          : "bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300"
                       }`}>
                         {filteredMetricEnquiries.length} {filteredMetricEnquiries.length === 1 ? "Record" : "Records"}
                       </span>
@@ -5717,15 +5720,15 @@ Warm regards,
 
                 <button
                   type="button"
-                  onClick={() => handleCardClick("applications")}
+                  onClick={() => handleCardClick("entrance")}
                   className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 shrink-0 cursor-pointer ${
-                    selectedMetricCard === "applications"
-                      ? "bg-amber-600 text-white shadow-md shadow-amber-500/20"
+                    selectedMetricCard === "entrance"
+                      ? "bg-purple-600 text-white shadow-md shadow-purple-500/20"
                       : "bg-slate-200/70 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-700"
                   }`}
                 >
-                  <FileText size={13} />
-                  <span>Applications ({stats.applicationTaken})</span>
+                  <GraduationCap size={13} />
+                  <span>Entrance Test ({stats.testRequired})</span>
                 </button>
 
                 <button
@@ -5752,6 +5755,19 @@ Warm regards,
                 >
                   <CheckCircle2 size={13} />
                   <span>Confirmed ({stats.confirmed})</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleCardClick("notInterested")}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 shrink-0 cursor-pointer ${
+                    selectedMetricCard === "notInterested"
+                      ? "bg-rose-600 text-white shadow-md shadow-rose-500/20"
+                      : "bg-slate-200/70 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-700"
+                  }`}
+                >
+                  <XCircle size={13} />
+                  <span>Not Interested ({stats.notInterested})</span>
                 </button>
               </div>
             </div>
