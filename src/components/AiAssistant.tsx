@@ -191,7 +191,7 @@ export default function AiAssistant({ tickets }: AiAssistantProps) {
       const aiErrorMessage: Message = {
         id: `m-ai-err-${Date.now()}`,
         sender: "ai",
-        text: `🔴 **Gemini AI Connection Failed**: ${errMsg}\n\n*Please verify that GEMINI_API_KEY is configured correctly in your Secrets Panel settings.*`,
+        text: `🔴 **Gemini AI Connection Failed**: ${errMsg}\n\n*Please verify that GEMINI_API_KEY is configured in **Settings > Secrets**.*`,
         timestamp: new Date()
       };
       setMessages(prev => [...prev, aiErrorMessage]);
@@ -675,7 +675,7 @@ export default function AiAssistant({ tickets }: AiAssistantProps) {
 
               {/* Resolution footer info */}
               <div className="mt-4 pt-3 border-t border-slate-200 dark:border-slate-850 flex items-center justify-between text-[10px] font-bold text-slate-400 dark:text-slate-500 font-mono shrink-0">
-                <span>MODEL: GEMINI-3.5-FLASH</span>
+                <span>MODEL: GEMINI-4-HYDROGEN</span>
                 <span>SYSTEM VERSION 2.1.0</span>
               </div>
             </div>
@@ -826,7 +826,7 @@ export default function AiAssistant({ tickets }: AiAssistantProps) {
               </div>
 
               <div className="mt-4 pt-3 border-t border-slate-200 dark:border-slate-850 flex items-center justify-between text-[10px] font-bold text-slate-400 dark:text-slate-500 font-mono shrink-0">
-                <span>MODEL: GEMINI-3.5-FLASH</span>
+                <span>MODEL: GEMINI-4-HYDROGEN</span>
                 <span>SOP REVISION ID: BI-2026-v2</span>
               </div>
             </div>

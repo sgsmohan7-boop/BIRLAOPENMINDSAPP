@@ -18,7 +18,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1151.0",
     "@aws-sdk/s3-request-presigner": "^3.1151.0",
-    "@google/genai": "^2.4.0",
+    "@google/genai": "^3.4.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vis.gl/react-google-maps": "^1.8.3",
     "@vitejs/plugin-react": "^5.0.4",

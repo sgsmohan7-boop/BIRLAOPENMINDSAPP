@@ -45,19 +45,9 @@ let geminiClient: GoogleGenAI | null = null;
 let currentGeminiKey: string | null = null;
 
 function getGeminiKey(): string {
-  if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== "MY_GEMINI_API_KEY" && process.env.GEMINI_API_KEY.trim()) {
-    return process.env.GEMINI_API_KEY.trim();
-  }
-  try {
-    const cfgPath = path.join(process.cwd(), "firebase-applet-config.json");
-    if (fs.existsSync(cfgPath)) {
-      const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
-      if (cfg && cfg.apiKey && typeof cfg.apiKey === "string" && cfg.apiKey.trim()) {
-        return cfg.apiKey.trim();
-      }
-    }
-  } catch (err) {
-    // ignore
+  const envKey = process.env.GEMINI_API_KEY?.trim() || "";
+  if (envKey && envKey !== "MY_GEMINI_API_KEY") {
+    return envKey;
   }
   return "";
 }
@@ -65,7 +55,7 @@ function getGeminiKey(): string {
 function getGemini(): GoogleGenAI {
   const key = getGeminiKey();
   if (!key) {
-    throw new Error("GEMINI_API_KEY environment variable or configured project API key is required.");
+    throw new Error("GEMINI_API_KEY is not configured in Settings > Secrets.");
   }
   if (!geminiClient || currentGeminiKey !== key) {
     currentGeminiKey = key;
@@ -84,23 +74,46 @@ function getGemini(): GoogleGenAI {
 async function callGeminiWithRetry(options: any, maxRetries = 3): Promise<any> {
   const ai = getGemini();
   let lastError: any = null;
-  const requestedModel = options.model || "gemini-3.8-flash";
+  const requestedModel = options.model || "gemini-4-hydrogen";
   const modelCandidates = [
     requestedModel,
-    "gemini-3.8-flash",
+    "gemini-4-hydrogen",
     "gemini-3.1-flash-lite"
   ].filter((v, i, a) => a.indexOf(v) === i);
 
   for (const targetModel of modelCandidates) {
-    const currentOptions = { ...options, model: targetModel };
+    const sanitizedConfig = options.config ? { ...options.config } : undefined;
+    if (
+      sanitizedConfig &&
+      (targetModel === "gemini-4-hydrogen" ||
+        targetModel === "gemini-4-argon" ||
+        targetModel === "gemini-4-carbon")
+    ) {
+      delete sanitizedConfig.temperature;
+      delete sanitizedConfig.topP;
+      delete sanitizedConfig.topK;
+      delete sanitizedConfig.candidateCount;
+    }
+    const currentOptions = {
+      ...options,
+      model: targetModel,
+      ...(sanitizedConfig ? { config: sanitizedConfig } : {}),
+    };
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         return await ai.models.generateContent(currentOptions);
       } catch (err: any) {
         lastError = err;
         const msg = err instanceof Error ? err.message : String(err);
-        const isPermissionDenied = msg.includes("403") || msg.includes("PERMISSION_DENIED") || msg.includes("project-unavailable");
-        if (isPermissionDenied) {
+        const isAuthOrPermissionError =
+          msg.includes("401") ||
+          msg.includes("403") ||
+          msg.includes("UNAUTHENTICATED") ||
+          msg.includes("PERMISSION_DENIED") ||
+          msg.includes("API_KEY_INVALID") ||
+          msg.includes("ACCESS_TOKEN_TYPE_UNSUPPORTED") ||
+          msg.includes("project-unavailable");
+        if (isAuthOrPermissionError) {
           throw err;
         }
         const isNotFound = msg.includes("404") || msg.includes("not found") || msg.includes("INVALID_ARGUMENT") || msg.includes("NOT_FOUND");
@@ -384,32 +397,69 @@ const app = express();
         return res.status(400).json({ success: false, error: "Prompt is required." });
       }
 
-      const ai = getGemini();
-      let composedPrompt = prompt;
+      if (!getGeminiKey()) {
+        return res.status(503).json({
+          success: false,
+          isMissingKey: true,
+          error: "Gemini API key is not configured yet. Please add GEMINI_API_KEY in Settings > Secrets."
+        });
+      }
 
+      let composedPrompt = prompt;
       if (context) {
         composedPrompt = `Detailed Context:\n${JSON.stringify(context, null, 2)}\n\nQuery:\n${prompt}`;
       }
 
-      console.log(`🤖 Invoking Gemini Model (gemini-3.8-flash) for IT Troubleshooting: "${prompt.slice(0, 100)}..."`);
-      
+      console.log(`🤖 Invoking Gemini Model (gemini-4-hydrogen) for IT Troubleshooting: "${prompt.slice(0, 100)}..."`);
+
       const response = await callGeminiWithRetry({
-        model: "gemini-3.8-flash",
+        model: "gemini-4-hydrogen",
         contents: composedPrompt,
         config: {
-          systemInstruction: systemInstruction || "You are an AI-powered IT Support Specialist at Santinos Global School. Your job is to help teachers and junior IT engineers troubleshoot, analyze, and resolve classroom technical and facility issues (laptops, WiFi, smart boards, audio visual units, printers). Provide clear, step-by-step diagnostic advice, clear categories, and formatting with bold list entries. Speak professionally but encouragingly.",
-          temperature: 0.7,
+          systemInstruction: systemInstruction || "You are an AI-powered IT Support Specialist at Birla Open Minds International School. Your job is to help teachers and junior IT engineers troubleshoot, analyze, and resolve classroom technical and facility issues (laptops, WiFi, smart boards, audio visual units, printers). Provide clear, step-by-step diagnostic advice, clear categories, and formatting with bold list entries. Speak professionally but encouragingly.",
         }
       });
 
       const text = response.text;
       return res.json({ success: true, text });
     } catch (err: any) {
-      console.error("🔴 Gemini API Call Failed:", err);
-      const isMissingKey = !process.env.GEMINI_API_KEY;
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const isMissingKey = !getGeminiKey();
+      const isAuthIssue =
+        errMsg.includes("401") ||
+        errMsg.includes("403") ||
+        errMsg.includes("UNAUTHENTICATED") ||
+        errMsg.includes("PERMISSION_DENIED") ||
+        errMsg.includes("API_KEY_INVALID") ||
+        errMsg.includes("ACCESS_TOKEN_TYPE_UNSUPPORTED");
+
+      if (isAuthIssue) {
+        console.warn("⚠️ Gemini API key rejected or lacks permission. Please verify GEMINI_API_KEY in Settings > Secrets.");
+        return res.status(401).json({
+          success: false,
+          error: "The configured GEMINI_API_KEY is invalid or lacks permission for the Gemini API. Please verify it in Settings > Secrets.",
+          isMissingKey
+        });
+      }
+
+      const isCreditsDepleted =
+        errMsg.includes("402") ||
+        errMsg.includes("prepayment credits") ||
+        errMsg.includes("RESOURCE_EXHAUSTED");
+
+      if (isCreditsDepleted) {
+        console.warn("⚠️ Gemini API prepayment credits depleted or quota exhausted on the selected project.");
+        return res.status(402).json({
+          success: false,
+          error: "Gemini API prepayment credits on the linked project are ₹0 (depleted). Please add credits in Google AI Studio > Billing (or restore your prepay billing account) to resume AI responses.",
+          isMissingKey
+        });
+      }
+
+      console.warn("⚠️ Gemini API Call Failed:", errMsg);
       return res.status(500).json({
         success: false,
-        error: err instanceof Error ? err.message : String(err),
+        error: errMsg,
         isMissingKey
       });
     }
@@ -501,7 +551,15 @@ VERBATIM SPOKEN DIALOGUE TRANSCRIPT:
           generatedTranscript = response.text || "";
         } catch (geminiErr: any) {
           const errMsg = geminiErr?.message || String(geminiErr || "");
-          const isDenied = geminiErr?.status === 403 || errMsg.includes("403") || errMsg.includes("PERMISSION_DENIED") || errMsg.includes("project-unavailable");
+          const isDenied =
+            geminiErr?.status === 401 ||
+            geminiErr?.status === 403 ||
+            errMsg.includes("401") ||
+            errMsg.includes("403") ||
+            errMsg.includes("UNAUTHENTICATED") ||
+            errMsg.includes("PERMISSION_DENIED") ||
+            errMsg.includes("ACCESS_TOKEN_TYPE_UNSUPPORTED") ||
+            errMsg.includes("project-unavailable");
           if (isDenied) {
             geminiServiceActive = false;
           }
@@ -512,9 +570,9 @@ VERBATIM SPOKEN DIALOGUE TRANSCRIPT:
       // If audio was too large (>18MB / 1-2 hours) or multimodal wasn't used, but liveSpeechText exists and Gemini service is available:
       if (!generatedTranscript.trim() && liveSpeechText && liveSpeechText.trim() && geminiServiceActive) {
         try {
-          console.log(`🎙️ Polishing live speech transcript with Gemini 3.8 Flash...`);
+          console.log(`🎙️ Polishing live speech transcript with Gemini 4 Hydrogen...`);
           const polishResponse = await callGeminiWithRetry({
-            model: "gemini-3.8-flash",
+            model: "gemini-4-hydrogen",
             contents: [
               {
                 role: "user",
@@ -713,10 +771,9 @@ Return your response in pure JSON matching this exact structure:
 }`;
 
           const response = await callGeminiWithRetry({
-            model: "gemini-3.8-flash",
+            model: "gemini-4-hydrogen",
             contents: prompt,
             config: {
-              temperature: 0.1,
               responseMimeType: "application/json"
             }
           });
@@ -1465,12 +1522,16 @@ Return pure JSON matching this exact structure:
           }
 
           const response = await callGeminiWithRetry({
-            model: cleanBase64 ? "gemini-3.5-transcribe" : "gemini-3.8-flash",
+            model: cleanBase64 ? "gemini-3.5-transcribe" : "gemini-4-hydrogen",
             contents,
-            config: {
-              temperature: 0.1,
-              responseMimeType: "application/json",
-            },
+            config: cleanBase64
+              ? {
+                  temperature: 0.1,
+                  responseMimeType: "application/json",
+                }
+              : {
+                  responseMimeType: "application/json",
+                },
           });
 
           const rawText = response.text || "{}";
@@ -2559,11 +2620,10 @@ Return your analysis in valid JSON with this exact schema:
 }`;
 
           const response = await callGeminiWithRetry({
-            model: "gemini-3.8-flash",
+            model: "gemini-4-hydrogen",
             contents: prompt,
             config: {
               systemInstruction,
-              temperature: 0.15,
               responseMimeType: "application/json"
             }
           });
@@ -2581,7 +2641,7 @@ Return your analysis in valid JSON with this exact schema:
             return res.json({
               success: true,
               isAiGenerated: true,
-              engine: "Gemini 2.5 Flash",
+              engine: "Gemini 4 Hydrogen",
               momReport: parsedData
             });
           }
