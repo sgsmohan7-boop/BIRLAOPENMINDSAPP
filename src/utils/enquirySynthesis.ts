@@ -237,12 +237,13 @@ export function synthesizeAndMergeEnquiries(
   // Build parent-entry matching helper against saved forms
   const formMatchesParentEntry = (form: CounsellingEnquiry, entry: ParentSelfEntry): boolean => {
     if (form.sourceParentEntryId && entry.id && form.sourceParentEntryId === entry.id) {
+      if (!entry.hasSibling) return true;
       return isSameStudentRecord(form, entry);
     }
     if (entry.completedEnquiryNo && form.enquiryNo) {
       const enqA = entry.completedEnquiryNo.trim().toLowerCase();
       const enqB = form.enquiryNo.trim().toLowerCase();
-      if (enqA === enqB && isSameStudentRecord(form, entry)) {
+      if (enqA === enqB && (!entry.hasSibling || isSameStudentRecord(form, entry))) {
         return true;
       }
     }

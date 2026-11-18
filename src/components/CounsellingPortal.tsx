@@ -918,6 +918,7 @@ export default function CounsellingPortal({
   const firestoreParentsSyncedRef = React.useRef<boolean>(false);
   const lastParentSigRef = React.useRef<string>("");
   const lastManualDeptRefreshAtRef = React.useRef<number>(0);
+  const isClaimingTokenRef = React.useRef<boolean>(false);
 
   React.useEffect(() => {
     const resetRefreshCooldown = () => {
@@ -1893,6 +1894,7 @@ export default function CounsellingPortal({
   };
 
   const handleClaimAndAutoFill = async (entry: ParentSelfEntry) => {
+    if (isClaimingTokenRef.current) return;
     const currentCounsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR-01";
     const currentCounsellorName = activeCounsellor ? activeCounsellor.name : "Admissions Counsellor";
 
@@ -1918,6 +1920,9 @@ export default function CounsellingPortal({
       });
       return;
     }
+
+    isClaimingTokenRef.current = true;
+    try {
 
     // Mark claimed
     const updatedEntries = parentSelfEntries.map(e => e.id === entry.id ? {
@@ -2161,6 +2166,9 @@ export default function CounsellingPortal({
       setDeleteToast(`✓ Claimed ${isOnline ? `Online Lead (#${draftNo})` : `Walk-in (${draftNo})`} for ${entry.studentName}! Form opened.`);
       setTimeout(() => setDeleteToast(null), 4000);
     }
+    } finally {
+      isClaimingTokenRef.current = false;
+    }
   };
 
   const handleConvertOnlineToWalkin = async (entry: ParentSelfEntry) => {
@@ -2293,6 +2301,7 @@ export default function CounsellingPortal({
   };
 
   const handleStartJointSiblingCounselling = async (entry1: ParentSelfEntry, entry2: ParentSelfEntry) => {
+    if (isClaimingTokenRef.current) return;
     const currentCounsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR-01";
     const currentCounsellorName = activeCounsellor ? activeCounsellor.name : "Admissions Counsellor";
 
@@ -2308,6 +2317,9 @@ export default function CounsellingPortal({
       });
       return;
     }
+
+    isClaimingTokenRef.current = true;
+    try {
 
     // Mark both claimed
     const claimTime = new Date().toISOString();
@@ -2483,6 +2495,9 @@ export default function CounsellingPortal({
     setActiveView("form");
     setDeleteToast(`✓ Starting Joint Sibling Meeting for Tokens #${entry1.dailyTokenNo || 1} & #${entry2.dailyTokenNo || 2}!`);
     setTimeout(() => setDeleteToast(null), 4000);
+    } finally {
+      isClaimingTokenRef.current = false;
+    }
   };
 
   // Password Reset / Change Modal State for Counsellor
@@ -3181,12 +3196,28 @@ export default function CounsellingPortal({
       formData.contactNo = "9876543210";
     }
 
-    const alreadySaved = safeEnquiries.find(
-      e => isSameStudentRecord(e, formData) && (
-        (formData.id && e.id === formData.id) ||
-        (formData.enquiryNo && e.enquiryNo && e.enquiryNo.trim().toUpperCase() === formData.enquiryNo.trim().toUpperCase())
-      )
-    );
+    const matchesOwnRecord = (existing: CounsellingEnquiry, target: CounsellingEnquiry) => {
+      const idOrNoMatch =
+        (target.id && existing.id === target.id) ||
+        (target.enquiryNo && existing.enquiryNo && existing.enquiryNo.trim().toUpperCase() === target.enquiryNo.trim().toUpperCase());
+      if (!idOrNoMatch) return false;
+      if (isSameStudentRecord(existing, target)) return true;
+      // Preserve identity if counsellor edited student spelling inside a claimed draft
+      if (
+        target.sourceParentEntryId &&
+        existing.sourceParentEntryId &&
+        target.sourceParentEntryId === existing.sourceParentEntryId &&
+        existing.id === target.id
+      ) {
+        return true;
+      }
+      return false;
+    };
+
+    const alreadySaved = safeEnquiries.find(e => matchesOwnRecord(e, formData));
+    const alreadySavedSibling = (isJointSiblingMode && siblingFormData)
+      ? safeEnquiries.find(e => matchesOwnRecord(e, siblingFormData))
+      : undefined;
     const isNew = !selectedEnquiry && !alreadySaved;
     const finalCounsellor = activeCounsellor || localAccounts.find(c => c.id === formData.counsellorId) || localAccounts[0];
     const assignedCounsellorId = userRole === "Counsellor" && activeCounsellor ? activeCounsellor.id : (formData.counsellorId || finalCounsellor.id);
@@ -3200,6 +3231,12 @@ export default function CounsellingPortal({
       existingEnquiryNos.add(rawNo.trim().toUpperCase());
       const sn = extractEnquirySerialNum(rawNo);
       if (sn) existingSerials.add(sn);
+    };
+    const removeOwnOccupied = (rawNo?: string | null) => {
+      if (!rawNo) return;
+      existingEnquiryNos.delete(rawNo.trim().toUpperCase());
+      const sn = extractEnquirySerialNum(rawNo);
+      if (sn) existingSerials.delete(sn);
     };
 
     safeEnquiries.forEach(item => {
@@ -3215,16 +3252,15 @@ export default function CounsellingPortal({
       }
     } catch {}
 
-    // Only exclude own number if it belongs to THIS same student
+    // Exclude own numbers for BOTH Child 1 and Child 2 so updating in-place never spawns duplicate rows
     if (selectedEnquiry?.enquiryNo && isSameStudentRecord(selectedEnquiry, formData)) {
-      existingEnquiryNos.delete(selectedEnquiry.enquiryNo.trim().toUpperCase());
-      const sn = extractEnquirySerialNum(selectedEnquiry.enquiryNo);
-      if (sn) existingSerials.delete(sn);
+      removeOwnOccupied(selectedEnquiry.enquiryNo);
     }
     if (alreadySaved?.enquiryNo) {
-      existingEnquiryNos.delete(alreadySaved.enquiryNo.trim().toUpperCase());
-      const sn = extractEnquirySerialNum(alreadySaved.enquiryNo);
-      if (sn) existingSerials.delete(sn);
+      removeOwnOccupied(alreadySaved.enquiryNo);
+    }
+    if (alreadySavedSibling?.enquiryNo) {
+      removeOwnOccupied(alreadySavedSibling.enquiryNo);
     }
 
     let nextEnquiryNo = (alreadySaved?.enquiryNo || formData.enquiryNo || "").trim();
@@ -3282,7 +3318,7 @@ export default function CounsellingPortal({
 
     // Joint Sibling Session Commit
     if (isJointSiblingMode && siblingFormData && siblingFormData.studentName.trim()) {
-      let sibCandidateNo = siblingFormData.enquiryNo;
+      let sibCandidateNo = (alreadySavedSibling?.enquiryNo || siblingFormData.enquiryNo || "").trim();
       const sibSerial = extractEnquirySerialNum(sibCandidateNo);
       if (
         !sibCandidateNo ||
@@ -9446,47 +9482,42 @@ Warm regards,
                 counsellorName={formData.counsellorName || (activeCounsellor?.name || "Admissions Counsellor")}
                 existingAudio={formData.audioRecording}
                 onSaveAudio={(audioRec) => {
-                  setFormData(prev => {
-                    const finalCounsellor = activeCounsellor || localAccounts.find(c => c.id === prev.counsellorId) || localAccounts[0];
-                    const assignedCounsellorId = userRole === "Counsellor" && activeCounsellor ? activeCounsellor.id : (prev.counsellorId || finalCounsellor.id);
-                    const assignedCounsellorName = userRole === "Counsellor" && activeCounsellor ? activeCounsellor.name : (prev.counsellorName || finalCounsellor.name);
+                  const finalCounsellor = activeCounsellor || localAccounts.find(c => c.id === formData.counsellorId) || localAccounts[0];
+                  const assignedCounsellorId = userRole === "Counsellor" && activeCounsellor ? activeCounsellor.id : (formData.counsellorId || finalCounsellor.id);
+                  const assignedCounsellorName = userRole === "Counsellor" && activeCounsellor ? activeCounsellor.name : (formData.counsellorName || finalCounsellor.name);
 
-                    const updated: CounsellingEnquiry = {
-                      ...prev,
-                      counsellorId: assignedCounsellorId,
-                      counsellorName: assignedCounsellorName,
-                      audioRecording: audioRec,
-                      conversationLanguageNotes: audioRec.conversationLanguageNotes || prev.conversationLanguageNotes,
-                      pointsDiscussed: prev.pointsDiscussed && prev.pointsDiscussed.trim()
-                        ? prev.pointsDiscussed
-                        : (audioRec.meetingTextSummary || prev.pointsDiscussed)
+                  const updated: CounsellingEnquiry = {
+                    ...formData,
+                    counsellorId: assignedCounsellorId,
+                    counsellorName: assignedCounsellorName,
+                    audioRecording: audioRec,
+                    conversationLanguageNotes: audioRec.conversationLanguageNotes || formData.conversationLanguageNotes,
+                    pointsDiscussed: formData.pointsDiscussed && formData.pointsDiscussed.trim()
+                      ? formData.pointsDiscussed
+                      : (audioRec.meetingTextSummary || formData.pointsDiscussed)
+                  };
+
+                  setFormData(updated);
+                  onSaveEnquiry(updated);
+
+                  if (isJointSiblingMode && siblingFormData) {
+                    const sibUpdated: CounsellingEnquiry = {
+                      ...siblingFormData,
+                      audioRecording: {
+                        ...audioRec,
+                        id: `${audioRec.id}-SIB`,
+                        enquiryNo: siblingFormData.enquiryNo || "",
+                        studentName: siblingFormData.studentName || "Sibling",
+                        isJointSiblingSession: true,
+                        jointSiblingNames: `${formData.studentName} & ${siblingFormData.studentName}`
+                      },
+                      conversationLanguageNotes: audioRec.conversationLanguageNotes || siblingFormData.conversationLanguageNotes,
+                      pointsDiscussed: siblingFormData.pointsDiscussed && siblingFormData.pointsDiscussed.trim()
+                        ? siblingFormData.pointsDiscussed
+                        : (audioRec.meetingTextSummary || siblingFormData.pointsDiscussed)
                     };
-
-                    onSaveEnquiry(updated);
-                    return updated;
-                  });
-
-                  if (isJointSiblingMode) {
-                    setSiblingFormData(prev => {
-                      if (!prev) return null;
-                      const sibUpdated: CounsellingEnquiry = {
-                        ...prev,
-                        audioRecording: {
-                          ...audioRec,
-                          id: `${audioRec.id}-SIB`,
-                          enquiryNo: prev.enquiryNo || "",
-                          studentName: prev.studentName || "Sibling",
-                          isJointSiblingSession: true,
-                          jointSiblingNames: `${formData.studentName} & ${prev.studentName}`
-                        },
-                        conversationLanguageNotes: audioRec.conversationLanguageNotes || prev.conversationLanguageNotes,
-                        pointsDiscussed: prev.pointsDiscussed && prev.pointsDiscussed.trim()
-                          ? prev.pointsDiscussed
-                          : (audioRec.meetingTextSummary || prev.pointsDiscussed)
-                      };
-                      onSaveEnquiry(sibUpdated);
-                      return sibUpdated;
-                    });
+                    setSiblingFormData(sibUpdated);
+                    onSaveEnquiry(sibUpdated);
                   }
                 }}
                 onRemoveAudio={() => {

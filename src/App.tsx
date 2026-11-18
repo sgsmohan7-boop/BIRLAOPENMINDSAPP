@@ -1516,7 +1516,14 @@ export default function App() {
       const colliding = knownPool.find(
         e => e && ((e.id || "").trim().toLowerCase() === resolvedNo.toLowerCase() || (e.enquiryNo || "").trim().toLowerCase() === resolvedNo.toLowerCase())
       );
-      if (colliding && !isSameStudentRecord(colliding, enquiry)) {
+      const isSameSourceDraft = Boolean(
+        colliding &&
+        colliding.sourceParentEntryId &&
+        enquiry.sourceParentEntryId &&
+        colliding.sourceParentEntryId === enquiry.sourceParentEntryId &&
+        (colliding.id === enquiry.id || (colliding.enquiryNo || "").trim().toLowerCase() === resolvedNo.toLowerCase())
+      );
+      if (colliding && !isSameStudentRecord(colliding, enquiry) && !isSameSourceDraft) {
         let maxN = 0;
         knownPool.forEach(e => {
           const n = extractEnquirySerialNum(e?.enquiryNo);
@@ -1576,10 +1583,17 @@ export default function App() {
 
     // 1. Immediately persist synchronously to LocalStorage & update state
     setCounsellingEnquiries((prev) => {
-      const idx = prev.findIndex((e) =>
-        isSameStudentRecord(e, cleanEnquiry) &&
-        ((e.id === cleanEnquiry.id) || (cleanEnquiry.enquiryNo && e.enquiryNo && e.enquiryNo.toLowerCase() === cleanEnquiry.enquiryNo.toLowerCase()))
-      );
+      const idx = prev.findIndex((e) => {
+        const idOrNoMatches = (e.id === cleanEnquiry.id) || (cleanEnquiry.enquiryNo && e.enquiryNo && e.enquiryNo.toLowerCase() === cleanEnquiry.enquiryNo.toLowerCase());
+        if (!idOrNoMatches) return false;
+        if (isSameStudentRecord(e, cleanEnquiry)) return true;
+        return Boolean(
+          e.sourceParentEntryId &&
+          cleanEnquiry.sourceParentEntryId &&
+          e.sourceParentEntryId === cleanEnquiry.sourceParentEntryId &&
+          e.id === cleanEnquiry.id
+        );
+      });
       let nextList: CounsellingEnquiry[];
       if (idx >= 0) {
         nextList = [...prev];
