@@ -13,7 +13,8 @@ import {
   ShieldCheck,
   Search,
   School,
-  Trash2
+  Trash2,
+  Lock
 } from "lucide-react";
 import { ParentSelfEntry } from "../types";
 import { getDismissedParentEntryIds } from "../utils/storage";
@@ -31,6 +32,7 @@ interface ReceptionQueueModalProps {
   currentCounsellorId?: string;
   userRole?: string;
   isCloudSynced?: boolean;
+  lockedByPendingClaim?: { tokenLabel: string; studentName: string; entryIds: string[] } | null;
 }
 
 function toLocalYMD(date: Date): string {
@@ -52,7 +54,8 @@ export default function ReceptionQueueModal({
   currentCounsellorName = "Counsellor",
   currentCounsellorId,
   userRole,
-  isCloudSynced = false
+  isCloudSynced = false,
+  lockedByPendingClaim = null
 }: ReceptionQueueModalProps) {
   const [activeTab, setActiveTab] = useState<"pending" | "claimed">("pending");
   const [searchQuery, setSearchQuery] = useState("");
@@ -464,18 +467,35 @@ export default function ReceptionQueueModal({
 
                     {isPending ? (
                       <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            onClaimEntry(entry);
-                            onClose();
-                          }}
-                          className="flex-1 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 active:scale-95 text-white rounded-xl text-xs font-black shadow-lg transition-all cursor-pointer flex items-center justify-center gap-2"
-                        >
-                          <Sparkles size={15} />
-                          <span>⚡ Claim &amp; Auto-Fill Form</span>
-                          <ArrowRight size={15} />
-                        </button>
+                        {(() => {
+                          const isLockedByOtherToken = Boolean(
+                            lockedByPendingClaim &&
+                            !lockedByPendingClaim.entryIds.includes(entry.id)
+                          );
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onClaimEntry(entry);
+                                onClose();
+                              }}
+                              className={`flex-1 py-2.5 active:scale-95 text-white rounded-xl text-xs font-black shadow-lg transition-all cursor-pointer flex items-center justify-center gap-2 ${
+                                isLockedByOtherToken
+                                  ? "bg-slate-700 hover:bg-slate-600 border border-amber-400/50 text-amber-200"
+                                  : "bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700"
+                              }`}
+                              title={isLockedByOtherToken ? `Locked: Save ${lockedByPendingClaim?.tokenLabel} first` : "Claim this token and auto-fill form"}
+                            >
+                              {isLockedByOtherToken ? <Lock size={14} className="text-amber-300" /> : <Sparkles size={15} />}
+                              <span>
+                                {isLockedByOtherToken
+                                  ? `🔒 Save ${lockedByPendingClaim?.tokenLabel} First`
+                                  : "⚡ Claim & Auto-Fill Form"}
+                              </span>
+                              {!isLockedByOtherToken && <ArrowRight size={15} />}
+                            </button>
+                          );
+                        })()}
                         {onDismissEntry && (
                           <button
                             type="button"

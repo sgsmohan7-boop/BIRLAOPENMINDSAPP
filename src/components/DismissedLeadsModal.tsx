@@ -16,7 +16,8 @@ import {
   Ticket,
   Filter,
   CheckCircle2,
-  FolderArchive
+  FolderArchive,
+  Lock
 } from "lucide-react";
 import { ParentSelfEntry } from "../types";
 
@@ -30,6 +31,7 @@ interface DismissedLeadsModalProps {
   onPermanentDelete?: (id: string) => void;
   currentCounsellorName?: string;
   userRole?: string;
+  lockedByPendingClaim?: { tokenLabel: string; studentName: string; entryIds: string[] } | null;
 }
 
 export const DismissedLeadsModal: React.FC<DismissedLeadsModalProps> = ({
@@ -41,7 +43,8 @@ export const DismissedLeadsModal: React.FC<DismissedLeadsModalProps> = ({
   onClaimEntry,
   onPermanentDelete,
   currentCounsellorName,
-  userRole
+  userRole,
+  lockedByPendingClaim = null
 }) => {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterType, setFilterType] = useState<"ALL" | "ONLINE" | "WALKIN">("ALL");
@@ -432,18 +435,34 @@ export const DismissedLeadsModal: React.FC<DismissedLeadsModalProps> = ({
                               <span>Restore</span>
                             </button>
 
-                            <button
-                              type="button"
-                              onClick={() => {
-                                onClaimEntry(entry);
-                                onClose();
-                              }}
-                              className="px-3 py-1.5 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 shadow-sm"
-                              title="Claim this lead and open admission form immediately"
-                            >
-                              <Zap size={13} className="fill-amber-300 text-amber-300" />
-                              <span>Claim &amp; Form</span>
-                            </button>
+                            {(() => {
+                              const isLockedByOtherToken = Boolean(
+                                lockedByPendingClaim &&
+                                !lockedByPendingClaim.entryIds.includes(entry.id)
+                              );
+                              return (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    onClaimEntry(entry);
+                                    onClose();
+                                  }}
+                                  className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 shadow-sm ${
+                                    isLockedByOtherToken
+                                      ? "bg-slate-700 hover:bg-slate-600 text-amber-200 border border-amber-400/50"
+                                      : "bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white"
+                                  }`}
+                                  title={isLockedByOtherToken ? `Locked: Save ${lockedByPendingClaim?.tokenLabel} first` : "Claim this lead and open admission form immediately"}
+                                >
+                                  {isLockedByOtherToken ? (
+                                    <Lock size={12} className="text-amber-300" />
+                                  ) : (
+                                    <Zap size={13} className="fill-amber-300 text-amber-300" />
+                                  )}
+                                  <span>{isLockedByOtherToken ? "🔒 Locked" : "Claim & Form"}</span>
+                                </button>
+                              );
+                            })()}
                           </div>
                         );
                       })()}

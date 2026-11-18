@@ -710,7 +710,7 @@ export default function CounsellingPortal({
   }, []);
 
   // Active Counsellor resolution with tab-isolated URL param & sessionStorage precedence
-  const [selectedCounsellorIdOverride, setSelectedCounsellorIdOverride] = useState<string | null>(() => {
+  const [selectedCounsellorIdOverride] = useState<string | null>(() => {
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
       return params.get("counsellor") || params.get("counsellorId") || sessionStorage.getItem("sgs_counsellor_override_id");
@@ -876,6 +876,19 @@ export default function CounsellingPortal({
     } catch {}
     return null;
   });
+
+  const [tokenLockPopup, setTokenLockPopup] = useState<{
+    attemptedLabel: string;
+    pendingClaim: {
+      entry: ParentSelfEntry;
+      entries: ParentSelfEntry[];
+      tokenLabel: string;
+      studentLabel: string;
+      formData: CounsellingEnquiry | null;
+      siblingFormData: CounsellingEnquiry | null;
+      isJointSibling: boolean;
+    };
+  } | null>(null);
 
   // Scheduled Follow-Up Reminder Hub States
   const [isFollowUpHubCollapsed, setIsFollowUpHubCollapsed] = useState<boolean>(() => {
@@ -1403,6 +1416,182 @@ export default function CounsellingPortal({
     return claimedParentEntries.filter(isEntryToday);
   }, [claimedParentEntries]);
 
+  const normClaimCounsellorKey = (val?: string | null) =>
+    (val || "").trim().toLowerCase().replace(/-0+/g, "-");
+
+  const currentCounsellorClaimId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR-01";
+
+  // Tracks if the current counsellor has a claimed token that has not been saved/completed yet
+  const pendingUnsavedClaim = useMemo(() => {
+    const myKey = normClaimCounsellorKey(currentCounsellorClaimId);
+
+    // 1. Check activeDraft owned by current counsellor
+    if (activeDraft && activeDraft.formData) {
+      const draftOwnerKey = normClaimCounsellorKey(activeDraft.counsellorId || activeDraft.formData.counsellorId);
+      const belongsToMe = !draftOwnerKey || draftOwnerKey === myKey;
+      const draftEntry: ParentSelfEntry | undefined = activeDraft.entry;
+
+      if (belongsToMe && draftEntry && draftEntry.id) {
+        const liveMatch = parentSelfEntries.find(e => e.id === draftEntry.id);
+        const isStillClaimed = !liveMatch || liveMatch.status === "claimed";
+        if (isStillClaimed) {
+          const allEntries: ParentSelfEntry[] = Array.isArray(activeDraft.entries) && activeDraft.entries.length > 0
+            ? activeDraft.entries.map((ae: ParentSelfEntry) => parentSelfEntries.find(e => e.id === ae.id) || ae)
+            : [liveMatch || draftEntry];
+          const tokenLabel = draftEntry.enquiryType === "online"
+            ? `#${draftEntry.onlineRefNo || draftEntry.id}`
+            : `Token #${draftEntry.dailyTokenNo || 1}`;
+          const studentLabel = activeDraft.siblingFormData?.studentName
+            ? `${activeDraft.formData.studentName} & ${activeDraft.siblingFormData.studentName}`
+            : (activeDraft.formData.studentName || draftEntry.studentName);
+          return {
+            entry: liveMatch || draftEntry,
+            entries: allEntries,
+            tokenLabel,
+            studentLabel,
+            formData: activeDraft.formData as CounsellingEnquiry,
+            siblingFormData: (activeDraft.siblingFormData || null) as CounsellingEnquiry | null,
+            isJointSibling: Boolean(activeDraft.isJointSibling && activeDraft.siblingFormData)
+          };
+        }
+      }
+    }
+
+    // 2. Fallback: Check today's cloud/server-synced entries currently marked as "claimed" by this counsellor
+    const liveClaimedToday = (parentSelfEntries || []).find(e => {
+      if (e.status !== "claimed") return false;
+      if (!isEntryToday(e)) return false;
+      const ownerKey = normClaimCounsellorKey(e.claimedBy);
+      return Boolean(ownerKey && ownerKey === myKey);
+    });
+
+    if (liveClaimedToday) {
+      const matchingDraftRow = safeEnquiries.find(enq =>
+        enq.sourceParentEntryId === liveClaimedToday.id ||
+        (liveClaimedToday.dailyTokenNo && enq.walkInTokenNo === liveClaimedToday.dailyTokenNo && isSameStudentRecord(enq, liveClaimedToday as any))
+      );
+      const tokenLabel = liveClaimedToday.enquiryType === "online"
+        ? `#${liveClaimedToday.onlineRefNo || liveClaimedToday.id}`
+        : `Token #${liveClaimedToday.dailyTokenNo || 1}`;
+      return {
+        entry: liveClaimedToday,
+        entries: [liveClaimedToday],
+        tokenLabel,
+        studentLabel: liveClaimedToday.studentName,
+        formData: matchingDraftRow || null,
+        siblingFormData: null,
+        isJointSibling: false
+      };
+    }
+
+    return null;
+  }, [activeDraft, parentSelfEntries, safeEnquiries, currentCounsellorClaimId]);
+
+  const handleReleasePendingClaimedToken = async (
+    targetClaim?: NonNullable<typeof pendingUnsavedClaim> | null
+  ) => {
+    const claimToRelease = targetClaim || pendingUnsavedClaim;
+    const defaultCounsellor = activeCounsellor || localAccounts[0];
+    if (defaultCounsellor?.id) {
+      releaseDraftReservation(defaultCounsellor.id);
+    }
+
+    if (claimToRelease?.formData?.enquiryNo) {
+      try {
+        fetch("/api/counselling/release-reservation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enquiryNo: claimToRelease.formData.enquiryNo, counsellorId: defaultCounsellor?.id })
+        }).catch(() => {});
+      } catch {}
+    }
+    if (claimToRelease?.siblingFormData?.enquiryNo) {
+      try {
+        fetch("/api/counselling/release-reservation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enquiryNo: claimToRelease.siblingFormData.enquiryNo })
+        }).catch(() => {});
+      } catch {}
+    }
+
+    // Remove auto-created unsubmitted draft row ONLY if it has no audio or counselling notes yet
+    const draftEnqId = claimToRelease?.formData?.id;
+    if (draftEnqId) {
+      const existingRow = safeEnquiries.find(e => e.id === draftEnqId);
+      if (
+        existingRow &&
+        !existingRow.audioRecording &&
+        !(existingRow.pointsDiscussed || "").trim() &&
+        !(existingRow.counsellorObservations || "").trim()
+      ) {
+        onDeleteEnquiry(existingRow.id);
+      }
+    }
+    const sibDraftEnqId = claimToRelease?.siblingFormData?.id;
+    if (sibDraftEnqId) {
+      const existingSibRow = safeEnquiries.find(e => e.id === sibDraftEnqId);
+      if (
+        existingSibRow &&
+        !existingSibRow.audioRecording &&
+        !(existingSibRow.pointsDiscussed || "").trim() &&
+        !(existingSibRow.counsellorObservations || "").trim()
+      ) {
+        onDeleteEnquiry(existingSibRow.id);
+      }
+    }
+
+    const releaseIds = new Set<string>(
+      (claimToRelease?.entries || []).map(e => e.id).filter(Boolean)
+    );
+
+    if (releaseIds.size > 0) {
+      const updatedEntries = parentSelfEntries.map(e => {
+        if (!releaseIds.has(e.id)) return e;
+        const next: ParentSelfEntry = {
+          ...e,
+          status: "pending"
+        };
+        delete next.claimedBy;
+        delete next.claimedByName;
+        delete next.claimedAt;
+        return next;
+      });
+      setParentSelfEntries(updatedEntries);
+      saveParentSelfEntries(updatedEntries);
+      notifyParentEntriesChanged(updatedEntries);
+
+      for (const relId of releaseIds) {
+        try {
+          if (isFirebaseConfigured()) {
+            await saveDocument("parent_self_entries", relId, {
+              status: "pending",
+              claimedBy: null,
+              claimedByName: null,
+              claimedAt: null
+            });
+          }
+        } catch {}
+        try {
+          await fetch("/api/parent-self-entry/restore", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: relId })
+          });
+        } catch {}
+      }
+    }
+
+    try { localStorage.removeItem("bomis_counsellor_active_draft"); } catch {}
+    setActiveDraft(null);
+    setLinkedSiblingTokens([]);
+    setIsJointSiblingMode(false);
+    setSiblingFormData(null);
+    setTokenLockPopup(null);
+    setDeleteToast(`🔓 ${claimToRelease?.tokenLabel || "Token"} released back to queue. You can claim another token now.`);
+    setTimeout(() => setDeleteToast(null), 3500);
+  };
+
   const handleAddParentSelfEntry = (entry: ParentSelfEntry) => {
     const updated = [entry, ...parentSelfEntries.filter(e => e.id !== entry.id)];
     setParentSelfEntries(updated);
@@ -1707,10 +1896,26 @@ export default function CounsellingPortal({
     const currentCounsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR-01";
     const currentCounsellorName = activeCounsellor ? activeCounsellor.name : "Admissions Counsellor";
 
-    // Guard: Prevent claiming if another counsellor has already claimed this token
+    // Guard 1: Prevent claiming if another counsellor has already claimed this token
     const liveCheck = parentSelfEntries.find(e => e.id === entry.id);
     if (liveCheck && (liveCheck.status === "claimed" || liveCheck.claimedBy) && liveCheck.claimedBy !== currentCounsellorId) {
       alert(`⚠️ Token #${entry.dailyTokenNo || entry.id} has already been claimed by ${liveCheck.claimedByName || liveCheck.claimedBy}! Two counsellors cannot claim the same parent token simultaneously.`);
+      return;
+    }
+
+    // Guard 2: Lock remaining tokens until this counsellor saves or releases their active claimed token
+    const isReopeningSameClaim = Boolean(
+      pendingUnsavedClaim &&
+      pendingUnsavedClaim.entries.some(pe => pe.id === entry.id)
+    );
+    if (pendingUnsavedClaim && !isReopeningSameClaim) {
+      const attemptedLabel = entry.enquiryType === "online"
+        ? `#${entry.onlineRefNo || entry.id}`
+        : `Token #${entry.dailyTokenNo || 1}`;
+      setTokenLockPopup({
+        attemptedLabel,
+        pendingClaim: pendingUnsavedClaim
+      });
       return;
     }
 
@@ -2091,6 +2296,19 @@ export default function CounsellingPortal({
     const currentCounsellorId = activeCounsellor ? activeCounsellor.id : "COUNSELLOR-01";
     const currentCounsellorName = activeCounsellor ? activeCounsellor.name : "Admissions Counsellor";
 
+    // Lock check: Prevent starting joint sibling session if counsellor already has a different unsaved token
+    const isSameClaim = Boolean(
+      pendingUnsavedClaim &&
+      pendingUnsavedClaim.entries.some(pe => pe.id === entry1.id || pe.id === entry2.id)
+    );
+    if (pendingUnsavedClaim && !isSameClaim) {
+      setTokenLockPopup({
+        attemptedLabel: `Tokens #${entry1.dailyTokenNo || 1} & #${entry2.dailyTokenNo || 2}`,
+        pendingClaim: pendingUnsavedClaim
+      });
+      return;
+    }
+
     // Mark both claimed
     const claimTime = new Date().toISOString();
     const updatedEntries = parentSelfEntries.map(e => {
@@ -2248,6 +2466,18 @@ export default function CounsellingPortal({
     setIsJointSiblingMode(true);
     setSiblingActiveTab("child1");
     setLinkedSiblingTokens([entry1, entry2]);
+
+    const jointDraftObj = {
+      counsellorId: currentCounsellorId,
+      formData: newClaimedData1,
+      siblingFormData: newClaimedData2,
+      entry: entry1,
+      entries: [entry1, entry2],
+      isJointSibling: true,
+      claimedAt: claimTime
+    };
+    try { localStorage.setItem("bomis_counsellor_active_draft", JSON.stringify(jointDraftObj)); } catch {}
+    setActiveDraft(jointDraftObj);
 
     setSelectedEnquiry(null);
     setActiveView("form");
@@ -3157,24 +3387,35 @@ export default function CounsellingPortal({
     unmarkDeletedEnquiryId(updated.id, updated.enquiryNo);
     onSaveEnquiry(updated);
 
-    // Mark associated parentSelfEntry as COMPLETED so it departs the active kiosk queue cleanly
-    const claimedEntryId = activeDraft?.entry?.id || linkedSiblingTokens?.[0]?.id;
+    // Mark associated parentSelfEntry record(s) as COMPLETED so they unlock remaining tokens cleanly
+    const claimedEntryIdsSet = new Set<string>(
+      [
+        activeDraft?.entry?.id,
+        ...(Array.isArray(activeDraft?.entries) ? activeDraft.entries.map((x: any) => x?.id) : []),
+        ...linkedSiblingTokens.map(t => t?.id),
+        updated.sourceParentEntryId
+      ].filter(Boolean) as string[]
+    );
     const targetStudentLower = (updated.studentName || "").trim().toLowerCase();
+    const targetSibStudentLower = (siblingFormData?.studentName || "").trim().toLowerCase();
     const targetPhone = (updated.contactNo || "").replace(/\D/g, "");
+    const completedAtIso = new Date().toISOString();
 
+    const matchedIdsToSync = new Set<string>(claimedEntryIdsSet);
     const updatedParentSelfEntries = parentSelfEntries.map(e => {
       const eStudentLower = (e.studentName || "").trim().toLowerCase();
       const ePhone = (e.contactNo || "").replace(/\D/g, "");
-      const isMatch = (claimedEntryId && e.id === claimedEntryId) ||
-        (eStudentLower && eStudentLower === targetStudentLower) ||
+      const isMatch = claimedEntryIdsSet.has(e.id) ||
+        (eStudentLower && (eStudentLower === targetStudentLower || (targetSibStudentLower && eStudentLower === targetSibStudentLower))) ||
         (targetPhone && ePhone && targetPhone === ePhone && (e.status === "claimed" || e.status === "pending"));
 
       if (isMatch) {
+        matchedIdsToSync.add(e.id);
         return {
           ...e,
           status: "completed" as const,
           completedEnquiryNo: updated.enquiryNo,
-          completedAt: new Date().toISOString(),
+          completedAt: completedAtIso,
           completedBy: assignedCounsellorId,
           completedByName: assignedCounsellorName
         };
@@ -3186,13 +3427,13 @@ export default function CounsellingPortal({
     saveParentSelfEntries(updatedParentSelfEntries);
     notifyParentEntriesChanged(updatedParentSelfEntries);
 
-    // Sync completion to Firestore & Server API
-    if (claimedEntryId) {
+    // Sync completion to Firestore & Server API for all matched claimed tokens
+    for (const cid of matchedIdsToSync) {
       try {
-        saveDocument("parent_self_entries", claimedEntryId, {
+        saveDocument("parent_self_entries", cid, {
           status: "completed",
           completedEnquiryNo: updated.enquiryNo,
-          completedAt: new Date().toISOString(),
+          completedAt: completedAtIso,
           completedBy: assignedCounsellorId,
           completedByName: assignedCounsellorName
         });
@@ -3202,12 +3443,12 @@ export default function CounsellingPortal({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            id: claimedEntryId,
+            id: cid,
             studentName: updated.studentName,
             contactNo: updated.contactNo,
             status: "completed",
             completedEnquiryNo: updated.enquiryNo,
-            completedAt: new Date().toISOString(),
+            completedAt: completedAtIso,
             completedBy: assignedCounsellorId,
             completedByName: assignedCounsellorName
           })
@@ -3217,6 +3458,7 @@ export default function CounsellingPortal({
 
     try { localStorage.removeItem("bomis_counsellor_active_draft"); } catch {}
     setActiveDraft(null);
+    setTokenLockPopup(null);
 
     if (isJointSiblingMode && siblingFormData) {
       setDeleteToast(`✅ Joint Sibling Enquiries ${updated.enquiryNo} (${updated.studentName}) & ${siblingFormData.enquiryNo || "Child 2"} (${siblingFormData.studentName}) saved successfully with shared meeting audio!`);
@@ -4222,8 +4464,8 @@ Warm regards,
               </button>
             )}
 
-            {/* Highlighted Active Counsellor Profile Badge (sravan COUNSELLOR - 02 removed) */}
-            {userRole === "Counsellor" ? (
+            {/* Highlighted Active Counsellor Profile Badge (shown for Counsellor role) */}
+            {userRole === "Counsellor" && (
               <div className="flex items-center gap-2.5 px-3.5 py-1.5 bg-amber-100/90 dark:bg-orange-950/80 border-2 border-amber-400 dark:border-amber-500/80 rounded-2xl shadow-md ring-2 ring-amber-400/30 transition-all" title="Private Active Counsellor Workspace">
                 <div className="w-8 h-8 rounded-full bg-gradient-to-br from-orange-600 via-amber-600 to-yellow-600 text-white flex items-center justify-center font-black text-xs shrink-0 shadow-sm border border-amber-300">
                   {activeCounsellor?.name ? activeCounsellor.name.slice(0, 2).toUpperCase() : "SR"}
@@ -4236,35 +4478,6 @@ Warm regards,
                     🔒 {activeCounsellor?.name?.toLowerCase().includes("sravan") ? "sravan COUNSELLOR" : `${activeCounsellor?.name || "sravan"} COUNSELLOR`}
                   </span>
                 </div>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2.5 px-3.5 py-1.5 bg-amber-100/90 dark:bg-orange-950/80 border-2 border-amber-400 dark:border-amber-500/80 rounded-2xl shadow-md ring-2 ring-amber-400/30 transition-all">
-                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-orange-600 via-amber-600 to-yellow-600 text-white flex items-center justify-center font-black text-xs shrink-0 shadow-sm border border-amber-300">
-                  {activeCounsellor?.name ? activeCounsellor.name.slice(0, 2).toUpperCase() : "SR"}
-                </div>
-                <select
-                  value={activeCounsellor?.id || ""}
-                  onChange={(e) => {
-                    const sel = localAccounts.find(a => a.id === e.target.value);
-                    if (sel) {
-                      setSelectedCounsellorIdOverride(sel.id);
-                      sessionStorage.setItem("sgs_active_counsellor", JSON.stringify(sel));
-                      sessionStorage.setItem("sgs_counsellor_override_id", sel.id);
-                      const url = new URL(window.location.href);
-                      url.searchParams.set("portal", "counselling");
-                      url.searchParams.set("counsellor", sel.id);
-                      window.history.replaceState({}, "", url.toString());
-                    }
-                  }}
-                  className="bg-transparent text-xs font-black text-slate-900 dark:text-amber-100 focus:outline-none cursor-pointer pr-1"
-                  title="Switch Active Counsellor Workspace"
-                >
-                  {localAccounts.map(c => (
-                    <option key={`hdr-c-opt-${c.id}`} value={c.id} className="text-slate-900 bg-white dark:bg-slate-800 dark:text-white font-bold">
-                      {c.name} COUNSELLOR
-                    </option>
-                  ))}
-                </select>
               </div>
             )}
 
@@ -4551,6 +4764,10 @@ Warm regards,
               type="button"
               onClick={() => {
                 setFormData(activeDraft.formData);
+                if (activeDraft.siblingFormData) {
+                  setSiblingFormData(activeDraft.siblingFormData);
+                  setIsJointSiblingMode(true);
+                }
                 setSelectedEnquiry(null);
                 setActiveView("form");
               }}
@@ -4561,13 +4778,12 @@ Warm regards,
             <button
               type="button"
               onClick={() => {
-                if (confirm("Discard this claimed form draft?")) {
-                  try { localStorage.removeItem("bomis_counsellor_active_draft"); } catch {}
-                  setActiveDraft(null);
+                if (confirm("Release this claimed token back to the queue and discard draft?")) {
+                  handleReleasePendingClaimedToken(pendingUnsavedClaim);
                 }
               }}
               className="p-2 bg-black/20 hover:bg-black/30 text-white rounded-xl transition-all cursor-pointer"
-              title="Discard draft"
+              title="Release token back to queue & discard draft"
             >
               <X size={16} />
             </button>
@@ -5157,10 +5373,19 @@ Warm regards,
                   <button
                     type="button"
                     onClick={() => handleStartJointSiblingCounselling(pendingSiblingGroups.siblingGroups[0].entries[0], pendingSiblingGroups.siblingGroups[0].entries[1])}
-                    className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-purple-500 via-indigo-500 to-purple-600 hover:from-purple-400 hover:to-indigo-400 text-white font-black text-xs shadow-lg hover:shadow-purple-500/30 flex items-center gap-2 active:scale-95 transition-all shrink-0 cursor-pointer border border-purple-300"
+                    className={`px-4 py-2.5 rounded-xl text-white font-black text-xs shadow-lg flex items-center gap-2 active:scale-95 transition-all shrink-0 cursor-pointer border ${
+                      pendingUnsavedClaim
+                        ? "bg-slate-700 hover:bg-slate-600 border-amber-400/50 text-amber-200"
+                        : "bg-gradient-to-r from-purple-500 via-indigo-500 to-purple-600 hover:from-purple-400 hover:to-indigo-400 hover:shadow-purple-500/30 border-purple-300"
+                    }`}
+                    title={pendingUnsavedClaim ? `Locked: Save ${pendingUnsavedClaim.tokenLabel} first` : "Start Joint Sibling Counselling"}
                   >
-                    <Zap size={14} className="fill-amber-300 text-amber-300" />
-                    <span>Start Joint Sibling Counselling (Tokens #{pendingSiblingGroups.siblingGroups[0].entries[0].dailyTokenNo || 1} & #{pendingSiblingGroups.siblingGroups[0].entries[1]?.dailyTokenNo || 2})</span>
+                    {pendingUnsavedClaim ? <Lock size={14} className="text-amber-300" /> : <Zap size={14} className="fill-amber-300 text-amber-300" />}
+                    <span>
+                      {pendingUnsavedClaim
+                        ? `🔒 Locked (Save ${pendingUnsavedClaim.tokenLabel} First)`
+                        : `Start Joint Sibling Counselling (Tokens #${pendingSiblingGroups.siblingGroups[0].entries[0].dailyTokenNo || 1} & #${pendingSiblingGroups.siblingGroups[0].entries[1]?.dailyTokenNo || 2})`}
+                    </span>
                   </button>
                 </div>
               )}
@@ -5286,38 +5511,64 @@ Warm regards,
                               (p.linkedSiblingEntryId && p.linkedSiblingEntryId === entry.id)
                             ));
                             if (waitingSibling && (!entry.hasSibling || !entry.siblingDetails)) {
+                              const isJointLocked = Boolean(
+                                pendingUnsavedClaim &&
+                                !pendingUnsavedClaim.entries.some(pe => pe.id === entry.id || pe.id === waitingSibling.id)
+                              );
                               return (
                                 <button
                                   type="button"
                                   onClick={() => handleStartJointSiblingCounselling(entry, waitingSibling)}
-                                  className="py-2.5 px-3 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 active:scale-95 text-white rounded-xl text-xs font-black shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ring-2 ring-purple-400/40 shrink-0"
-                                  title={`Start Joint Sibling Session for Token #${entry.dailyTokenNo || 1} & Token #${waitingSibling.dailyTokenNo || 2}`}
+                                  className={`py-2.5 px-3 active:scale-95 rounded-xl text-xs font-black shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ring-2 shrink-0 ${
+                                    isJointLocked
+                                      ? "bg-slate-700 hover:bg-slate-600 text-amber-200 ring-amber-400/40"
+                                      : "bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white ring-purple-400/40"
+                                  }`}
+                                  title={isJointLocked ? `Locked: Save ${pendingUnsavedClaim?.tokenLabel} first` : `Start Joint Sibling Session for Token #${entry.dailyTokenNo || 1} & Token #${waitingSibling.dailyTokenNo || 2}`}
                                 >
-                                  <Zap size={14} className="fill-amber-300 text-amber-300" />
-                                  <span>Joint (Both #{entry.dailyTokenNo}&amp;#{waitingSibling.dailyTokenNo})</span>
+                                  {isJointLocked ? <Lock size={13} className="text-amber-300" /> : <Zap size={14} className="fill-amber-300 text-amber-300" />}
+                                  <span>{isJointLocked ? "🔒 Locked" : `Joint (Both #${entry.dailyTokenNo}&amp;#${waitingSibling.dailyTokenNo})`}</span>
                                 </button>
                               );
                             }
                             return null;
                           })()}
 
-                          <button
-                            type="button"
-                            onClick={() => handleClaimAndAutoFill(entry)}
-                            className={`flex-1 py-2.5 active:scale-95 text-white rounded-xl text-xs font-black shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                              entry.hasSibling && entry.siblingDetails
-                                ? "bg-gradient-to-r from-purple-600 via-indigo-600 to-emerald-600 hover:from-purple-700 hover:to-emerald-700 ring-2 ring-purple-300/40"
-                                : "bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 ring-2 ring-emerald-300/40"
-                            }`}
-                            title={entry.hasSibling && entry.siblingDetails ? `Claim Sibling Token #${entry.dailyTokenNo || 1}: opens unified 2-column form for ${entry.studentName} & ${entry.siblingDetails.studentName}` : `Claim Token #${entry.dailyTokenNo || 1} exclusively: auto-fills all fields into your admission form`}
-                          >
-                            <CheckCircle2 size={16} />
-                            <span>
-                              {entry.hasSibling && entry.siblingDetails
-                                ? `👨‍👩‍👧‍👦 Claim Sibling Token #${entry.dailyTokenNo || 1} (Both Children)`
-                                : `⚡ Claim Token #${entry.dailyTokenNo || 1}`}
-                            </span>
-                          </button>
+                          {(() => {
+                            const isCardLocked = Boolean(
+                              pendingUnsavedClaim &&
+                              !pendingUnsavedClaim.entries.some(pe => pe.id === entry.id)
+                            );
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => handleClaimAndAutoFill(entry)}
+                                className={`flex-1 py-2.5 active:scale-95 rounded-xl text-xs font-black shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                                  isCardLocked
+                                    ? "bg-slate-700 hover:bg-slate-600 text-amber-200 ring-2 ring-amber-400/50"
+                                    : entry.hasSibling && entry.siblingDetails
+                                    ? "bg-gradient-to-r from-purple-600 via-indigo-600 to-emerald-600 hover:from-purple-700 hover:to-emerald-700 text-white ring-2 ring-purple-300/40"
+                                    : "bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white ring-2 ring-emerald-300/40"
+                                }`}
+                                title={
+                                  isCardLocked
+                                    ? `Locked: Save ${pendingUnsavedClaim?.tokenLabel} first`
+                                    : entry.hasSibling && entry.siblingDetails
+                                    ? `Claim Sibling Token #${entry.dailyTokenNo || 1}: opens unified 2-column form for ${entry.studentName} & ${entry.siblingDetails.studentName}`
+                                    : `Claim Token #${entry.dailyTokenNo || 1} exclusively: auto-fills all fields into your admission form`
+                                }
+                              >
+                                {isCardLocked ? <Lock size={14} className="text-amber-300" /> : <CheckCircle2 size={16} />}
+                                <span>
+                                  {isCardLocked
+                                    ? `🔒 Locked • Save ${pendingUnsavedClaim?.tokenLabel} First`
+                                    : entry.hasSibling && entry.siblingDetails
+                                    ? `👨‍👩‍👧‍👦 Claim Sibling Token #${entry.dailyTokenNo || 1} (Both Children)`
+                                    : `⚡ Claim Token #${entry.dailyTokenNo || 1}`}
+                                </span>
+                              </button>
+                            );
+                          })()}
                           <button
                             type="button"
                             onClick={() => handleDismissParentEntry(entry.id)}
@@ -5620,15 +5871,31 @@ Warm regards,
                       </div>
 
                       <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => handleClaimAndAutoFill(entry)}
-                          className="px-3 py-1.5 bg-gradient-to-r from-emerald-400 to-teal-400 hover:from-emerald-500 hover:to-teal-500 text-slate-950 font-black rounded-lg text-xs transition-all flex items-center gap-1 cursor-pointer active:scale-95 shadow-md"
-                          title="Claim this lead and open admission form"
-                        >
-                          <Zap size={13} className="text-slate-950 fill-slate-950" />
-                          <span>Claim &amp; Form</span>
-                        </button>
+                        {(() => {
+                          const isOnlineLocked = Boolean(
+                            pendingUnsavedClaim &&
+                            !pendingUnsavedClaim.entries.some(pe => pe.id === entry.id)
+                          );
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => handleClaimAndAutoFill(entry)}
+                              className={`px-3 py-1.5 font-black rounded-lg text-xs transition-all flex items-center gap-1 cursor-pointer active:scale-95 shadow-md ${
+                                isOnlineLocked
+                                  ? "bg-slate-700 hover:bg-slate-600 text-amber-200 border border-amber-400/50"
+                                  : "bg-gradient-to-r from-emerald-400 to-teal-400 hover:from-emerald-500 hover:to-teal-500 text-slate-950"
+                              }`}
+                              title={isOnlineLocked ? `Locked: Save ${pendingUnsavedClaim?.tokenLabel} first` : "Claim this lead and open admission form"}
+                            >
+                              {isOnlineLocked ? (
+                                <Lock size={12} className="text-amber-300" />
+                              ) : (
+                                <Zap size={13} className="text-slate-950 fill-slate-950" />
+                              )}
+                              <span>{isOnlineLocked ? "🔒 Locked" : "Claim & Form"}</span>
+                            </button>
+                          );
+                        })()}
                         <button
                           type="button"
                           onClick={() => handleDismissParentEntry(entry.id)}
@@ -10187,6 +10454,11 @@ Warm regards,
         currentCounsellorId={activeCounsellor?.id}
         userRole={userRole}
         isCloudSynced={firestoreParentsSyncedRef.current}
+        lockedByPendingClaim={pendingUnsavedClaim ? {
+          tokenLabel: pendingUnsavedClaim.tokenLabel,
+          studentName: pendingUnsavedClaim.studentLabel,
+          entryIds: pendingUnsavedClaim.entries.map(e => e.id)
+        } : null}
       />
 
       {/* Day-Wise, Weekly & Monthly Token List Report Modal */}
@@ -10211,6 +10483,11 @@ Warm regards,
           onPermanentDelete={handlePermanentDeleteEntry}
           currentCounsellorName={activeCounsellor?.name}
           userRole={userRole}
+          lockedByPendingClaim={pendingUnsavedClaim ? {
+            tokenLabel: pendingUnsavedClaim.tokenLabel,
+            studentName: pendingUnsavedClaim.studentLabel,
+            entryIds: pendingUnsavedClaim.entries.map(e => e.id)
+          } : null}
         />
       )}
 
@@ -10385,6 +10662,82 @@ Warm regards,
                 <Trash2 size={14} />
                 <span>Yes, Clear All ({pendingParentEntries.length})</span>
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Short English Popup: Token Locked Until Current Claimed Token Is Saved */}
+      {tokenLockPopup && (
+        <div className="fixed inset-0 z-[99999] bg-slate-950/75 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-white dark:bg-slate-900 border-2 border-amber-500/60 rounded-3xl max-w-sm w-full p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-100 dark:bg-amber-950/80 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0 border border-amber-300 dark:border-amber-800">
+                  <Lock size={20} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900 dark:text-white">
+                    Save Current Token First
+                  </h3>
+                  <p className="text-[11px] font-bold text-amber-600 dark:text-amber-400">
+                    Cannot claim {tokenLockPopup.attemptedLabel} yet
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setTokenLockPopup(null)}
+                className="w-7 h-7 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-500 flex items-center justify-center cursor-pointer"
+                aria-label="Close"
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-700 dark:text-slate-300 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 rounded-2xl p-3 leading-relaxed">
+              You claimed <strong className="text-slate-900 dark:text-white">{tokenLockPopup.pendingClaim.tokenLabel} ({tokenLockPopup.pendingClaim.studentLabel})</strong>. Save or release it before claiming another token.
+            </p>
+
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const claim = tokenLockPopup.pendingClaim;
+                  setTokenLockPopup(null);
+                  if (claim.formData) {
+                    setFormData(claim.formData);
+                    if (claim.isJointSibling && claim.siblingFormData) {
+                      setSiblingFormData(claim.siblingFormData);
+                      setIsJointSiblingMode(true);
+                    }
+                    setLinkedSiblingTokens(claim.entries);
+                    setSelectedEnquiry(null);
+                    setActiveView("form");
+                  } else {
+                    handleClaimAndAutoFill(claim.entry);
+                  }
+                }}
+                className="w-full py-2.5 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white rounded-xl text-xs font-black shadow-md transition-all cursor-pointer active:scale-95"
+              >
+                Open Pending Form
+              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleReleasePendingClaimedToken(tokenLockPopup.pendingClaim)}
+                  className="flex-1 py-2 bg-slate-100 hover:bg-rose-50 dark:bg-slate-800 dark:hover:bg-rose-950/40 text-slate-700 dark:text-slate-200 hover:text-rose-600 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                >
+                  Release Token
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTokenLockPopup(null)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </div>
         </div>

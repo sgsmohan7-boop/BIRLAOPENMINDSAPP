@@ -1335,6 +1335,9 @@ ${realSpokenKeyPoints.length > 0 ? realSpokenKeyPoints.map(p => `  - ${p}`).join
         delete (item as any).dismissedById;
         delete (item as any).dismissedAt;
         delete (item as any).dismissedReason;
+        delete (item as any).claimedBy;
+        delete (item as any).claimedByName;
+        delete (item as any).claimedAt;
         parentSelfEntriesInMemory[idx] = item;
         saveParentSelfEntriesToDisk(parentSelfEntriesInMemory);
         syncParentEntryToMongoAsync(item);
