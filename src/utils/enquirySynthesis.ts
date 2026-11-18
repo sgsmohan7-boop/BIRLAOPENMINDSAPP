@@ -88,6 +88,66 @@ export function extractEnquirySerialNum(enquiryNo?: string | null): number | nul
   return num;
 }
 
+export function parseEnquirySortKey(enquiryNo?: string | null): {
+  prefixRank: number;
+  year: number;
+  serial: number;
+} {
+  const clean = String(enquiryNo || "").trim().toUpperCase();
+  if (!clean) return { prefixRank: 9, year: 0, serial: 0 };
+
+  const enqMatch = clean.match(/^ENQ-(\d{4})-0*(\d+)/i) || clean.match(/^ENQ-.*?-0*(\d+)/i);
+  if (enqMatch) {
+    const hasYear = enqMatch.length >= 3;
+    const year = hasYear ? parseInt(enqMatch[1], 10) || 0 : 0;
+    const serial = parseInt(hasYear ? enqMatch[2] : enqMatch[1], 10) || 0;
+    return { prefixRank: 1, year, serial };
+  }
+
+  const onlMatch = clean.match(/^ONL-(\d{4})-0*(\d+)/i) || clean.match(/^ONL-.*?-0*(\d+)/i);
+  if (onlMatch) {
+    const hasYear = onlMatch.length >= 3;
+    const year = hasYear ? parseInt(onlMatch[1], 10) || 0 : 0;
+    const serial = parseInt(hasYear ? onlMatch[2] : onlMatch[1], 10) || 0;
+    return { prefixRank: 2, year, serial };
+  }
+
+  const fallbackMatch = clean.match(/(\d+)$/);
+  return {
+    prefixRank: 3,
+    year: 0,
+    serial: fallbackMatch ? parseInt(fallbackMatch[1], 10) || 0 : 0
+  };
+}
+
+export function compareEnquiriesBySerial(
+  a: Pick<CounsellingEnquiry, "enquiryNo" | "updatedAtTimestamp" | "id">,
+  b: Pick<CounsellingEnquiry, "enquiryNo" | "updatedAtTimestamp" | "id">,
+  direction: "desc" | "asc" = "desc"
+): number {
+  const ka = parseEnquirySortKey(a.enquiryNo);
+  const kb = parseEnquirySortKey(b.enquiryNo);
+
+  if (ka.prefixRank !== kb.prefixRank) {
+    return ka.prefixRank - kb.prefixRank;
+  }
+
+  const dir = direction === "asc" ? 1 : -1;
+  if (ka.year !== kb.year) {
+    return (ka.year - kb.year) * dir;
+  }
+  if (ka.serial !== kb.serial) {
+    return (ka.serial - kb.serial) * dir;
+  }
+
+  const ta = Number(a.updatedAtTimestamp || 0);
+  const tb = Number(b.updatedAtTimestamp || 0);
+  if (ta !== tb) {
+    return (ta - tb) * dir;
+  }
+  return String(a.id || "").localeCompare(String(b.id || ""));
+}
+
 export function computeDeterministicFollowUpDMY(rawDate?: string | null): string {
   const fallback = "18-11-2026";
   if (!rawDate) return fallback;
@@ -370,14 +430,6 @@ export function synthesizeAndMergeEnquiries(
     });
   }
 
-  // Consistent canonical descending sort (newest timestamp / enquiry serial first)
-  return merged.sort((a, b) => {
-    const ta = Number(a.updatedAtTimestamp || 0);
-    const tb = Number(b.updatedAtTimestamp || 0);
-    if (tb !== ta) return tb - ta;
-    const na = extractEnquirySerialNum(a.enquiryNo) || 0;
-    const nb = extractEnquirySerialNum(b.enquiryNo) || 0;
-    if (nb !== na) return nb - na;
-    return String(a.id || "").localeCompare(String(b.id || ""));
-  });
+  // Consistent canonical serial-number descending sort (latest ENQ serial first, unaffected by later edits)
+  return merged.sort((a, b) => compareEnquiriesBySerial(a, b, "desc"));
 }

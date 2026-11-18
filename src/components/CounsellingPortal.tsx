@@ -115,7 +115,7 @@ import { deleteAudioRecordingBlob, formatAudioDuration } from "../utils/audioSto
 import { isFirebaseConfigured, syncCollection, fetchCollectionDocs, fetchPendingParentEntriesFromFirestore, saveDocument, deleteDocument, getNextDailyTokenNo, isFirestoreQuotaExhausted, clearQuotaExhausted, reserveNextEnquiryNoFromFirestore } from "../utils/firebase";
 import { printOfficialAdmissionForm } from "../utils/printAdmissionForm";
 import { normalizeCounsellorIdentity } from "../utils/counsellorNormalizer";
-import { synthesizeAndMergeEnquiries, formatCanonicalEnquiryNo, extractEnquirySerialNum, isSameStudentRecord } from "../utils/enquirySynthesis";
+import { synthesizeAndMergeEnquiries, formatCanonicalEnquiryNo, extractEnquirySerialNum, isSameStudentRecord, compareEnquiriesBySerial } from "../utils/enquirySynthesis";
 
 function getParentEntryStatusRank(status?: string): number {
   if (status === "dismissed") return 3;
@@ -423,6 +423,7 @@ export default function CounsellingPortal({
   const [filterDatePreset, setFilterDatePreset] = useState<"ALL" | "TODAY" | "YESTERDAY" | "custom">("ALL");
   const [filterAcademicYear, setFilterAcademicYear] = useState<string>("ALL");
   const [adminFilterCounsellor, setAdminFilterCounsellor] = useState<string>("ALL");
+  const [enquirySerialSortOrder, setEnquirySerialSortOrder] = useState<"desc" | "asc">("desc");
   const [selectedEnquiry, setSelectedEnquiry] = useState<CounsellingEnquiry | null>(null);
   const [inspectingEnquiry, setInspectingEnquiry] = useState<CounsellingEnquiry | null>(null);
   const [actionTakenDraft, setActionTakenDraft] = useState<string>("");
@@ -3680,8 +3681,8 @@ export default function CounsellingPortal({
       }
 
       return matchQuery && matchStatus && matchClass && matchAcademicYear && matchAudit && matchChannel && matchDate;
-    });
-  }, [counsellorScopeEnquiries, searchQuery, filterStatus, filterChannel, filterClass, filterAcademicYear, filterAuditStatus, filterDate]);
+    }).sort((a, b) => compareEnquiriesBySerial(a, b, enquirySerialSortOrder));
+  }, [counsellorScopeEnquiries, searchQuery, filterStatus, filterChannel, filterClass, filterAcademicYear, filterAuditStatus, filterDate, enquirySerialSortOrder]);
 
   // Statistics for active scope
   const stats = useMemo(() => {
@@ -7060,7 +7061,29 @@ Warm regards,
                       <span>S.No</span>
                     )}
                   </th>
-                  <th className="px-4 py-3.5">Enquiry Info</th>
+                  <th className="px-4 py-3.5">
+                    <button
+                      type="button"
+                      onClick={() => setEnquirySerialSortOrder(prev => prev === "desc" ? "asc" : "desc")}
+                      className="inline-flex items-center gap-1.5 font-bold uppercase tracking-wider hover:text-orange-600 dark:hover:text-orange-400 transition-colors cursor-pointer"
+                      title={enquirySerialSortOrder === "desc" ? "Sorted by Serial No (Latest First). Click for Oldest First." : "Sorted by Serial No (Oldest First). Click for Latest First."}
+                    >
+                      <span>Enquiry Info</span>
+                      <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-orange-100/80 dark:bg-orange-950/70 text-orange-700 dark:text-orange-300 text-[9px] font-black normal-case">
+                        {enquirySerialSortOrder === "desc" ? (
+                          <>
+                            <span>S.No</span>
+                            <ChevronDown size={11} />
+                          </>
+                        ) : (
+                          <>
+                            <span>S.No</span>
+                            <ChevronUp size={11} />
+                          </>
+                        )}
+                      </span>
+                    </button>
+                  </th>
                   <th className="px-4 py-3.5">Student Details</th>
                   <th className="px-4 py-3.5">Parent & Contact</th>
                   <th className="px-4 py-3.5">Status & Follow-up</th>
