@@ -56,9 +56,10 @@ export async function saveMeetingRecoverySnapshot(data: RecoveredMeetingSession)
 }
 
 /**
- * Check if there is an unfinalized/interrupted meeting recording
+ * Check if there is an unfinalized/interrupted meeting recording.
+ * Prioritizes snapshot matching preferredEnquiryNo if provided.
  */
-export async function getActiveMeetingRecovery(): Promise<RecoveredMeetingSession | null> {
+export async function getActiveMeetingRecovery(preferredEnquiryNo?: string): Promise<RecoveredMeetingSession | null> {
   try {
     const db = await openDB();
     return new Promise((resolve, reject) => {
@@ -66,10 +67,18 @@ export async function getActiveMeetingRecovery(): Promise<RecoveredMeetingSessio
       const store = tx.objectStore(STORE_NAME);
       const req = store.getAll();
       req.onsuccess = () => {
-        const results = req.result as RecoveredMeetingSession[];
-        if (results && results.length > 0) {
-          // Sort by latest timestamp
+        const raw = (req.result as RecoveredMeetingSession[]) || [];
+        const results = raw.filter(r => r && r.audioBlob && r.audioBlob.size > 500);
+        if (results.length > 0) {
           results.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+          if (preferredEnquiryNo && preferredEnquiryNo.trim()) {
+            const targetNo = preferredEnquiryNo.trim().toLowerCase();
+            const exact = results.find(r => (r.enquiryNo || "").trim().toLowerCase() === targetNo);
+            if (exact) {
+              resolve(exact);
+              return;
+            }
+          }
           resolve(results[0]);
         } else {
           resolve(null);

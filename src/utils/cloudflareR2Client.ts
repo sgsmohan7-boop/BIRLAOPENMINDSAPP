@@ -143,16 +143,27 @@ export async function listR2FilesDirect(creds: R2Credentials): Promise<any[]> {
     const s3 = createBrowserR2Client(creds);
     if (!s3) return [];
 
-    const command = new ListObjectsV2Command({
-      Bucket: (creds.bucketName || "counselling-audio-vault").trim(),
-      MaxKeys: 100
-    });
-
-    const result = await s3.send(command);
-    const bucket = creds.bucketName || "counselling-audio-vault";
+    const bucket = (creds.bucketName || "counselling-audio-vault").trim();
     const accountId = creds.accountId || DEFAULT_R2_CREDENTIALS.accountId;
+    const allContents: any[] = [];
+    let continuationToken: string | undefined = undefined;
+    let pages = 0;
 
-    return (result.Contents || []).map((c) => ({
+    do {
+      const command: ListObjectsV2Command = new ListObjectsV2Command({
+        Bucket: bucket,
+        MaxKeys: 1000,
+        ...(continuationToken ? { ContinuationToken: continuationToken } : {})
+      });
+      const result = await s3.send(command);
+      if (result.Contents) {
+        allContents.push(...result.Contents);
+      }
+      continuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
+      pages++;
+    } while (continuationToken && pages < 10);
+
+    return allContents.map((c) => ({
       key: c.Key,
       name: c.Key,
       size: c.Size,

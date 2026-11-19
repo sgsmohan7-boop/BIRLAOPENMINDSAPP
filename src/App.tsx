@@ -91,6 +91,7 @@ import {
   prepareEnquiryForFirestore
 } from "./utils/firebase";
 import { checkBackupStatus, syncAllToMongoBackup, fetchFromMongoBackup, saveToMongoBackup, deleteFromMongoBackup } from "./utils/backupClient";
+import { sanitizeAudioDuration, formatAudioDuration } from "./utils/audioStorage";
 
 
 export default function App() {
@@ -1535,8 +1536,21 @@ export default function App() {
     const serial = extractEnquirySerialNum(resolvedNo);
     if (serial) recordHighestEnquiryNumber(serial);
 
+    const alreadyUploadedByRecorder = Boolean((enquiry.audioRecording as any)?.cloudUploadedThisSession);
+    const sanitizedAudioRec = enquiry.audioRecording ? (() => {
+      const copy: any = { ...enquiry.audioRecording };
+      delete copy.cloudUploadedThisSession;
+      const safeDur = sanitizeAudioDuration(copy.durationSeconds, 0);
+      copy.durationSeconds = safeDur;
+      if (safeDur > 0 && (!copy.durationFormatted || copy.durationFormatted === "00:00")) {
+        copy.durationFormatted = formatAudioDuration(safeDur);
+      }
+      return copy;
+    })() : undefined;
+
     const cleanEnquiry: CounsellingEnquiry = {
       ...enquiry,
+      ...(sanitizedAudioRec ? { audioRecording: sanitizedAudioRec } : {}),
       id: resolvedNo || enquiry.id,
       enquiryNo: resolvedNo || enquiry.enquiryNo,
       updatedAtTimestamp: saveTimestamp
@@ -1635,22 +1649,45 @@ export default function App() {
     // 2. Save to Firestore
     saveToFirestore(cleanEnquiry);
 
-    // 3. Direct Cloudflare R2 Background Upload (Ensures 24/7 global audio access)
-    if (enquiry.audioRecording?.audioData && enquiry.audioRecording.audioData.length > 50) {
-      const audioPayload = enquiry.audioRecording.audioData;
-      const mimeType = enquiry.audioRecording.mimeType || "audio/webm";
-      const r2FileName = enquiry.audioRecording.fileName || `${enquiry.enquiryNo || 'ENQ'}_Meeting_${new Date().toISOString().slice(0, 10)}.webm`;
+    // 3. Direct Cloudflare R2 Background Upload (Only if AudioMeetingRecorder hasn't already uploaded this session)
+    if (!alreadyUploadedByRecorder && cleanEnquiry.audioRecording?.audioData && cleanEnquiry.audioRecording.audioData.length > 50) {
+      const audioPayload = cleanEnquiry.audioRecording.audioData;
+      const mimeType = cleanEnquiry.audioRecording.mimeType || "audio/webm";
+      const r2FileName = cleanEnquiry.audioRecording.fileName || `${cleanEnquiry.enquiryNo || 'ENQ'}_Meeting_${new Date().toISOString().slice(0, 10)}.webm`;
       import("./utils/cloudflareR2Client")
-        .then(({ loadR2Credentials, uploadToR2Direct }) => {
+        .then(async ({ loadR2Credentials, uploadToR2Direct }) => {
           const creds = loadR2Credentials();
-          return uploadToR2Direct(creds, r2FileName, audioPayload, mimeType);
+          const ok = await uploadToR2Direct(creds, r2FileName, audioPayload, mimeType);
+          if (ok) {
+            setCounsellingEnquiries(current => {
+              let changed = false;
+              const updatedList = current.map(item => {
+                if (item.id === cleanEnquiry.id && item.audioRecording) {
+                  changed = true;
+                  const nextItem: CounsellingEnquiry = {
+                    ...item,
+                    audioRecording: {
+                      ...item.audioRecording,
+                      fileName: item.audioRecording.fileName || r2FileName,
+                      cloudR2Synced: true as any
+                    } as any
+                  };
+                  saveToFirestore(nextItem);
+                  return nextItem;
+                }
+                return item;
+              });
+              if (changed) saveCounselling(updatedList);
+              return updatedList;
+            });
+          }
         })
         .catch((err) => console.warn("Background R2 audio auto-upload notice:", err));
     }
 
-    // 4. Express Server API sync + Audio File Storage Vault (for Node.js dev environments)
+    // 4. Express Server API sync + Audio File Storage Vault (for Node.js dev / Express environments)
     try {
-      const cleanServerEnquiry = { ...enquiry };
+      const cleanServerEnquiry = { ...cleanEnquiry };
       if (cleanServerEnquiry.audioRecording) {
         cleanServerEnquiry.audioRecording = { ...cleanServerEnquiry.audioRecording };
         delete (cleanServerEnquiry.audioRecording as any).audioData;
@@ -1661,36 +1698,44 @@ export default function App() {
         body: JSON.stringify(cleanServerEnquiry)
       }).catch(() => {});
 
-      // If audio base64 is present, upload to server disk media vault and attach stream URL
-      if (enquiry.audioRecording?.audioData && enquiry.audioRecording.audioData.length > 100) {
+      // If audio base64 is present and wasn't already uploaded by recorder, upload to server disk media vault
+      if (!alreadyUploadedByRecorder && cleanEnquiry.audioRecording?.audioData && cleanEnquiry.audioRecording.audioData.length > 100) {
         fetch("/api/upload-audio", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            enquiryNo: enquiry.enquiryNo,
-            id: enquiry.id,
-            audioBase64: enquiry.audioRecording.audioData,
-            filename: enquiry.audioRecording.fileName || `${enquiry.enquiryNo || 'ENQ'}_Meeting_${new Date().toISOString().slice(0, 10)}.webm`,
-            meetingTextSummary: enquiry.audioRecording.meetingTextSummary || "",
-            durationSeconds: enquiry.audioRecording.durationSeconds,
-            counsellorId: enquiry.counsellorId,
-            counsellorName: enquiry.counsellorName,
-            studentName: enquiry.studentName
+            enquiryNo: cleanEnquiry.enquiryNo,
+            id: cleanEnquiry.id,
+            audioBase64: cleanEnquiry.audioRecording.audioData,
+            filename: cleanEnquiry.audioRecording.fileName || `${cleanEnquiry.enquiryNo || 'ENQ'}_Meeting_${new Date().toISOString().slice(0, 10)}.webm`,
+            mimeType: cleanEnquiry.audioRecording.mimeType || "audio/webm",
+            meetingTextSummary: cleanEnquiry.audioRecording.meetingTextSummary || "",
+            durationSeconds: cleanEnquiry.audioRecording.durationSeconds,
+            counsellorId: cleanEnquiry.counsellorId,
+            counsellorName: cleanEnquiry.counsellorName,
+            studentName: cleanEnquiry.studentName
           })
-        }).then(r => r.json()).then(res => {
+        }).then(async (r) => {
+          const ct = r.headers.get("content-type") || "";
+          if (!r.ok || !ct.includes("application/json")) return null;
+          return r.json();
+        }).then(res => {
           if (res?.success && res?.audioUrl) {
+            const safeServerDur = sanitizeAudioDuration(res.durationSeconds ?? cleanEnquiry.audioRecording?.durationSeconds, 0);
             const updatedEnquiry: CounsellingEnquiry = {
-              ...enquiry,
+              ...cleanEnquiry,
               audioRecording: {
-                ...enquiry.audioRecording!,
-                storageKey: enquiry.audioRecording?.storageKey || enquiry.audioRecording?.id || enquiry.id,
+                ...cleanEnquiry.audioRecording!,
+                durationSeconds: safeServerDur,
+                storageKey: cleanEnquiry.audioRecording?.storageKey || cleanEnquiry.audioRecording?.id || cleanEnquiry.id,
                 driveFileUrl: res.audioUrl,
-                driveFileId: enquiry.audioRecording?.driveFileId || enquiry.id
+                driveFileId: cleanEnquiry.audioRecording?.driveFileId || cleanEnquiry.id,
+                ...(res.r2Synced ? { cloudR2Synced: true as any } : {})
               }
             };
             // Update state & Firestore with real stream URL
             setCounsellingEnquiries(current => {
-              const updatedList = current.map(item => item.id === enquiry.id ? updatedEnquiry : item);
+              const updatedList = current.map(item => item.id === cleanEnquiry.id ? updatedEnquiry : item);
               saveCounselling(updatedList);
               return updatedList;
             });

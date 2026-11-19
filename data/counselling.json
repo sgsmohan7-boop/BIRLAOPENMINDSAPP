@@ -1,5 +1,32 @@
 [
   {
+    "id": "ENQ-TEST-CLEANUP_1795085629347",
+    "enquiryNo": "ENQ-TEST-CLEANUP",
+    "studentName": "Student Enquiry",
+    "counsellorId": "COUNSELLOR-01",
+    "counsellorName": "Admissions Counsellor",
+    "admissionStatus": "Interested",
+    "date": "2026-11-19",
+    "createdAt": "2026-11-19T10:53:49.347Z",
+    "updatedAt": "2026-11-19T10:53:49.347Z",
+    "audioRecording": {
+      "id": "AUDIO-ENQ-TEST-CLEANUP",
+      "fileName": "__verify_cleanup_test.webm",
+      "audioUrl": "/api/audios/__verify_cleanup_test.webm",
+      "driveFileUrl": "/api/audios/__verify_cleanup_test.webm",
+      "driveFileId": "ENQ-TEST-CLEANUP",
+      "meetingTextSummary": "",
+      "durationSeconds": 10,
+      "fileSizeBytes": 92,
+      "mimeType": "audio/webm",
+      "recordedAt": "11/19/2026 10:53 AM",
+      "counsellorId": "COUNSELLOR-01",
+      "counsellorName": "Admissions Counsellor",
+      "enquiryNo": "ENQ-TEST-CLEANUP",
+      "studentName": "Student Enquiry"
+    }
+  },
+  {
     "id": "ENQ-2026-156",
     "dateOfBirth": "2026-11-14",
     "enquiryType": "walkin",

@@ -63,7 +63,10 @@ import {
   Upload,
   XCircle
 } from "lucide-react";
-import AudioMeetingRecorder from "./AudioMeetingRecorder";
+import AudioMeetingRecorder, {
+  isRawTranscriptBoilerplate,
+  parseDialogueTurnsFromSummary
+} from "./AudioMeetingRecorder";
 import ManagementAudioDesk from "./ManagementAudioDesk";
 import AppInstallModal from "./AppInstallModal";
 import AppUpdateNotifier from "./AppUpdateNotifier";
@@ -111,7 +114,7 @@ import {
   getDeletedEnquiryIds,
   deduplicateEnquiries
 } from "../utils/storage";
-import { deleteAudioRecordingBlob, formatAudioDuration } from "../utils/audioStorage";
+import { deleteAudioRecordingBlob, formatAudioDuration, sanitizeAudioDuration } from "../utils/audioStorage";
 import { isFirebaseConfigured, syncCollection, fetchCollectionDocs, fetchPendingParentEntriesFromFirestore, saveDocument, deleteDocument, getNextDailyTokenNo, isFirestoreQuotaExhausted, clearQuotaExhausted, reserveNextEnquiryNoFromFirestore } from "../utils/firebase";
 import { printOfficialAdmissionForm } from "../utils/printAdmissionForm";
 import { normalizeCounsellorIdentity } from "../utils/counsellorNormalizer";
@@ -3055,6 +3058,52 @@ export default function CounsellingPortal({
   };
 
   const [formData, setFormData] = useState<CounsellingEnquiry>(initialFormState);
+  const [recorderLiveState, setRecorderLiveState] = useState<{ isRecording: boolean; isProcessing: boolean }>({
+    isRecording: false,
+    isProcessing: false
+  });
+  const recorderStateRef = React.useRef<{ isRecording: boolean; isProcessing: boolean }>({
+    isRecording: false,
+    isProcessing: false
+  });
+  const formDataRef = React.useRef<CounsellingEnquiry>(formData);
+  formDataRef.current = formData;
+  const siblingFormDataRef = React.useRef<CounsellingEnquiry | null>(siblingFormData);
+  siblingFormDataRef.current = siblingFormData;
+
+  const scrollToStopRecording = () => {
+    const target = document.getElementById("audio-recorder-stop-btn") || document.getElementById("section-7-audio-recorder");
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      try { (target as HTMLElement).focus({ preventScroll: true }); } catch {}
+    }
+  };
+
+  const guardWhileRecordingActive = (action: () => void) => {
+    if (recorderStateRef.current.isRecording) {
+      setDeleteToast("⚠️ Recording is active! Click 'Stop Recording' in Section 7 first so your audio is saved.");
+      setTimeout(() => setDeleteToast(null), 4500);
+      scrollToStopRecording();
+      return;
+    }
+    if (recorderStateRef.current.isProcessing) {
+      setDeleteToast("⏳ Audio upload/transcription is finishing — please wait a few seconds.");
+      setTimeout(() => setDeleteToast(null), 3500);
+      return;
+    }
+    action();
+  };
+
+  React.useEffect(() => {
+    if (activeView !== "form" || (!recorderLiveState.isRecording && !recorderLiveState.isProcessing)) return;
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "Meeting recording is still active. Please click Stop Recording before leaving.";
+      return e.returnValue;
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [activeView, recorderLiveState.isRecording, recorderLiveState.isProcessing]);
 
   const startNewEnquiry = async () => {
     const defaultCounsellor = activeCounsellor || localAccounts[0];
@@ -3096,6 +3145,16 @@ export default function CounsellingPortal({
   };
 
   const handleCancelForm = () => {
+    if (recorderStateRef.current.isRecording) {
+      setDeleteToast("⚠️ Recording is still active! Please click 'Stop Recording' in Section 7 first so your audio is saved.");
+      setTimeout(() => setDeleteToast(null), 4500);
+      return;
+    }
+    if (recorderStateRef.current.isProcessing) {
+      setDeleteToast("⏳ Audio upload/transcription is finishing — please wait a moment before closing.");
+      setTimeout(() => setDeleteToast(null), 3500);
+      return;
+    }
     const defaultCounsellor = activeCounsellor || localAccounts[0];
     if (defaultCounsellor?.id) {
       releaseDraftReservation(defaultCounsellor.id);
@@ -3148,6 +3207,16 @@ export default function CounsellingPortal({
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
+    if (recorderStateRef.current.isRecording) {
+      setDeleteToast("⚠️ Live recording is still running! Click 'Stop Recording' in Section 7 first so audio attaches before saving.");
+      setTimeout(() => setDeleteToast(null), 4500);
+      return;
+    }
+    if (recorderStateRef.current.isProcessing) {
+      setDeleteToast("⏳ Audio file is finishing cloud sync — please wait 2-3 seconds and click Save again.");
+      setTimeout(() => setDeleteToast(null), 4000);
+      return;
+    }
     if (!formData.studentName || !formData.studentName.trim()) {
       setDeleteToast("⚠️ Please enter Student Name before saving.");
       setTimeout(() => setDeleteToast(null), 3500);
@@ -3297,8 +3366,13 @@ export default function CounsellingPortal({
 
     if (updated.audioRecording) {
       delete updated.removeAudio;
+      const safeDur = sanitizeAudioDuration(updated.audioRecording.durationSeconds, 0);
       updated.audioRecording = {
         ...updated.audioRecording,
+        durationSeconds: safeDur,
+        ...(safeDur > 0 && (!updated.audioRecording.durationFormatted || updated.audioRecording.durationFormatted === "00:00")
+          ? { durationFormatted: formatAudioDuration(safeDur) }
+          : {}),
         enquiryNo: nextEnquiryNo,
         studentName: updated.studentName,
         counsellorId: assignedCounsellorId,
@@ -4613,12 +4687,12 @@ Warm regards,
           {/* Prominent Counsellor Home Button */}
           <button
             type="button"
-            onClick={() => {
+            onClick={() => guardWhileRecordingActive(() => {
               setActiveView("list");
               setSelectedEnquiry(null);
               setInspectingEnquiry(null);
               setSelectedMetricCard(null);
-            }}
+            })}
             className={`px-4 py-2.5 rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer border shadow-md active:scale-95 ${
               activeView === "list"
                 ? "bg-white text-orange-950 border-white font-black"
@@ -4648,7 +4722,7 @@ Warm regards,
           </button>
 
           <button
-            onClick={() => setActiveView("audio-desk")}
+            onClick={() => guardWhileRecordingActive(() => setActiveView("audio-desk"))}
             className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer border ${
               activeView === "audio-desk"
                 ? "bg-white text-indigo-900 shadow-md border-white font-black"
@@ -4735,7 +4809,7 @@ Warm regards,
 
           {userRole !== "Counsellor" && (
             <button
-              onClick={() => { window.location.href = "/?portal=management"; }}
+              onClick={() => guardWhileRecordingActive(() => { window.location.href = "/?portal=management"; })}
               className="px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer border bg-white/10 hover:bg-white/20 text-white border-white/20"
               title="Open Executive Management Portal"
             >
@@ -4745,7 +4819,7 @@ Warm regards,
 
           {userRole !== "Counsellor" && (
             <button
-              onClick={() => setActiveView("accounts")}
+              onClick={() => guardWhileRecordingActive(() => setActiveView("accounts"))}
               className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer border ${
                 activeView === "accounts"
                   ? "bg-white text-orange-800 shadow-md border-white"
@@ -4758,7 +4832,7 @@ Warm regards,
 
           {activeView !== "list" && (
             <button
-              onClick={() => setActiveView("list")}
+              onClick={() => guardWhileRecordingActive(() => setActiveView("list"))}
               className="px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer border border-white/20"
             >
               <FileText size={15} /> All Enquiries List
@@ -4766,7 +4840,7 @@ Warm regards,
           )}
 
           <button
-            onClick={startNewEnquiry}
+            onClick={() => guardWhileRecordingActive(startNewEnquiry)}
             className="px-4 py-2.5 bg-white text-orange-700 hover:bg-orange-50 rounded-xl text-xs font-black tracking-wide shadow-lg hover:shadow-xl transition-all flex items-center gap-2 cursor-pointer"
           >
             <PlusCircle size={16} /> New Admission Form
@@ -7277,7 +7351,14 @@ Warm regards,
                                 title="Listen to meeting audio recording"
                               >
                                 <Headphones size={10} />
-                                <span>Audio Recorded ({formatAudioDuration(enquiry.audioRecording.durationSeconds)})</span>
+                                <span>
+                                  {(() => {
+                                    const dSec = sanitizeAudioDuration(enquiry.audioRecording.durationSeconds, 0);
+                                    return dSec > 0
+                                      ? `Audio Recorded (${formatAudioDuration(dSec)})`
+                                      : "Audio Recorded";
+                                  })()}
+                                </span>
                               </button>
 
                               {enquiry.audioRecording.qualityRating ? (
@@ -7709,18 +7790,51 @@ Warm regards,
                 </button>
               )}
 
+              {(recorderLiveState.isRecording || recorderLiveState.isProcessing) && (
+                <button
+                  type="button"
+                  onClick={scrollToStopRecording}
+                  className="px-3.5 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-black shadow-md animate-pulse transition-all cursor-pointer flex items-center gap-1.5"
+                  title="Jump directly to Stop Recording button in Section 7"
+                >
+                  <Mic size={13} />
+                  <span>{recorderLiveState.isRecording ? "Recording Active — Stop First ↓" : "Uploading Audio..."}</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={handleCancelForm}
-                className="px-4 py-2 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                disabled={recorderLiveState.isRecording || recorderLiveState.isProcessing}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                  recorderLiveState.isRecording || recorderLiveState.isProcessing
+                    ? "bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-600 cursor-not-allowed opacity-60"
+                    : "text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800 cursor-pointer"
+                }`}
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="px-5 py-2.5 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white rounded-xl text-xs font-black shadow-md transition-all cursor-pointer"
+                disabled={recorderLiveState.isRecording || recorderLiveState.isProcessing}
+                title={
+                  recorderLiveState.isRecording
+                    ? "Click 'Stop Recording' in Section 7 first to unlock Save"
+                    : recorderLiveState.isProcessing
+                      ? "Wait for audio upload to complete"
+                      : "Save Counselling Record"
+                }
+                className={`px-5 py-2.5 text-white rounded-xl text-xs font-black shadow-md transition-all ${
+                  recorderLiveState.isRecording || recorderLiveState.isProcessing
+                    ? "bg-slate-400 dark:bg-slate-700 cursor-not-allowed opacity-70 shadow-none"
+                    : "bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 cursor-pointer"
+                }`}
               >
-                {isJointSiblingMode && siblingFormData ? "💾 Save Both Sibling Records" : "💾 Save Counselling Record"}
+                {recorderLiveState.isRecording
+                  ? "🔒 Stop Recording to Unlock Save"
+                  : recorderLiveState.isProcessing
+                    ? "⏳ Uploading Audio..."
+                    : (isJointSiblingMode && siblingFormData ? "💾 Save Both Sibling Records" : "💾 Save Counselling Record")}
               </button>
             </div>
           </div>
@@ -9480,7 +9594,7 @@ Warm regards,
             )}
 
             {/* SECTION 7: LIVE MEETING VOICE RECORDING (FOR MANAGEMENT QUALITY AUDIT) */}
-            <div className="space-y-4 pt-2">
+            <div id="section-7-audio-recorder" className="space-y-4 pt-2">
               <div className="flex items-center gap-2 border-b-2 border-orange-500 pb-1.5">
                 <span className="w-6 h-6 rounded-full bg-orange-600 text-white flex items-center justify-center font-bold text-xs">7</span>
                 <h3 className="text-sm font-black uppercase text-slate-900 dark:text-white tracking-wider flex items-center gap-2">
@@ -9504,41 +9618,73 @@ Warm regards,
                 counsellorId={formData.counsellorId || (activeCounsellor?.id || "COUNSELLOR-01")}
                 counsellorName={formData.counsellorName || (activeCounsellor?.name || "Admissions Counsellor")}
                 existingAudio={formData.audioRecording}
+                onRecordingStateChange={(st) => {
+                  recorderStateRef.current = st;
+                  setRecorderLiveState(st);
+                }}
                 onSaveAudio={(audioRec) => {
-                  const finalCounsellor = activeCounsellor || localAccounts.find(c => c.id === formData.counsellorId) || localAccounts[0];
-                  const assignedCounsellorId = userRole === "Counsellor" && activeCounsellor ? activeCounsellor.id : (formData.counsellorId || finalCounsellor.id);
-                  const assignedCounsellorName = userRole === "Counsellor" && activeCounsellor ? activeCounsellor.name : (formData.counsellorName || finalCounsellor.name);
-
-                  const updated: CounsellingEnquiry = {
-                    ...formData,
-                    counsellorId: assignedCounsellorId,
-                    counsellorName: assignedCounsellorName,
-                    audioRecording: audioRec,
-                    conversationLanguageNotes: audioRec.conversationLanguageNotes || formData.conversationLanguageNotes,
-                    pointsDiscussed: formData.pointsDiscussed && formData.pointsDiscussed.trim()
-                      ? formData.pointsDiscussed
-                      : (audioRec.meetingTextSummary || formData.pointsDiscussed)
+                  const latestForm = formDataRef.current;
+                  const latestSib = siblingFormDataRef.current;
+                  const safeDur = sanitizeAudioDuration(audioRec.durationSeconds, 0);
+                  const normalizedAudioRec: CounsellingAudioRecord = {
+                    ...audioRec,
+                    durationSeconds: safeDur,
+                    ...(safeDur > 0 && (!audioRec.durationFormatted || audioRec.durationFormatted === "00:00")
+                      ? { durationFormatted: formatAudioDuration(safeDur) }
+                      : {})
                   };
 
+                  const pickCleanNotes = (existingPoints?: string) => {
+                    if (existingPoints && existingPoints.trim() && !isRawTranscriptBoilerplate(existingPoints)) {
+                      return existingPoints;
+                    }
+                    if (normalizedAudioRec.conversationLanguageNotes && normalizedAudioRec.conversationLanguageNotes.trim() && !isRawTranscriptBoilerplate(normalizedAudioRec.conversationLanguageNotes)) {
+                      return normalizedAudioRec.conversationLanguageNotes.trim();
+                    }
+                    const turns = parseDialogueTurnsFromSummary(normalizedAudioRec.meetingTextSummary || "");
+                    if (turns.length > 0) {
+                      return turns
+                        .slice(0, 8)
+                        .map(t => `[${t.timeStr}] ${t.speaker}: ${t.text}`)
+                        .join("\n");
+                    }
+                    return "";
+                  };
+
+                  const finalCounsellor = activeCounsellor || localAccounts.find(c => c.id === latestForm.counsellorId) || localAccounts[0];
+                  const assignedCounsellorId = userRole === "Counsellor" && activeCounsellor ? activeCounsellor.id : (latestForm.counsellorId || finalCounsellor.id);
+                  const assignedCounsellorName = userRole === "Counsellor" && activeCounsellor ? activeCounsellor.name : (latestForm.counsellorName || finalCounsellor.name);
+
+                  const cleanNotesForPrimary = pickCleanNotes(latestForm.pointsDiscussed);
+                  const updated: CounsellingEnquiry = {
+                    ...latestForm,
+                    counsellorId: assignedCounsellorId,
+                    counsellorName: assignedCounsellorName,
+                    audioRecording: normalizedAudioRec,
+                    conversationLanguageNotes: normalizedAudioRec.conversationLanguageNotes || latestForm.conversationLanguageNotes,
+                    pointsDiscussed: cleanNotesForPrimary
+                  };
+
+                  formDataRef.current = updated;
                   setFormData(updated);
                   onSaveEnquiry(updated);
 
-                  if (isJointSiblingMode && siblingFormData) {
+                  if (isJointSiblingMode && latestSib) {
+                    const cleanNotesForSib = pickCleanNotes(latestSib.pointsDiscussed);
                     const sibUpdated: CounsellingEnquiry = {
-                      ...siblingFormData,
+                      ...latestSib,
                       audioRecording: {
-                        ...audioRec,
-                        id: `${audioRec.id}-SIB`,
-                        enquiryNo: siblingFormData.enquiryNo || "",
-                        studentName: siblingFormData.studentName || "Sibling",
+                        ...normalizedAudioRec,
+                        id: `${normalizedAudioRec.id}-SIB`,
+                        enquiryNo: latestSib.enquiryNo || "",
+                        studentName: latestSib.studentName || "Sibling",
                         isJointSiblingSession: true,
-                        jointSiblingNames: `${formData.studentName} & ${siblingFormData.studentName}`
+                        jointSiblingNames: `${latestForm.studentName} & ${latestSib.studentName}`
                       },
-                      conversationLanguageNotes: audioRec.conversationLanguageNotes || siblingFormData.conversationLanguageNotes,
-                      pointsDiscussed: siblingFormData.pointsDiscussed && siblingFormData.pointsDiscussed.trim()
-                        ? siblingFormData.pointsDiscussed
-                        : (audioRec.meetingTextSummary || siblingFormData.pointsDiscussed)
+                      conversationLanguageNotes: normalizedAudioRec.conversationLanguageNotes || latestSib.conversationLanguageNotes,
+                      pointsDiscussed: cleanNotesForSib
                     };
+                    siblingFormDataRef.current = sibUpdated;
                     setSiblingFormData(sibUpdated);
                     onSaveEnquiry(sibUpdated);
                   }
@@ -9555,7 +9701,7 @@ Warm regards,
                 onUpdateNotes={(newNotes) => {
                   setFormData(prev => ({
                     ...prev,
-                    pointsDiscussed: prev.pointsDiscussed && prev.pointsDiscussed.trim()
+                    pointsDiscussed: prev.pointsDiscussed && prev.pointsDiscussed.trim() && !isRawTranscriptBoilerplate(prev.pointsDiscussed)
                       ? prev.pointsDiscussed
                       : newNotes,
                     conversationLanguageNotes: newNotes,
@@ -9568,7 +9714,7 @@ Warm regards,
                   if (isJointSiblingMode) {
                     setSiblingFormData(prev => prev ? ({
                       ...prev,
-                      pointsDiscussed: prev.pointsDiscussed && prev.pointsDiscussed.trim()
+                      pointsDiscussed: prev.pointsDiscussed && prev.pointsDiscussed.trim() && !isRawTranscriptBoilerplate(prev.pointsDiscussed)
                         ? prev.pointsDiscussed
                         : newNotes,
                       conversationLanguageNotes: newNotes,
@@ -9588,35 +9734,80 @@ Warm regards,
           </div>
 
           {/* Form Actions Footer */}
-          <div className="p-6 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between flex-wrap gap-3">
-            <div>
-              {isJointSiblingMode && (
+          <div className="p-6 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-200 dark:border-slate-800 space-y-3">
+            {(recorderLiveState.isRecording || recorderLiveState.isProcessing) && (
+              <div className="p-3.5 rounded-xl bg-red-50 dark:bg-red-950/60 border border-red-300 dark:border-red-800 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 text-xs">
+                  <span className="w-2.5 h-2.5 rounded-full bg-red-600 animate-ping shrink-0" />
+                  <div className="text-red-900 dark:text-red-200 font-bold">
+                    {recorderLiveState.isRecording
+                      ? "Live Audio Recording is still running — Save button is locked until you click 'Stop Recording' in Section 7 so the full audio saves safely."
+                      : "Audio file is attaching & uploading to Cloud Vault — Save will unlock in a moment."}
+                  </div>
+                </div>
+                {recorderLiveState.isRecording && (
+                  <button
+                    type="button"
+                    onClick={scrollToStopRecording}
+                    className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-black shadow-sm transition-all cursor-pointer shrink-0"
+                  >
+                    🎙️ Go to Stop Recording ↑
+                  </button>
+                )}
+              </div>
+            )}
+
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div>
+                {isJointSiblingMode && (
+                  <button
+                    type="button"
+                    onClick={handleDisableSiblingMode}
+                    className="px-4 py-2.5 bg-purple-100 hover:bg-purple-200 dark:bg-purple-950/80 dark:hover:bg-purple-900 text-purple-900 dark:text-purple-200 border border-purple-300 dark:border-purple-700 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-sm"
+                  >
+                    <span className="text-purple-600 dark:text-purple-400 font-extrabold">✕</span>
+                    <span>Switch to Single Student</span>
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-3">
                 <button
                   type="button"
-                  onClick={handleDisableSiblingMode}
-                  className="px-4 py-2.5 bg-purple-100 hover:bg-purple-200 dark:bg-purple-950/80 dark:hover:bg-purple-900 text-purple-900 dark:text-purple-200 border border-purple-300 dark:border-purple-700 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-sm"
+                  onClick={handleCancelForm}
+                  disabled={recorderLiveState.isRecording || recorderLiveState.isProcessing}
+                  className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                    recorderLiveState.isRecording || recorderLiveState.isProcessing
+                      ? "bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-600 cursor-not-allowed opacity-60"
+                      : "bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 text-slate-700 dark:text-slate-200 cursor-pointer"
+                  }`}
                 >
-                  <span className="text-purple-600 dark:text-purple-400 font-extrabold">✕</span>
-                  <span>Switch to Single Student</span>
+                  Cancel
                 </button>
-              )}
-            </div>
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={handleCancelForm}
-                className="px-5 py-2.5 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold transition-all cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="px-6 py-2.5 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white rounded-xl text-xs font-black shadow-lg hover:shadow-xl transition-all cursor-pointer"
-              >
-                {isJointSiblingMode && siblingFormData
-                  ? `💾 Save Both Sibling Records (${formData.studentName || "Child 1"} & ${siblingFormData.studentName || "Child 2"})`
-                  : "💾 Save Counselling Enquiry"}
-              </button>
+                <button
+                  type="submit"
+                  disabled={recorderLiveState.isRecording || recorderLiveState.isProcessing}
+                  title={
+                    recorderLiveState.isRecording
+                      ? "Click 'Stop Recording' in Section 7 first to unlock Save"
+                      : recorderLiveState.isProcessing
+                        ? "Wait for audio upload to complete"
+                        : "Save Counselling Enquiry"
+                  }
+                  className={`px-6 py-2.5 text-white rounded-xl text-xs font-black shadow-lg transition-all ${
+                    recorderLiveState.isRecording || recorderLiveState.isProcessing
+                      ? "bg-slate-400 dark:bg-slate-700 cursor-not-allowed opacity-70 shadow-none"
+                      : "bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 hover:shadow-xl cursor-pointer"
+                  }`}
+                >
+                  {recorderLiveState.isRecording
+                    ? "🔒 Stop Recording to Unlock Save"
+                    : recorderLiveState.isProcessing
+                      ? "⏳ Uploading Audio..."
+                      : (isJointSiblingMode && siblingFormData
+                        ? `💾 Save Both Sibling Records (${formData.studentName || "Child 1"} & ${siblingFormData.studentName || "Child 2"})`
+                        : "💾 Save Counselling Enquiry")}
+                </button>
+              </div>
             </div>
           </div>
         </form>
@@ -10137,12 +10328,93 @@ Warm regards,
               <p className="text-slate-600 dark:text-slate-300">
                 <strong>Assigned Counsellor:</strong> {inspectingEnquiry.counsellorName} ({inspectingEnquiry.counsellorId})
               </p>
-              {inspectingEnquiry.pointsDiscussed && (
-                <div className="pt-2 border-t border-amber-200/50 dark:border-amber-900/30">
-                  <strong className="text-slate-800 dark:text-slate-100 block mb-0.5">Points Discussed:</strong>
-                  <p className="text-slate-600 dark:text-slate-300 leading-relaxed italic">"{inspectingEnquiry.pointsDiscussed}"</p>
-                </div>
-              )}
+              {(inspectingEnquiry.pointsDiscussed || inspectingEnquiry.audioRecording?.conversationLanguageNotes || inspectingEnquiry.audioRecording?.meetingTextSummary) && (() => {
+                const rawPoints = (inspectingEnquiry.pointsDiscussed || "").trim();
+                const langNotes = (inspectingEnquiry.audioRecording?.conversationLanguageNotes || "").trim();
+                const summaryRaw = (inspectingEnquiry.audioRecording?.meetingTextSummary || "").trim();
+                const effectiveRaw = rawPoints || langNotes || summaryRaw;
+                const isBoilerplate = isRawTranscriptBoilerplate(effectiveRaw);
+                const parsedTurns = parseDialogueTurnsFromSummary(effectiveRaw || summaryRaw);
+                const audioDurSec = sanitizeAudioDuration(inspectingEnquiry.audioRecording?.durationSeconds, 0);
+
+                // Extract meaningful Key Discussion Notes if inside a boilerplate summary
+                let extractedKeyNote = "";
+                if (isBoilerplate) {
+                  const keyMatch = effectiveRaw.match(/Key Discussion Notes\s*:\s*([^\n\r[]+)/i);
+                  if (keyMatch && keyMatch[1]) {
+                    const candidate = keyMatch[1].trim();
+                    if (
+                      candidate &&
+                      !/^Verbatim meeting audio recorded and transcribed/i.test(candidate) &&
+                      !/^General enquiry regarding admission process/i.test(candidate)
+                    ) {
+                      extractedKeyNote = candidate;
+                    }
+                  }
+                } else if (effectiveRaw && parsedTurns.length === 0) {
+                  // Clean normal text / structured notes
+                  extractedKeyNote = effectiveRaw
+                    .replace(/^[=\-]{4,}$/gm, "")
+                    .replace(/\n{3,}/g, "\n\n")
+                    .trim();
+                }
+
+                return (
+                  <div className="pt-2.5 border-t border-amber-200/50 dark:border-amber-900/30 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <strong className="text-slate-800 dark:text-slate-100 text-[11px] uppercase tracking-wider">
+                        Points Discussed & Meeting Notes
+                      </strong>
+                      {inspectingEnquiry.audioRecording && (
+                        <span className="px-2 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 text-[10px] font-bold font-mono">
+                          🎙️ {audioDurSec > 0 ? formatAudioDuration(audioDurSec) : "Audio Attached"}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="max-h-64 overflow-y-auto custom-scrollbar bg-white/80 dark:bg-slate-900/80 border border-amber-200/70 dark:border-slate-700 rounded-xl p-3 space-y-2.5">
+                      {extractedKeyNote && (
+                        <div className="text-xs text-slate-700 dark:text-slate-200 leading-relaxed whitespace-pre-wrap break-words font-medium">
+                          {extractedKeyNote}
+                        </div>
+                      )}
+
+                      {parsedTurns.length > 0 && (
+                        <div className="space-y-1.5">
+                          <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+                            💬 Clean Spoken Conversation ({parsedTurns.length} {parsedTurns.length === 1 ? "turn" : "turns"})
+                          </div>
+                          {parsedTurns.map((turn, idx) => (
+                            <div
+                              key={turn.id || idx}
+                              className="p-2 rounded-lg bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700/70 text-xs flex items-start gap-2"
+                            >
+                              <span className="font-mono text-[10px] font-bold text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5">
+                                [{turn.timeStr}]
+                              </span>
+                              <div className="min-w-0 flex-1 text-slate-700 dark:text-slate-200 leading-relaxed break-words">
+                                <strong className="text-slate-900 dark:text-white">{turn.speaker}:</strong>{" "}
+                                <span>{turn.text}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {!extractedKeyNote && parsedTurns.length === 0 && (
+                        <div className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-2 py-1">
+                          <Headphones size={14} className="text-indigo-500 shrink-0" />
+                          <span>
+                            {inspectingEnquiry.audioRecording
+                              ? `Meeting audio recording attached${audioDurSec > 0 ? ` (${formatAudioDuration(audioDurSec)})` : ""}. Spoken transcript will populate automatically after voice/AI processing.`
+                              : "No meeting discussion notes recorded yet."}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Modal Actions */}

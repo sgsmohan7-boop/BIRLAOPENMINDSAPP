@@ -51,9 +51,11 @@ import {
   ensurePlayableAudioUrl, 
   playWithWebAudio, 
   stopWebAudio,
-  getAudioBlobExactDuration
+  getAudioBlobExactDuration,
+  resolveReliableAudioDuration,
+  sanitizeAudioDuration
 } from "../utils/audioStorage";
-import { loadR2Credentials, getR2AudioBlobDirect } from "../utils/cloudflareR2Client";
+import { loadR2Credentials, getR2AudioBlobDirect, findR2AudioUrl } from "../utils/cloudflareR2Client";
 import { 
   parseDialogueTurnsFromSummary, 
   generateMeetingKeyPointsAndNotes, 
@@ -449,6 +451,13 @@ export default function ManagementAudioDesk({
 
       const detectDuration = async (src: Blob | string) => {
         try {
+          if (src instanceof Blob) {
+            const reliable = await resolveReliableAudioDuration(src, undefined, 0);
+            if (reliable > 0 && active && isFinite(reliable)) {
+              setDuration(reliable);
+              return;
+            }
+          }
           const exact = await getAudioBlobExactDuration(src);
           if (exact > 0 && active && isFinite(exact)) {
             setDuration(exact);
@@ -486,22 +495,28 @@ export default function ManagementAudioDesk({
         console.warn("Could not retrieve IndexedDB audio blob:", e);
       }
 
-      // 3. Direct Cloudflare R2 Bucket download via S3 Client
-      if (rec.fileName) {
-        try {
-          const creds = loadR2Credentials();
+      // 3. Direct Cloudflare R2 Bucket download / presigned lookup via S3 Client
+      try {
+        const creds = loadR2Credentials();
+        if (rec.fileName) {
           const r2Blob = await getR2AudioBlobDirect(creds, rec.fileName);
           if (r2Blob && active) {
             setResolvedAudioUrl(URL.createObjectURL(r2Blob));
             detectDuration(r2Blob);
             return;
           }
-        } catch (r2Err) {
-          console.warn("Could not fetch R2 audio blob:", r2Err);
         }
+        const matchedR2 = await findR2AudioUrl(creds, activeEnquiry.enquiryNo, rec.fileName);
+        if (matchedR2?.presignedUrl && active) {
+          setResolvedAudioUrl(matchedR2.presignedUrl);
+          detectDuration(matchedR2.presignedUrl);
+          return;
+        }
+      } catch (r2Err) {
+        console.warn("Could not fetch R2 audio blob:", r2Err);
       }
 
-      // 4. Check external audioUrl or driveFileUrl (only valid http/https URLs)
+      // 4. Check external audioUrl or driveFileUrl (only valid http/https/blob URLs)
       if (rec.audioUrl && (rec.audioUrl.startsWith("http://") || rec.audioUrl.startsWith("https://") || rec.audioUrl.startsWith("blob:"))) {
         setResolvedAudioUrl(ensurePlayableAudioUrl(rec.audioUrl));
         detectDuration(rec.audioUrl);
@@ -513,16 +528,24 @@ export default function ManagementAudioDesk({
         return;
       }
 
-      // 5. Localhost / Dev Server streaming endpoint (only on localhost/dev server)
-      const isLocalHost = typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
-      if (isLocalHost && rec.fileName) {
-        setResolvedAudioUrl(`/api/audios/${encodeURIComponent(rec.fileName)}`);
-        return;
+      // 5. Express server streaming endpoint (works on localhost AND Cloud Run Express hosts; skipped cleanly on static Vercel)
+      const serverStreamPath = rec.audioUrl?.startsWith("/api/audios/")
+        ? rec.audioUrl
+        : (rec.fileName ? `/api/audios/${encodeURIComponent(rec.fileName)}` : "");
+      if (serverStreamPath) {
+        try {
+          const probe = await fetch(serverStreamPath, { headers: { Range: "bytes=0-1" } });
+          const ct = (probe.headers.get("content-type") || "").toLowerCase();
+          if (probe.ok && !ct.includes("text/html") && active) {
+            setResolvedAudioUrl(serverStreamPath);
+            return;
+          }
+        } catch {}
       }
 
       // 6. Safe synthesized audio fallback so audio player never crashes
       const fallbackBlob = generateFallbackAudioBlob();
-      setResolvedAudioUrl(URL.createObjectURL(fallbackBlob));
+      if (active) setResolvedAudioUrl(URL.createObjectURL(fallbackBlob));
     };
 
     resolveAudio();
@@ -580,7 +603,7 @@ export default function ManagementAudioDesk({
     let totalParentWords = 0;
 
     filteredList.forEach(e => {
-      if (e.audioRecording?.durationSeconds) totalSec += e.audioRecording.durationSeconds;
+      totalSec += sanitizeAudioDuration(e.audioRecording?.durationSeconds, 0);
       if (e.audioRecording?.reviewStatus === "Reviewed - Approved") {
         reviewedCount++;
       } else {
@@ -957,7 +980,7 @@ Key Points Discussed  : ${rec.conversationLanguageNotes || activeEnquiry.pointsD
 
 [3. MEETING AUDIO ARCHIVE METRICS]
 Audio Recording File  : ${rec.fileName}
-Meeting Duration      : ${rec.durationSeconds} seconds
+Meeting Duration      : ${sanitizeAudioDuration(rec.durationSeconds, 0)} seconds
 Audio Capture Source  : ${rec.audioSource || "Hardware Microphone"}
 Storage Vault         : IndexedDB Zero-Quota Local Vault
 Executive Audit State : ${rec.reviewStatus || "Pending"}
@@ -1013,7 +1036,7 @@ Key Points Discussed  : ${rec.conversationLanguageNotes || activeEnquiry.pointsD
 
 [3. MEETING AUDIO ARCHIVE METRICS]
 Audio Recording File  : ${rec.fileName}
-Meeting Duration      : ${rec.durationSeconds} seconds
+Meeting Duration      : ${sanitizeAudioDuration(rec.durationSeconds, 0)} seconds
 Audio Capture Source  : ${rec.audioSource || "Hardware Microphone"}
 Storage Vault         : IndexedDB Zero-Quota Local Vault
 Executive Audit State : ${rec.reviewStatus || "Pending"}
@@ -1470,7 +1493,12 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT COACHING ONLY
                           </span>
                           <div className="flex items-center justify-end gap-1 text-[11px] font-mono text-slate-400 mt-1">
                             <Clock size={11} />
-                            <span>{formatAudioDuration(audio?.durationSeconds || 0)}</span>
+                            <span>{(() => {
+                              const dSec = sanitizeAudioDuration(audio?.durationSeconds, 0);
+                              if (dSec > 0) return formatAudioDuration(dSec);
+                              if (isSelected && isFinite(duration) && duration > 0) return formatAudioDuration(duration);
+                              return "Recorded";
+                            })()}</span>
                           </div>
                         </div>
                       </div>

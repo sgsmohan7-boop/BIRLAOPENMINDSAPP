@@ -221,13 +221,28 @@ export async function deleteAudioRecordingBlob(id: string): Promise<boolean> {
 }
 
 /**
+ * Strictly sanitize an audio duration value into a finite non-negative integer (seconds).
+ * Eliminates Infinity, -Infinity, NaN, null, undefined, and negative numbers.
+ */
+export function sanitizeAudioDuration(raw: any, fallback: number = 0): number {
+  const num = typeof raw === "number" ? raw : Number(raw);
+  if (typeof num === "number" && isFinite(num) && !isNaN(num) && num > 0) {
+    return Math.max(1, Math.round(num));
+  }
+  const fb = typeof fallback === "number" && isFinite(fallback) && !isNaN(fallback) && fallback > 0
+    ? Math.max(1, Math.round(fallback))
+    : 0;
+  return fb;
+}
+
+/**
  * Convert seconds into clean human-readable MM:SS or HH:MM:SS format safely without NaN/Infinity
  */
 export function formatAudioDuration(totalSeconds: number | null | undefined): string {
-  if (totalSeconds === null || totalSeconds === undefined || isNaN(totalSeconds) || !isFinite(totalSeconds) || totalSeconds <= 0) {
+  const cleanSec = sanitizeAudioDuration(totalSeconds, 0);
+  if (cleanSec <= 0) {
     return "00:00";
   }
-  const cleanSec = Math.max(0, Math.floor(totalSeconds));
   const seconds = cleanSec % 60;
   const minutes = Math.floor((cleanSec / 60) % 60);
   const hours = Math.floor(cleanSec / 3600);
@@ -269,13 +284,101 @@ export async function getAudioBlobExactDuration(blobOrData: Blob | string): Prom
     } else {
       return 0;
     }
-    const decoded = await ctx.decodeAudioData(arrayBuffer.slice(0));
+    const decoded = await Promise.race([
+      ctx.decodeAudioData(arrayBuffer.slice(0)),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("decode timeout")), 5000))
+    ]);
     const dur = decoded.duration;
     ctx.close().catch(() => {});
-    return isFinite(dur) && dur > 0 ? dur : 0;
+    return isFinite(dur) && !isNaN(dur) && dur > 0 ? dur : 0;
   } catch {
     return 0;
   }
+}
+
+/**
+ * Resolve reliable finite duration (in seconds) for any uploaded or recorded Blob (including Chromium WebM with Infinity header).
+ * Order:
+ *  1. HTML5 <audio> metadata + Chromium seek-to-end trick (instantaneous even for 2-hour WebM)
+ *  2. Web Audio API decodeAudioData fallback (with timeout guard)
+ *  3. Conservative size/fallback estimate — NEVER returns Infinity or NaN.
+ */
+export async function resolveReliableAudioDuration(
+  blob: Blob,
+  existingUrl?: string,
+  fallbackSec: number = 30
+): Promise<number> {
+  const objectUrl = existingUrl || URL.createObjectURL(blob);
+  const shouldRevoke = !existingUrl;
+
+  const html5SeekDuration = await new Promise<number>((resolve) => {
+    let settled = false;
+    const audio = new Audio();
+    audio.preload = "metadata";
+
+    const finish = (val: number) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      audio.onloadedmetadata = null;
+      audio.ontimeupdate = null;
+      audio.ondurationchange = null;
+      audio.onerror = null;
+      try { audio.src = ""; } catch {}
+      resolve(isFinite(val) && !isNaN(val) && val > 0 ? val : 0);
+    };
+
+    const timer = setTimeout(() => finish(0), 1800);
+
+    audio.onerror = () => finish(0);
+
+    audio.onloadedmetadata = () => {
+      if (isFinite(audio.duration) && !isNaN(audio.duration) && audio.duration > 0) {
+        finish(audio.duration);
+        return;
+      }
+      // Chromium MediaRecorder WebM returns Infinity until seeked past end
+      audio.ondurationchange = () => {
+        if (isFinite(audio.duration) && !isNaN(audio.duration) && audio.duration > 0) {
+          finish(audio.duration);
+        }
+      };
+      audio.ontimeupdate = () => {
+        audio.ontimeupdate = null;
+        if (isFinite(audio.duration) && !isNaN(audio.duration) && audio.duration > 0) {
+          finish(audio.duration);
+        } else {
+          finish(0);
+        }
+      };
+      try {
+        audio.currentTime = 1e101;
+      } catch {
+        finish(0);
+      }
+    };
+
+    audio.src = objectUrl;
+  });
+
+  if (shouldRevoke) {
+    try { URL.revokeObjectURL(objectUrl); } catch {}
+  }
+
+  if (html5SeekDuration > 0 && isFinite(html5SeekDuration)) {
+    return Math.max(1, Math.round(html5SeekDuration));
+  }
+
+  const decoded = await getAudioBlobExactDuration(blob);
+  if (decoded > 0 && isFinite(decoded)) {
+    return Math.max(1, Math.round(decoded));
+  }
+
+  // Conservative fallback from ~24kbps Opus (~3000 bytes/sec) if file is large, or fallbackSec
+  if (blob && blob.size > 15000) {
+    return Math.max(5, Math.round(blob.size / 3000));
+  }
+  return sanitizeAudioDuration(fallbackSec, 30);
 }
 
 /**

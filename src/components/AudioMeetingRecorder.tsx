@@ -40,8 +40,20 @@ import {
   Cloud
 } from "lucide-react";
 import { CounsellingAudioRecord, ParentSpokenLanguage } from "../types";
-import { formatAudioDuration, formatAudioFileSize, saveAudioRecordingBlob, getAudioRecordingBlob, generateFallbackAudioBlob, ensurePlayableAudioUrl, playWithWebAudio, stopWebAudio } from "../utils/audioStorage";
+import {
+  formatAudioDuration,
+  formatAudioFileSize,
+  saveAudioRecordingBlob,
+  getAudioRecordingBlob,
+  generateFallbackAudioBlob,
+  ensurePlayableAudioUrl,
+  playWithWebAudio,
+  stopWebAudio,
+  resolveReliableAudioDuration,
+  sanitizeAudioDuration
+} from "../utils/audioStorage";
 import { uploadFileToDrive, isDriveConnected, connectGoogleDrive } from "../utils/googleDrive";
+import { loadR2Credentials, uploadToR2Direct, getR2AudioBlobDirect, findR2AudioUrl } from "../utils/cloudflareR2Client";
 import MeetingMomGeneratorModal from "./MeetingMomGeneratorModal";
 import CctvNvrStorageModal from "./CctvNvrStorageModal";
 import AudioTranslationModal, { AudioTranslationData } from "./AudioTranslationModal";
@@ -77,6 +89,7 @@ interface AudioMeetingRecorderProps {
   onRemoveAudio?: () => void;
   onUpdateNotes?: (notes: string) => void;
   onRequestSaveAdmission?: () => void;
+  onRecordingStateChange?: (state: { isRecording: boolean; isProcessing: boolean }) => void;
 }
 
 /**
@@ -367,28 +380,190 @@ export const classifySpeakerTurn = (
   return previousSpeakerRole;
 };
 
-// Helper: parse dialogue turns from an existing text summary report
+const normalizeSpeechComparison = (txt: string): string =>
+  (txt || "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const collapseInternalSpeechRepetition = (txt: string): string => {
+  const words = (txt || "").trim().split(/\s+/).filter(Boolean);
+  if (words.length < 8) return (txt || "").trim();
+  const norm = words.map(w => w.toLowerCase().replace(/[^\p{L}\p{N}]/gu, ""));
+  const out: string[] = [];
+  const outNorm: string[] = [];
+
+  let i = 0;
+  while (i < words.length) {
+    let skipped = false;
+    // Check if upcoming slice [i..i+k] repeats the immediately preceding slice [outNorm.length-k..outNorm.length]
+    const maxWindow = Math.min(24, outNorm.length, words.length - i);
+    for (let k = maxWindow; k >= 4; k--) {
+      let match = true;
+      for (let j = 0; j < k; j++) {
+        if (!outNorm[outNorm.length - k + j] || outNorm[outNorm.length - k + j] !== norm[i + j]) {
+          match = false;
+          break;
+        }
+      }
+      if (match) {
+        i += k;
+        skipped = true;
+        break;
+      }
+    }
+    if (!skipped) {
+      out.push(words[i]);
+      outNorm.push(norm[i]);
+      i++;
+    }
+  }
+  return out.join(" ");
+};
+
+/**
+ * Collapse cumulative expanding SpeechRecognition fragments ("A", "A B", "A B C"),
+ * internal stutter loops ("X Y X Y Z" -> "X Y Z"), and exact consecutive duplicates
+ * into clean, single spoken utterances.
+ */
+export const deduplicateDialogueTurns = (turns: DialogueTurn[]): DialogueTurn[] => {
+  if (!Array.isArray(turns) || turns.length === 0) return [];
+  const cleaned: DialogueTurn[] = [];
+
+  for (const turn of turns) {
+    const rawText = collapseInternalSpeechRepetition((turn?.text || "").trim());
+    if (!rawText) continue;
+    const normCur = normalizeSpeechComparison(rawText);
+    if (!normCur) continue;
+
+    // Check against last 3 kept turns for cumulative prefix expansion or exact repeats
+    let merged = false;
+    const lookbackStart = Math.max(0, cleaned.length - 3);
+    for (let i = cleaned.length - 1; i >= lookbackStart; i--) {
+      const prev = cleaned[i];
+      const normPrev = normalizeSpeechComparison(prev.text);
+      if (!normPrev) continue;
+
+      // Exact repeat or cur is already contained inside prev
+      if (normCur === normPrev || (normCur.length >= 6 && normPrev.includes(normCur))) {
+        merged = true;
+        break;
+      }
+
+      // Cumulative Chrome expansion: new text starts with previous text (or shares long prefix)
+      if (normCur.startsWith(normPrev) || (normPrev.length >= 12 && normCur.includes(normPrev))) {
+        // Keep the fuller/longer sentence in place
+        cleaned[i] = {
+          ...prev,
+          text: rawText,
+          timeSec: turn.timeSec || prev.timeSec,
+          timeStr: turn.timeStr || prev.timeStr
+        };
+        merged = true;
+        break;
+      }
+
+      // Shared prefix >= 4 words (e.g. slight interim correction at the end of a phrase)
+      const prevWords = normPrev.split(" ");
+      const curWords = normCur.split(" ");
+      if (prevWords.length >= 4 && curWords.length >= 4) {
+        let samePrefixCount = 0;
+        const limit = Math.min(prevWords.length, curWords.length);
+        while (samePrefixCount < limit && prevWords[samePrefixCount] === curWords[samePrefixCount]) {
+          samePrefixCount++;
+        }
+        const minThreshold = Math.min(6, Math.max(4, Math.floor(limit * 0.6)));
+        if (samePrefixCount >= minThreshold) {
+          if (curWords.length >= prevWords.length) {
+            cleaned[i] = {
+              ...prev,
+              text: rawText,
+              timeSec: turn.timeSec || prev.timeSec,
+              timeStr: turn.timeStr || prev.timeStr
+            };
+          }
+          merged = true;
+          break;
+        }
+      }
+    }
+
+    if (!merged) {
+      cleaned.push({ ...turn, text: rawText });
+    }
+  }
+
+  return cleaned;
+};
+
+/**
+ * Detect whether a text string contains raw .txt report boilerplate
+ * (e.g. "=== BIRLA OPEN MINDS...", "[4. MEETING AUDIO ARCHIVE METRICS]")
+ */
+export const isRawTranscriptBoilerplate = (text?: string | null): boolean => {
+  if (!text) return false;
+  return /BIRLA OPEN MINDS INTERNATIONAL SCHOOL[\s\S]*TRANSCRIPT REPORT|\[1\.\s*VERBATIM SPOKEN|\[4\.\s*MEETING AUDIO ARCHIVE METRICS\]|Meeting Duration\s*:\s*Infinity/i.test(text);
+};
+
+// Helper: parse dialogue turns from an existing text summary report (handles multiple formats cleanly)
 export const parseDialogueTurnsFromSummary = (summaryText: string): DialogueTurn[] => {
   if (!summaryText) return [];
-  const lines = summaryText.split("\n");
+  const normalizedSource = summaryText
+    .replace(/\s+(?=\[\d{1,2}:\d{2}(?::\d{2})?\]\s*(?:•|-|\||—)?\s*[^:\n]{1,45}:)/g, "\n")
+    .replace(/([=\-]{4,})/g, "\n$1\n");
+  const lines = normalizedSource.split(/\r?\n/);
   const turns: DialogueTurn[] = [];
 
-  // Match formats like: [00:02] • Ravi: "Hey Kiran..." or [00:02] Counsellor: "..."
-  const regex = /\[(\d{2}:\d{2})\]\s*(?:•|-)?\s*([^:]+):\s*"?([^"\n\r]+)"?/;
+  const isPlaceholder = (txt: string) =>
+    /^[\-\s=]*$/.test(txt) ||
+    /audio recording captured\.?\s*please speak clearly|microphone voice audio recording captured|microphone voice audio recording saved|spoken dialogue recorded\. click/i.test(txt);
+
+  // Match formats: [00:02] • Counsellor: "...", [0:02] Counsellor: text, 00:02 **Parent**: text, [00:01:02] Parent: text
+  const tsSpeakerRegex = /^[-•*]?\s*\[?(\d{1,2}:\d{2}(?::\d{2})?)\]?\s*(?:•|-|\||—)?\s*\*{0,2}([^:\n]{1,45}?)\*{0,2}:\s*(.+)$/;
+  // Fallback format: **Counsellor**: "..." or Parent: "..."
+  const speakerOnlyRegex = /^[-•*]?\s*\*{0,2}(Counsellor|Counselor|Parent|Father|Mother|Guardian|Staff|Speaker\s*\d|[^:\n]{2,30})\*{0,2}:\s*(.+)$/i;
 
   lines.forEach((line) => {
     const trimmed = line.trim();
-    const match = trimmed.match(regex);
+    if (!trimmed || /^[=\-]{4,}$/.test(trimmed)) return;
+    if (/^[-=\s]*\[\d+\.\s*[A-Z]/i.test(trimmed)) return;
+    if (/^(VERBATIM SPOKEN DIALOGUE TRANSCRIPT|BIRLA OPEN MINDS|GEMINI AI VOICE|CONFIDENTIAL - FOR INTERNAL)/i.test(trimmed)) return;
+
+    const match = trimmed.match(tsSpeakerRegex);
     if (match) {
-      const timeStr = match[1];
-      const speaker = match[2].trim();
-      const text = match[3].trim();
-      const parts = timeStr.split(":");
-      const sec = parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
+      const rawTs = match[1];
+      const speaker = match[2].replace(/\*/g, "").trim() || "Counsellor";
+      const text = match[3].replace(/^["“]+|["”]+$/g, "").trim();
+      if (!text || isPlaceholder(text)) return;
+      const parts = rawTs.split(":").map(Number);
+      const sec = parts.length === 3 ? (parts[0] * 3600 + parts[1] * 60 + parts[2]) : (parts[0] * 60 + parts[1]);
+      const normTimeStr = formatAudioDuration(isNaN(sec) ? turns.length * 5 : sec);
+      turns.push({
+        id: Math.random().toString(36).substring(2, 9),
+        timeSec: isNaN(sec) ? turns.length * 5 : sec,
+        timeStr: normTimeStr,
+        speaker,
+        speakerName: speaker,
+        text
+      });
+      return;
+    }
+
+    const matchSpeakerOnly = trimmed.match(speakerOnlyRegex);
+    if (matchSpeakerOnly) {
+      const speaker = matchSpeakerOnly[1].replace(/\*/g, "").trim();
+      if (/^\[?\d+\./.test(speaker)) return;
+      if (/^(Generated Date|Enquiry Reference|Student Full|Applying For|Admissions Counsellor|Primary Spoken|Voice Transcribe|Father's Name|Mother's Name|Primary Contact|Admission Status|Scheduled Follow|Parent Primary|Key Discussion|Audio Recording|Meeting Duration|Audio Capture|Audio Format|Storage Engine|Executive Audit|Verification State|Transcribe Accuracy)/i.test(speaker)) {
+        return;
+      }
+      const text = matchSpeakerOnly[2].replace(/^["“]+|["”]+$/g, "").trim();
+      if (!text || isPlaceholder(text)) return;
+      const sec = turns.length * 5;
       turns.push({
         id: Math.random().toString(36).substring(2, 9),
         timeSec: sec,
-        timeStr,
+        timeStr: formatAudioDuration(sec),
         speaker,
         speakerName: speaker,
         text
@@ -396,7 +571,7 @@ export const parseDialogueTurnsFromSummary = (summaryText: string): DialogueTurn
     }
   });
 
-  return turns;
+  return deduplicateDialogueTurns(turns);
 };
 
 export interface AuditedParentQuery {
@@ -612,6 +787,46 @@ ${actionItems.map(a => `  - ${a}`).join("\n")}`;
   };
 };
 
+// Encode 16kHz Int16 mono PCM frames into a base64 RIFF/WAVE payload for Gemini multimodal transcription
+const encodePcm16ToWavBase64 = (samples: Int16Array, sampleRate: number = 16000): string => {
+  const byteLength = samples.length * 2;
+  const buffer = new ArrayBuffer(44 + byteLength);
+  const view = new DataView(buffer);
+
+  const writeStr = (offset: number, str: string) => {
+    for (let i = 0; i < str.length; i++) {
+      view.setUint8(offset + i, str.charCodeAt(i));
+    }
+  };
+
+  writeStr(0, "RIFF");
+  view.setUint32(4, 36 + byteLength, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true); // PCM chunk size
+  view.setUint16(20, 1, true); // PCM format
+  view.setUint16(22, 1, true); // Mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); // Byte rate
+  view.setUint16(32, 2, true); // Block align
+  view.setUint16(34, 16, true); // Bits per sample
+  writeStr(36, "data");
+  view.setUint32(40, byteLength, true);
+
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++, offset += 2) {
+    view.setInt16(offset, samples[i], true);
+  }
+
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+};
+
 export default function AudioMeetingRecorder({
   enquiryNo,
   studentName,
@@ -627,7 +842,8 @@ export default function AudioMeetingRecorder({
   onSaveAudio,
   onRemoveAudio,
   onUpdateNotes,
-  onRequestSaveAdmission
+  onRequestSaveAdmission,
+  onRecordingStateChange
 }: AudioMeetingRecorderProps) {
   // Recorder states
   const [isRecording, setIsRecording] = useState(false);
@@ -659,6 +875,8 @@ export default function AudioMeetingRecorder({
   );
   const [speechSupported, setSpeechSupported] = useState<boolean>(true);
   const [speechBlockedWarning, setSpeechBlockedWarning] = useState<boolean>(false);
+  const [liveEngineStatus, setLiveEngineStatus] = useState<"idle" | "connecting" | "gemini_live" | "gemini_chunked_live" | "browser_fallback">("idle");
+  const [transcriptionEngineUsed, setTranscriptionEngineUsed] = useState<string | null>(null);
 
   // Gemini Speech Recognition Mode (Indian English default as requested)
   const [speechMode, setSpeechMode] = useState<"bilingual_admissions" | "english_indian" | "telugu_native" | "hindi_native" | "english_global">(() => {
@@ -734,14 +952,18 @@ export default function AudioMeetingRecorder({
   const [recoveredSession, setRecoveredSession] = useState<RecoveredMeetingSession | null>(null);
   const recoveryIntervalRef = useRef<any>(null);
 
-  // Check on mount for any interrupted meeting session in IndexedDB
+  // Check on mount for any interrupted meeting session in IndexedDB (only when no existing audio is already attached)
   useEffect(() => {
-    getActiveMeetingRecovery().then(rec => {
-      if (rec && (!recordedAudioUrl || !existingAudio)) {
+    if (existingAudio) {
+      setRecoveredSession(null);
+      return;
+    }
+    getActiveMeetingRecovery(enquiryNo).then(rec => {
+      if (rec && !existingAudio && !recordedAudioUrl) {
         setRecoveredSession(rec);
       }
     }).catch(() => {});
-  }, []);
+  }, [enquiryNo, existingAudio]);
 
   // Live Audio Meter Decibels
   const [liveVolumeLevel, setLiveVolumeLevel] = useState<number>(0);
@@ -772,15 +994,40 @@ export default function AudioMeetingRecorder({
 
   // Tracking refs
   const isRecordingRef = useRef<boolean>(false);
+  const isPausedRef = useRef<boolean>(false);
   const recordingSecondsRef = useRef<number>(0);
   const dialogueTurnsRef = useRef<DialogueTurn[]>([]);
   const interimSpeechTextRef = useRef<string>("");
+  const lastInterimCommittedRef = useRef<string>("");
   const isRecognitionRunningRef = useRef<boolean>(false);
   const speechModeRef = useRef<string>("english_indian");
+  const liveEngineStatusRef = useRef<"idle" | "connecting" | "gemini_live" | "gemini_chunked_live" | "browser_fallback">("idle");
+  const liveWsRef = useRef<WebSocket | null>(null);
+  const pcmAudioCtxRef = useRef<AudioContext | null>(null);
+  const pcmSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const pcmProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const liveFallbackTimerRef = useRef<any>(null);
+  const pcmChunkBuffersRef = useRef<Int16Array[]>([]);
+  const pcmChunkPeakRef = useRef<number>(0);
+  const pcmChunkSumSqRef = useRef<number>(0);
+  const pcmChunkSampleCountRef = useRef<number>(0);
+  const chunkUploadIntervalRef = useRef<any>(null);
+  const chunkFailureCountRef = useRef<number>(0);
+  const isUploadingChunkRef = useRef<boolean>(false);
 
   useEffect(() => {
     isRecordingRef.current = isRecording;
   }, [isRecording]);
+
+  useEffect(() => {
+    if (onRecordingStateChange) {
+      onRecordingStateChange({ isRecording, isProcessing });
+    }
+  }, [isRecording, isProcessing, onRecordingStateChange]);
+
+  useEffect(() => {
+    isPausedRef.current = isPaused;
+  }, [isPaused]);
 
   useEffect(() => {
     recordingSecondsRef.current = recordingSeconds;
@@ -793,6 +1040,10 @@ export default function AudioMeetingRecorder({
   useEffect(() => {
     speechModeRef.current = speechMode;
   }, [speechMode]);
+
+  useEffect(() => {
+    liveEngineStatusRef.current = liveEngineStatus;
+  }, [liveEngineStatus]);
 
   // Total words captured in the session
   const totalWordsCaptured = dialogueTurns.reduce((acc, t) => acc + (t.text ? t.text.trim().split(/\s+/).length : 0), 0) + 
@@ -844,11 +1095,33 @@ export default function AudioMeetingRecorder({
       }
 
       // 2. Check base64 audio data
-      if (!srcUrl && existingAudio.audioData) {
+      if (!srcUrl && existingAudio.audioData && existingAudio.audioData.length > 50) {
         srcUrl = ensurePlayableAudioUrl(existingAudio.audioData);
       }
 
-      // 3. Check drive file url or server audio url
+      // 3. Check Cloudflare R2 Bucket directly so cross-laptop edits also stream real audio
+      if (!srcUrl && (existingAudio.fileName || enquiryNo)) {
+        try {
+          const creds = loadR2Credentials();
+          if (existingAudio.fileName) {
+            const r2Blob = await getR2AudioBlobDirect(creds, existingAudio.fileName);
+            if (r2Blob && r2Blob.size > 100 && active) {
+              srcUrl = URL.createObjectURL(r2Blob);
+              setRecordedBlob(r2Blob);
+            }
+          }
+          if (!srcUrl && active) {
+            const foundR2 = await findR2AudioUrl(creds, enquiryNo, existingAudio.fileName);
+            if (foundR2?.presignedUrl && active) {
+              srcUrl = foundR2.presignedUrl;
+            }
+          }
+        } catch (r2Err) {
+          console.warn("R2 lookup notice during form audio load:", r2Err);
+        }
+      }
+
+      // 4. Check drive file url or server audio url
       if (!srcUrl && existingAudio.driveFileUrl && !existingAudio.driveFileUrl.startsWith("blob:")) {
         srcUrl = existingAudio.driveFileUrl;
       }
@@ -856,7 +1129,7 @@ export default function AudioMeetingRecorder({
         srcUrl = existingAudio.audioUrl;
       }
 
-      // 4. Guarantee playable audio
+      // 5. Guarantee playable audio
       if (srcUrl && active) {
         setRecordedAudioUrl(ensurePlayableAudioUrl(srcUrl));
       } else if (active) {
@@ -876,6 +1149,7 @@ export default function AudioMeetingRecorder({
   useEffect(() => {
     return () => {
       cleanupAudioResources();
+      stopGeminiLiveStream();
       stopLiveSpeechRecognition();
       if (watchdogIntervalRef.current) clearInterval(watchdogIntervalRef.current);
       if (recordedAudioUrl && recordedAudioUrl.startsWith("blob:")) {
@@ -967,25 +1241,52 @@ export default function AudioMeetingRecorder({
     }
 
     const cleanText = formatted.trim();
+    const normClean = normalizeSpeechComparison(cleanText);
+    if (!normClean) return;
 
-    // Check if the exact text was just committed in the last turn to prevent duplicates
+    // Smart deduplication against last 2 turns so cumulative SpeechRecognition prefixes replace cleanly instead of duplicating
     if (currentTurns.length > 0) {
-      const last = currentTurns[currentTurns.length - 1];
-      if (last.text.toLowerCase() === cleanText.toLowerCase()) {
-        return;
+      const lookbackStart = Math.max(0, currentTurns.length - 2);
+      for (let i = currentTurns.length - 1; i >= lookbackStart; i--) {
+        const prevTurn = currentTurns[i];
+        const normPrev = normalizeSpeechComparison(prevTurn.text);
+        if (!normPrev) continue;
+
+        // Already present verbatim or as shorter regression of existing turn
+        if (normPrev === normClean || (normClean.length >= 4 && normPrev.includes(normClean))) {
+          return;
+        }
+
+        // Cumulative expansion: new text starts with (or contains) previous text -> update previous turn in place
+        if (normClean.startsWith(normPrev) || (normPrev.length >= 12 && normClean.includes(normPrev))) {
+          setDialogueTurns(prev => {
+            const updated = [...prev];
+            if (updated[i]) {
+              updated[i] = { ...updated[i], text: cleanText };
+            }
+            dialogueTurnsRef.current = updated;
+            return updated;
+          });
+          return;
+        }
       }
-      // If same speaker within 2 seconds, concatenate cleanly
+
+      const last = currentTurns[currentTurns.length - 1];
+      // If same speaker within 2 seconds with genuinely new words (no overlap), concatenate cleanly
       if (last.speaker === assignedSpeaker && (currentSec - last.timeSec) <= 2 && last.text.length < 180) {
-        setDialogueTurns(prev => {
-          const updated = [...prev];
-          const prevItem = updated[updated.length - 1];
-          if (!prevItem.text.includes(cleanText)) {
-            prevItem.text = `${prevItem.text} ${cleanText}`;
-          }
-          dialogueTurnsRef.current = updated;
-          return updated;
-        });
-        return;
+        const normLast = normalizeSpeechComparison(last.text);
+        if (!normLast.includes(normClean) && !normClean.includes(normLast)) {
+          setDialogueTurns(prev => {
+            const updated = [...prev];
+            const prevItem = updated[updated.length - 1];
+            if (prevItem) {
+              updated[updated.length - 1] = { ...prevItem, text: `${prevItem.text} ${cleanText}` };
+            }
+            dialogueTurnsRef.current = updated;
+            return updated;
+          });
+          return;
+        }
       }
     }
 
@@ -1087,6 +1388,7 @@ export default function AudioMeetingRecorder({
               commitSpeechTurn(finalWord);
               setInterimSpeechText("");
               interimSpeechTextRef.current = "";
+              lastInterimCommittedRef.current = "";
               if (interimDebounceRef.current) clearTimeout(interimDebounceRef.current);
             }
           } else {
@@ -1099,15 +1401,17 @@ export default function AudioMeetingRecorder({
           setInterimSpeechText(formattedInterim);
           interimSpeechTextRef.current = formattedInterim;
 
-          // High-speed speech capture: Auto-commit interim after 380ms pause (instant capture for fast speakers)
+          // Smooth speech capture: Auto-commit interim after 1500ms pause; dedupe logic replaces/extends in place if Chrome expands the same buffer later
           if (interimDebounceRef.current) clearTimeout(interimDebounceRef.current);
           interimDebounceRef.current = setTimeout(() => {
-            if (interimSpeechTextRef.current && interimSpeechTextRef.current.trim()) {
-              commitSpeechTurn(interimSpeechTextRef.current.trim());
+            const candidate = (interimSpeechTextRef.current || "").trim();
+            if (candidate && candidate !== lastInterimCommittedRef.current) {
+              lastInterimCommittedRef.current = candidate;
+              commitSpeechTurn(candidate);
               setInterimSpeechText("");
               interimSpeechTextRef.current = "";
             }
-          }, 380);
+          }, 1500);
         }
       };
 
@@ -1130,16 +1434,10 @@ export default function AudioMeetingRecorder({
         isRecognitionRunningRef.current = false;
         consecutiveSpeechErrorsRef.current += 1;
 
-        // Smart Language Fallback: If te-IN has repeated network hiccups on this browser, auto-fallback to Indian English
-        let nextMode = activeMode;
-        if (consecutiveSpeechErrorsRef.current >= 2 && activeMode === "telugu_native") {
-          console.log("Auto-switching to Indian English for seamless connectivity");
-          nextMode = "english_indian";
-          setSpeechMode("english_indian");
-          speechModeRef.current = "english_indian";
-        }
+        // Preserve the user's selected language mode instead of forcing a switch away from Telugu
+        const nextMode = speechModeRef.current || activeMode;
 
-        if (isRecordingRef.current) {
+        if (isRecordingRef.current && liveEngineStatusRef.current === "browser_fallback") {
           const backoff = Math.min(800, 150 * Math.pow(1.2, consecutiveSpeechErrorsRef.current));
           scheduleSpeechRestart(backoff, nextMode);
         }
@@ -1156,7 +1454,7 @@ export default function AudioMeetingRecorder({
         }
 
         // Safe restart with micro-delay to keep engine alive continuously past 1 min, 10 min, 1hr 50 min
-        if (isRecordingRef.current) {
+        if (isRecordingRef.current && liveEngineStatusRef.current === "browser_fallback") {
           scheduleSpeechRestart(120, speechModeRef.current || activeMode);
         }
       };
@@ -1167,7 +1465,7 @@ export default function AudioMeetingRecorder({
       console.warn("Could not initialize speech recognition:", e);
       isRecognitionRunningRef.current = false;
       consecutiveSpeechErrorsRef.current += 1;
-      if (isRecordingRef.current) {
+      if (isRecordingRef.current && liveEngineStatusRef.current === "browser_fallback") {
         scheduleSpeechRestart(300, activeMode);
       }
     }
@@ -1201,6 +1499,320 @@ export default function AudioMeetingRecorder({
     isRecognitionRunningRef.current = false;
   };
 
+  // Tear down Gemini Live / Chunked 16kHz PCM stream cleanly
+  const stopGeminiLiveStream = () => {
+    if (liveFallbackTimerRef.current) {
+      clearTimeout(liveFallbackTimerRef.current);
+      liveFallbackTimerRef.current = null;
+    }
+    if (chunkUploadIntervalRef.current) {
+      clearInterval(chunkUploadIntervalRef.current);
+      chunkUploadIntervalRef.current = null;
+    }
+    pcmChunkBuffersRef.current = [];
+    pcmChunkPeakRef.current = 0;
+    pcmChunkSumSqRef.current = 0;
+    pcmChunkSampleCountRef.current = 0;
+    chunkFailureCountRef.current = 0;
+    isUploadingChunkRef.current = false;
+
+    if (pcmProcessorRef.current) {
+      try {
+        pcmProcessorRef.current.onaudioprocess = null;
+        pcmProcessorRef.current.disconnect();
+      } catch {}
+      pcmProcessorRef.current = null;
+    }
+    if (pcmSourceRef.current) {
+      try {
+        pcmSourceRef.current.disconnect();
+      } catch {}
+      pcmSourceRef.current = null;
+    }
+    if (pcmAudioCtxRef.current && pcmAudioCtxRef.current.state !== "closed") {
+      pcmAudioCtxRef.current.close().catch(() => {});
+      pcmAudioCtxRef.current = null;
+    }
+    if (liveWsRef.current) {
+      try {
+        liveWsRef.current.onopen = null;
+        liveWsRef.current.onmessage = null;
+        liveWsRef.current.onerror = null;
+        liveWsRef.current.onclose = null;
+        if (liveWsRef.current.readyState === WebSocket.OPEN || liveWsRef.current.readyState === WebSocket.CONNECTING) {
+          liveWsRef.current.close();
+        }
+      } catch {}
+      liveWsRef.current = null;
+    }
+  };
+
+  // Switch cleanly to Chrome browser SpeechRecognition only when server endpoints are unreachable/offline
+  const activateBrowserSpeechFallback = (reason?: string) => {
+    if (reason) console.info("Live transcription switching to browser fallback:", reason);
+    stopGeminiLiveStream();
+    if (!isRecordingRef.current) return;
+    setLiveEngineStatus("browser_fallback");
+    liveEngineStatusRef.current = "browser_fallback";
+    if (!isRecognitionRunningRef.current) {
+      startLiveSpeechRecognition();
+    }
+  };
+
+  // Flush buffered 16kHz PCM audio frames to /api/transcribe-live-chunk
+  const flushPcmChunkToServer = async () => {
+    if (isUploadingChunkRef.current || pcmChunkBuffersRef.current.length === 0) return;
+
+    const frames = pcmChunkBuffersRef.current;
+    const totalSamples = pcmChunkSampleCountRef.current;
+    const peak = pcmChunkPeakRef.current;
+    const sumSq = pcmChunkSumSqRef.current;
+
+    pcmChunkBuffersRef.current = [];
+    pcmChunkPeakRef.current = 0;
+    pcmChunkSumSqRef.current = 0;
+    pcmChunkSampleCountRef.current = 0;
+
+    // Require >= 0.5s of audio (8000 samples @ 16kHz) and audible speech signal above noise floor
+    if (totalSamples < 8000) return;
+    const rms = Math.sqrt(sumSq / totalSamples);
+    if (peak < 320 && rms < 60) return;
+
+    const merged = new Int16Array(totalSamples);
+    let writeOffset = 0;
+    for (const f of frames) {
+      merged.set(f, writeOffset);
+      writeOffset += f.length;
+    }
+
+    isUploadingChunkRef.current = true;
+    try {
+      const wavBase64 = encodePcm16ToWavBase64(merged, 16000);
+      const resp = await fetch("/api/transcribe-live-chunk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          audioBase64: wavBase64,
+          mimeType: "audio/wav",
+          parentLanguage: selectedLanguage,
+          speechMode: speechModeRef.current,
+          studentName: studentName || "Student Enquiry",
+          counsellorName: counsellorName || "Admissions Counsellor",
+        }),
+      });
+
+      if (resp.status === 404 || resp.status === 503) {
+        activateBrowserSpeechFallback(`Chunk endpoint unavailable (HTTP ${resp.status})`);
+        return;
+      }
+
+      if (!resp.ok) {
+        chunkFailureCountRef.current += 1;
+        if (chunkFailureCountRef.current >= 2 && isRecordingRef.current) {
+          activateBrowserSpeechFallback(`Chunk transcription failed (${resp.status})`);
+        }
+        return;
+      }
+
+      const data = await resp.json();
+      if (data?.success) {
+        chunkFailureCountRef.current = 0;
+        if (data.model) {
+          setTranscriptionEngineUsed(data.model);
+        }
+        const spoken = typeof data.text === "string" ? data.text.trim() : "";
+        if (spoken && isRecordingRef.current) {
+          commitSpeechTurn(spoken);
+          setInterimSpeechText("");
+          interimSpeechTextRef.current = "";
+        }
+      }
+    } catch (err) {
+      chunkFailureCountRef.current += 1;
+      if (chunkFailureCountRef.current >= 2 && isRecordingRef.current) {
+        activateBrowserSpeechFallback("Chunk transcription network fallback");
+      }
+    } finally {
+      isUploadingChunkRef.current = false;
+    }
+  };
+
+  // Start shared 16kHz mono PCM capture pipeline for Gemini Live WS or Chunked WAV streaming
+  const ensurePcmCaptureRunning = (stream: MediaStream): boolean => {
+    if (pcmProcessorRef.current && pcmAudioCtxRef.current && pcmAudioCtxRef.current.state !== "closed") {
+      return true;
+    }
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      const pcmCtx = new AudioCtx({ sampleRate: 16000 });
+      const source = pcmCtx.createMediaStreamSource(stream);
+      const processor = pcmCtx.createScriptProcessor(4096, 1, 1);
+      const silentGain = pcmCtx.createGain();
+      silentGain.gain.value = 0;
+
+      source.connect(processor);
+      processor.connect(silentGain);
+      silentGain.connect(pcmCtx.destination);
+
+      pcmAudioCtxRef.current = pcmCtx;
+      pcmSourceRef.current = source;
+      pcmProcessorRef.current = processor;
+
+      processor.onaudioprocess = (e) => {
+        if (!isRecordingRef.current || isPausedRef.current) return;
+        const input = e.inputBuffer.getChannelData(0);
+        const pcm16 = new Int16Array(input.length);
+        let framePeak = 0;
+        let frameSumSq = 0;
+
+        for (let i = 0; i < input.length; i++) {
+          const s = Math.max(-1, Math.min(1, input[i]));
+          const sample = s < 0 ? s * 0x8000 : s * 0x7fff;
+          pcm16[i] = sample;
+          const abs = Math.abs(sample);
+          if (abs > framePeak) framePeak = abs;
+          frameSumSq += sample * sample;
+        }
+
+        if (liveEngineStatusRef.current === "gemini_live") {
+          if (!liveWsRef.current || liveWsRef.current.readyState !== WebSocket.OPEN) return;
+          const bytes = new Uint8Array(pcm16.buffer);
+          let binary = "";
+          const chunk = 0x8000;
+          for (let i = 0; i < bytes.byteLength; i += chunk) {
+            binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+          }
+          try {
+            liveWsRef.current.send(JSON.stringify({ audio: btoa(binary) }));
+          } catch {}
+        } else if (liveEngineStatusRef.current === "gemini_chunked_live") {
+          pcmChunkBuffersRef.current.push(pcm16);
+          if (framePeak > pcmChunkPeakRef.current) pcmChunkPeakRef.current = framePeak;
+          pcmChunkSumSqRef.current += frameSumSq;
+          pcmChunkSampleCountRef.current += pcm16.length;
+        }
+      };
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // Real-time Gemini Live / Chunked 16kHz WAV AI transcription with automatic browser fallback
+  const startGeminiLiveStream = (stream: MediaStream) => {
+    if (typeof window === "undefined" || !isRecordingRef.current) return;
+    stopGeminiLiveStream();
+    setLiveEngineStatus("connecting");
+    liveEngineStatusRef.current = "connecting";
+
+    const activateChunkedGemini = (reason?: string) => {
+      if (!isRecordingRef.current) return;
+      if (liveEngineStatusRef.current === "gemini_chunked_live" || liveEngineStatusRef.current === "browser_fallback") return;
+      if (reason) console.info("Switching to Gemini Chunked Live AI (16kHz WAV):", reason);
+
+      if (liveFallbackTimerRef.current) {
+        clearTimeout(liveFallbackTimerRef.current);
+        liveFallbackTimerRef.current = null;
+      }
+      if (liveWsRef.current) {
+        try {
+          liveWsRef.current.onopen = null;
+          liveWsRef.current.onmessage = null;
+          liveWsRef.current.onerror = null;
+          liveWsRef.current.onclose = null;
+          if (liveWsRef.current.readyState === WebSocket.OPEN || liveWsRef.current.readyState === WebSocket.CONNECTING) {
+            liveWsRef.current.close();
+          }
+        } catch {}
+        liveWsRef.current = null;
+      }
+
+      if (!ensurePcmCaptureRunning(stream)) {
+        activateBrowserSpeechFallback("16kHz PCM capture unavailable");
+        return;
+      }
+
+      stopLiveSpeechRecognition();
+      setLiveEngineStatus("gemini_chunked_live");
+      liveEngineStatusRef.current = "gemini_chunked_live";
+      setSpeechSupported(true);
+      setSpeechBlockedWarning(false);
+
+      if (chunkUploadIntervalRef.current) clearInterval(chunkUploadIntervalRef.current);
+      chunkUploadIntervalRef.current = setInterval(() => {
+        if (isRecordingRef.current && !isPausedRef.current && liveEngineStatusRef.current === "gemini_chunked_live") {
+          flushPcmChunkToServer();
+        }
+      }, 7000);
+    };
+
+    try {
+      const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl = `${wsProto}//${window.location.host}/ws/live-transcribe`;
+      const ws = new WebSocket(wsUrl);
+      liveWsRef.current = ws;
+      let isGeminiReady = false;
+
+      // If Gemini Live WebSocket handshake does not finish within 2.5s, switch immediately to Chunked Gemini Live
+      liveFallbackTimerRef.current = setTimeout(() => {
+        if (!isGeminiReady && isRecordingRef.current) {
+          activateChunkedGemini("Live WebSocket handshake timeout");
+        }
+      }, 2500);
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === "ready") {
+            isGeminiReady = true;
+            if (liveFallbackTimerRef.current) {
+              clearTimeout(liveFallbackTimerRef.current);
+              liveFallbackTimerRef.current = null;
+            }
+            stopLiveSpeechRecognition();
+            if (!ensurePcmCaptureRunning(stream)) {
+              activateBrowserSpeechFallback("16kHz PCM capture unavailable");
+              return;
+            }
+            setLiveEngineStatus("gemini_live");
+            liveEngineStatusRef.current = "gemini_live";
+            setSpeechSupported(true);
+            setSpeechBlockedWarning(false);
+          } else if (msg.type === "interim" && msg.text) {
+            const formattedInterim = formatBilingualSpeechText(String(msg.text));
+            setInterimSpeechText(formattedInterim);
+            interimSpeechTextRef.current = formattedInterim;
+          } else if (msg.type === "final" && msg.text) {
+            const finalTxt = String(msg.text).trim();
+            if (finalTxt) {
+              commitSpeechTurn(finalTxt);
+              setInterimSpeechText("");
+              interimSpeechTextRef.current = "";
+            }
+          } else if (msg.type === "fallback") {
+            activateChunkedGemini(msg.error || "Gemini Live WebSocket unavailable");
+          }
+        } catch {}
+      };
+
+      ws.onerror = () => {
+        if (isRecordingRef.current && !isGeminiReady) {
+          activateChunkedGemini("Live WebSocket error");
+        }
+      };
+
+      ws.onclose = () => {
+        if (isRecordingRef.current && liveEngineStatusRef.current === "connecting") {
+          activateChunkedGemini("Live WebSocket closed before ready");
+        } else if (isRecordingRef.current && liveEngineStatusRef.current === "gemini_live") {
+          activateChunkedGemini("Live WebSocket disconnected mid-session");
+        }
+      };
+    } catch {
+      activateChunkedGemini("WebSocket constructor unavailable");
+    }
+  };
+
   // Helper to switch language mode and restart engine immediately
   const handleSwitchSpeechMode = (mode: "bilingual_admissions" | "english_indian" | "telugu_native" | "hindi_native" | "english_global") => {
     setSpeechMode(mode);
@@ -1208,7 +1820,7 @@ export default function AudioMeetingRecorder({
     try {
       localStorage.setItem("counsellor_speech_mode", mode);
     } catch {}
-    if (isRecordingRef.current) {
+    if (isRecordingRef.current && liveEngineStatusRef.current === "browser_fallback") {
       stopLiveSpeechRecognition();
       scheduleSpeechRestart(150, mode);
     }
@@ -1240,24 +1852,24 @@ export default function AudioMeetingRecorder({
 
   // Helper: Build Structured Meeting Minutes Text Report with Real Spoken Dialogue in Gemini Chat format
   const buildMeetingTextSummary = (
-    durationSec: number, 
+    rawDurationSec: number, 
     fileName: string, 
     source: string, 
     recordTimestamp?: string,
     dialogueTranscript?: string
   ) => {
+    const durationSec = sanitizeAudioDuration(rawDurationSec, 0);
     const timeStr = recordTimestamp || new Date().toLocaleString();
     const durationFormatted = formatAudioDuration(durationSec);
+    const cleanTurnsList = deduplicateDialogueTurns(
+      dialogueTurnsRef.current && dialogueTurnsRef.current.length > 0 ? dialogueTurnsRef.current : dialogueTurns
+    );
 
     let cleanDialogue = "";
     if (dialogueTranscript && dialogueTranscript.trim()) {
       cleanDialogue = dialogueTranscript.trim();
-    } else if (dialogueTurnsRef.current && dialogueTurnsRef.current.length > 0) {
-      cleanDialogue = dialogueTurnsRef.current
-        .map(t => `[${t.timeStr}] • ${t.speaker}: "${t.text}"`)
-        .join("\n\n");
-    } else if (dialogueTurns.length > 0) {
-      cleanDialogue = dialogueTurns
+    } else if (cleanTurnsList.length > 0) {
+      cleanDialogue = cleanTurnsList
         .map(t => `[${t.timeStr}] • ${t.speaker}: "${t.text}"`)
         .join("\n\n");
     } else {
@@ -1409,34 +2021,37 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
       setIsRecording(true);
       isRecordingRef.current = true;
       setIsPaused(false);
+      isPausedRef.current = false;
       setRecordingSeconds(0);
       recordingSecondsRef.current = 0;
 
-      // Start continuous speech recognition
-      startLiveSpeechRecognition();
+      // Start Gemini Live WebSocket speech-to-text (automatically falls back to browser SpeechRecognition if unavailable)
+      startGeminiLiveStream(stream);
 
-      // Robust Watchdog: keeps speech recognition running indefinitely across minute 1, 2, 5, 30+
+      // Robust Watchdog: keeps speech recognition running indefinitely when using browser fallback
       if (watchdogIntervalRef.current) clearInterval(watchdogIntervalRef.current);
       watchdogIntervalRef.current = setInterval(() => {
         if (!isRecordingRef.current) return;
 
-        // 1. If recognition stopped unexpectedly, immediately restart
-        if (!isRecognitionRunningRef.current && !restartTimeoutRef.current) {
-          startLiveSpeechRecognition();
-          return;
-        }
+        if (liveEngineStatusRef.current === "browser_fallback") {
+          // 1. If browser recognition stopped unexpectedly, immediately restart
+          if (!isRecognitionRunningRef.current && !restartTimeoutRef.current) {
+            startLiveSpeechRecognition();
+            return;
+          }
 
-        // 2. Proactive refresh at 45 seconds before Chrome's internal 60-second socket timeout terminates the stream
-        if (
-          isRecognitionRunningRef.current && 
-          speechSessionStartRef.current > 0 && 
-          Date.now() - speechSessionStartRef.current >= 45000
-        ) {
-          try {
-            if (speechRecognitionRef.current) {
-              speechRecognitionRef.current.stop(); // Clean stop fires onend, which seamlessly restarts
-            }
-          } catch (_) {}
+          // 2. Proactive refresh at 45 seconds before Chrome's internal 60-second socket timeout terminates the stream
+          if (
+            isRecognitionRunningRef.current && 
+            speechSessionStartRef.current > 0 && 
+            Date.now() - speechSessionStartRef.current >= 45000
+          ) {
+            try {
+              if (speechRecognitionRef.current) {
+                speechRecognitionRef.current.stop(); // Clean stop fires onend, which seamlessly restarts
+              }
+            } catch (_) {}
+          }
         }
 
         // 3. Periodic real-time transcript draft save every few seconds so 1hr 50min meetings never lose text
@@ -1498,8 +2113,12 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
     if (mediaRecorderRef.current && isRecording && !isPaused) {
       mediaRecorderRef.current.pause();
       setIsPaused(true);
+      isPausedRef.current = true;
       if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      if (liveEngineStatusRef.current === "gemini_chunked_live") {
+        flushPcmChunkToServer();
+      }
       if (interimSpeechTextRef.current && interimSpeechTextRef.current.trim()) {
         commitSpeechTurn(interimSpeechTextRef.current.trim());
         setInterimSpeechText("");
@@ -1512,13 +2131,80 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
     if (mediaRecorderRef.current && isRecording && isPaused) {
       mediaRecorderRef.current.resume();
       setIsPaused(false);
+      isPausedRef.current = false;
       timerIntervalRef.current = setInterval(() => {
         setRecordingSeconds(prev => prev + 1);
       }, 1000);
-      if (!isRecognitionRunningRef.current) {
+      if (liveEngineStatusRef.current === "browser_fallback" && !isRecognitionRunningRef.current) {
         startLiveSpeechRecognition();
       }
     }
+  };
+
+  // Unified resilient Cloud R2 + Express Server upload helper (works both on Vercel & AI Studio Express)
+  const syncAudioToCloudAndServer = async (params: {
+    blob: Blob;
+    base64Data: string;
+    fileName: string;
+    recordingId: string;
+    mimeType: string;
+    durationSeconds: number;
+    textReport: string;
+  }): Promise<{ r2Synced: boolean; serverAudioUrl?: string }> => {
+    const { blob, base64Data, fileName, recordingId, mimeType, durationSeconds, textReport } = params;
+    let r2Synced = false;
+    let serverAudioUrl: string | undefined = undefined;
+
+    // 1. Direct Cloudflare R2 binary upload (works across Vercel, Cloud Run & localhost)
+    try {
+      const creds = loadR2Credentials();
+      const uint8 = new Uint8Array(await blob.arrayBuffer());
+      r2Synced = await uploadToR2Direct(creds, fileName, uint8, mimeType || "audio/webm");
+    } catch (r2Err) {
+      console.warn("[AudioUpload] Direct R2 upload warning:", r2Err);
+    }
+
+    // 2. Express server media vault upload (only if backend is present on this origin)
+    try {
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          const resp = await fetch("/api/upload-audio", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              enquiryNo: enquiryNo || "ENQ-PENDING",
+              id: recordingId,
+              audioBase64: base64Data,
+              filename: fileName,
+              mimeType: mimeType || "audio/webm",
+              durationSeconds: sanitizeAudioDuration(durationSeconds, 10),
+              meetingTextSummary: textReport,
+              counsellorId: counsellorId || "COUNSELLOR-01",
+              counsellorName: counsellorName || "Admissions Counsellor",
+              studentName: studentName || "Student Enquiry"
+            })
+          });
+          const ct = (resp.headers.get("content-type") || "").toLowerCase();
+          if (!ct.includes("application/json")) {
+            // Static host (e.g. Vercel SPA) returns HTML/404 — skip retries cleanly
+            break;
+          }
+          const res = await resp.json();
+          if (res?.success && res?.audioUrl) {
+            serverAudioUrl = res.audioUrl;
+            if (res.r2Synced) r2Synced = true;
+            break;
+          }
+        } catch (netErr) {
+          console.warn(`[AudioUpload] Server retry ${attempt}/2:`, netErr);
+          if (attempt < 2) await new Promise(r => setTimeout(r, 800));
+        }
+      }
+    } catch (e) {
+      console.warn("Server audio upload notice:", e);
+    }
+
+    return { r2Synced, serverAudioUrl };
   };
 
   // STOP RECORDING & SAVE AUDIO + TRANSCRIPT
@@ -1527,6 +2213,9 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
 
     setIsProcessing(true);
     isRecordingRef.current = false;
+    isPausedRef.current = false;
+    setLiveEngineStatus("idle");
+    liveEngineStatusRef.current = "idle";
     if (restartTimeoutRef.current) {
       clearTimeout(restartTimeoutRef.current);
       restartTimeoutRef.current = null;
@@ -1535,6 +2224,7 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
     if (watchdogIntervalRef.current) clearInterval(watchdogIntervalRef.current);
     if (recoveryIntervalRef.current) clearInterval(recoveryIntervalRef.current);
     if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    stopGeminiLiveStream();
     stopLiveSpeechRecognition();
     setIsRecording(false);
     setIsPaused(false);
@@ -1542,60 +2232,107 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
     const recorder = mediaRecorderRef.current;
 
     recorder.onstop = async () => {
-      // Clean up stream tracks and audio context now that recording is fully stopped
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-        streamRef.current = null;
-      }
-      if (audioContextRef.current && audioContextRef.current.state !== "closed") {
-        audioContextRef.current.close().catch(() => {});
-        audioContextRef.current = null;
-      }
+      try {
+        // Clean up stream tracks and audio context now that recording is fully stopped
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach(track => track.stop());
+          streamRef.current = null;
+        }
+        if (audioContextRef.current && audioContextRef.current.state !== "closed") {
+          audioContextRef.current.close().catch(() => {});
+          audioContextRef.current = null;
+        }
 
-      const actualMime = recorder.mimeType || "audio/webm";
-      console.log("Audio chunks collected:", audioChunksRef.current.length);
-      const audioBlob = new Blob(audioChunksRef.current, { type: actualMime });
-      console.log("Created audioBlob size:", audioBlob.size, "type:", audioBlob.type);
+        const actualMime = recorder.mimeType || "audio/webm";
+        const audioBlob = new Blob(audioChunksRef.current, { type: actualMime });
 
-      if (audioBlob.size === 0) {
-        setErrorMessage("Warning: Recorded audio blob is empty. Please check microphone permissions or try again.");
-        setIsProcessing(false);
-        return;
-      }
+        if (audioBlob.size === 0) {
+          setErrorMessage("Warning: Recorded audio blob is empty. Please check microphone permissions or try again.");
+          setIsProcessing(false);
+          return;
+        }
 
-      setRecordedBlob(audioBlob);
+        setRecordedBlob(audioBlob);
+        const blobUrl = URL.createObjectURL(audioBlob);
+        setRecordedAudioUrl(blobUrl);
 
-      const blobUrl = URL.createObjectURL(audioBlob);
-      console.log("Created recordedAudioUrl:", blobUrl);
-      setRecordedAudioUrl(blobUrl);
+        let safeDuration = sanitizeAudioDuration(recordingSecondsRef.current || recordingSeconds, 0);
+        if (safeDuration <= 1) {
+          safeDuration = await resolveReliableAudioDuration(audioBlob, blobUrl, 5);
+        }
+        setRecordingSeconds(safeDuration);
+        recordingSecondsRef.current = safeDuration;
 
-      const reader = new FileReader();
-      reader.onloadend = async () => {
-        const base64Data = reader.result as string;
+        const base64Data = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve((reader.result as string) || "");
+          reader.readAsDataURL(audioBlob);
+        });
+
         const now = new Date();
         const recordedTimestamp = `${now.toLocaleDateString()} ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
         const fileName = `${enquiryNo || "ENQ"}_Meeting_${now.toISOString().slice(0, 10)}.webm`;
         const recordingId = fileName;
-        
+
+        // 1. Save immediately into IndexedDB before any network calls
         await saveAudioRecordingBlob(recordingId, audioBlob);
         if (enquiryNo) await saveAudioRecordingBlob(enquiryNo.trim(), audioBlob);
         if (enquiryNo) await saveAudioRecordingBlob(`audio-${enquiryNo.trim()}`, audioBlob);
         if (studentName) await saveAudioRecordingBlob(`audio-${studentName.toLowerCase().replace(/\s+/g, "_")}`, audioBlob);
-        
-        const activeTurns = dialogueTurnsRef.current;
-        const liveTurnsText = activeTurns.length > 0
-          ? activeTurns.map(t => `[${t.timeStr}] • ${t.speaker}: "${t.text}"`).join("\n\n")
+
+        const initialTurns = deduplicateDialogueTurns(dialogueTurnsRef.current);
+        dialogueTurnsRef.current = initialTurns;
+        setDialogueTurns(initialTurns);
+
+        const liveTurnsText = initialTurns.length > 0
+          ? initialTurns.map(t => `[${t.timeStr}] • ${t.speaker}: "${t.text}"`).join("\n\n")
           : "";
 
         let textReport = buildMeetingTextSummary(
-          recordingSecondsRef.current || recordingSeconds || 10, 
-          fileName, 
-          "Hardware Microphone", 
+          safeDuration,
+          fileName,
+          "Hardware Microphone",
           recordedTimestamp,
           liveTurnsText
         );
 
-        // Attempt server-side Gemini audio transcription or structured enhancement
+        const initialNotes = generateMeetingKeyPointsAndNotes(
+          initialTurns,
+          studentName,
+          applyingForClass,
+          counsellorName,
+          safeDuration
+        );
+        setMeetingNotesReport(initialNotes);
+
+        // 2. Immediately attach to enquiry form & clear recovery vault so closing/saving never loses audio!
+        const audioRecord: CounsellingAudioRecord = {
+          id: recordingId,
+          audioData: base64Data,
+          storageKey: recordingId,
+          fileName: fileName,
+          durationSeconds: safeDuration,
+          fileSizeBytes: audioBlob.size,
+          mimeType: actualMime,
+          recordedAt: recordedTimestamp,
+          counsellorId: counsellorId || "COUNSELLOR-01",
+          counsellorName: counsellorName || "Admissions Counsellor",
+          enquiryNo: enquiryNo || "ENQ-PENDING",
+          studentName: studentName || "Student Enquiry",
+          parentLanguage: selectedLanguage,
+          conversationLanguageNotes: initialNotes?.enquiryRecordNotes || conversationNotes,
+          audioSource: "Hardware Microphone",
+          meetingTextSummary: textReport,
+          reviewStatus: "Pending"
+        };
+        if (initialNotes?.enquiryRecordNotes && onUpdateNotes) {
+          onUpdateNotes(initialNotes.enquiryRecordNotes);
+        }
+        onSaveAudio(audioRecord);
+        clearMeetingRecovery().catch(() => {});
+        setRecoveredSession(null);
+
+        // 3. Attempt server-side Gemini audio transcription enhancement
         try {
           const resp = await fetch("/api/transcribe-meeting-audio", {
             method: "POST",
@@ -1611,26 +2348,41 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
               parentLanguage: selectedLanguage
             })
           });
-          const apiRes = await resp.json();
-          if (apiRes && apiRes.success && apiRes.transcript) {
-            textReport = apiRes.transcript;
-            const parsed = parseDialogueTurnsFromSummary(apiRes.transcript);
-            if (parsed && parsed.length > 0) {
-              setDialogueTurns(parsed);
-              dialogueTurnsRef.current = parsed;
+          const ct = (resp.headers.get("content-type") || "").toLowerCase();
+          if (ct.includes("application/json")) {
+            const apiRes = await resp.json();
+            if (apiRes && apiRes.success && apiRes.transcript) {
+              textReport = apiRes.transcript;
+              if (apiRes.engine) setTranscriptionEngineUsed(apiRes.engine);
+              const serverTurns: DialogueTurn[] = Array.isArray(apiRes.turns) && apiRes.turns.length > 0
+                ? deduplicateDialogueTurns(apiRes.turns.map((t: any) => ({
+                    id: Math.random().toString(36).substring(2, 9),
+                    timeSec: sanitizeAudioDuration(t.timeSec, 0),
+                    timeStr: String(t.timeStr || "00:00"),
+                    speaker: String(t.speaker || "Counsellor"),
+                    speakerName: String(t.speakerName || t.speaker || "Counsellor"),
+                    text: String(t.text || "").trim()
+                  })).filter((t: DialogueTurn) => Boolean(t.text)))
+                : parseDialogueTurnsFromSummary(apiRes.transcript);
+
+              if (serverTurns.length > 0) {
+                setDialogueTurns(serverTurns);
+                dialogueTurnsRef.current = serverTurns;
+              }
             }
           }
         } catch (apiErr) {
           console.warn("Server audio transcription fallback:", apiErr);
         }
 
-        const finalActiveTurns = dialogueTurnsRef.current;
+        const finalActiveTurns = deduplicateDialogueTurns(dialogueTurnsRef.current);
+        dialogueTurnsRef.current = finalActiveTurns;
         const genNotes = generateMeetingKeyPointsAndNotes(
           finalActiveTurns,
           studentName,
           applyingForClass,
           counsellorName,
-          recordingSecondsRef.current || recordingSeconds || 10
+          safeDuration
         );
         setMeetingNotesReport(genNotes);
         if (genNotes?.enquiryRecordNotes) {
@@ -1640,63 +2392,35 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
           }
         }
 
-        const audioRecord: CounsellingAudioRecord = {
-          id: recordingId,
-          audioData: base64Data,
-          storageKey: recordingId,
-          fileName: fileName,
-          durationSeconds: recordingSecondsRef.current || recordingSeconds || 10,
-          fileSizeBytes: audioBlob.size,
+        // 4. Upload to Cloudflare R2 + Express Server Vault
+        const { r2Synced, serverAudioUrl } = await syncAudioToCloudAndServer({
+          blob: audioBlob,
+          base64Data,
+          fileName,
+          recordingId,
           mimeType: actualMime,
-          recordedAt: recordedTimestamp,
-          counsellorId: counsellorId || "COUNSELLOR-01",
-          counsellorName: counsellorName || "Admissions Counsellor",
-          enquiryNo: enquiryNo || "ENQ-PENDING",
-          studentName: studentName || "Student Enquiry",
-          parentLanguage: selectedLanguage,
-          conversationLanguageNotes: genNotes?.enquiryRecordNotes || conversationNotes,
-          audioSource: "Hardware Microphone",
+          durationSeconds: safeDuration,
+          textReport
+        });
+
+        const finalRecord: CounsellingAudioRecord & { cloudUploadedThisSession?: boolean; cloudR2Synced?: boolean } = {
+          ...audioRecord,
+          conversationLanguageNotes: genNotes?.enquiryRecordNotes || audioRecord.conversationLanguageNotes,
           meetingTextSummary: textReport,
-          reviewStatus: "Pending"
+          driveFileId: serverAudioUrl ? recordingId : audioRecord.driveFileId,
+          driveFileUrl: serverAudioUrl || audioRecord.driveFileUrl,
+          audioUrl: serverAudioUrl || audioRecord.audioUrl,
+          cloudR2Synced: r2Synced,
+          cloudUploadedThisSession: Boolean(r2Synced || serverAudioUrl)
         };
+        onSaveAudio(finalRecord);
 
-        // Upload to Server Media Vault with auto-retry for resilient network transfers
-        try {
-          for (let attempt = 1; attempt <= 3; attempt++) {
-            try {
-              const res = await fetch("/api/upload-audio", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  enquiryNo: enquiryNo || "ENQ-PENDING",
-                  id: recordingId,
-                  audioBase64: base64Data,
-                  filename: fileName,
-                  mimeType: actualMime,
-                  meetingTextSummary: textReport
-                })
-              }).then(r => r.json());
-
-              if (res?.success && res?.audioUrl) {
-                audioRecord.driveFileUrl = res.audioUrl;
-                audioRecord.driveFileId = recordingId;
-                break;
-              }
-            } catch (netErr) {
-              console.warn(`[AudioUpload] Network retry attempt ${attempt}/3:`, netErr);
-              if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 1000));
-            }
-          }
-        } catch (e) {
-          console.warn("Server audio upload notice:", e);
-        }
-
-        onSaveAudio(audioRecord);
-        clearMeetingRecovery();
-        setRecoveredSession(null);
-        setIsProcessing(false);
-        setSaveSuccessMsg("🎙️ Meeting voice recorded, text converted & auto-synced to Cloud Vault & Google Drive!");
-        setTimeout(() => setSaveSuccessMsg(null), 3500);
+        setSaveSuccessMsg(
+          r2Synced || serverAudioUrl
+            ? "🎙️ Meeting voice recorded, text converted & synced to Cloud R2 & Server!"
+            : "🎙️ Meeting voice recorded & saved locally (Cloud upload pending network)."
+        );
+        setTimeout(() => setSaveSuccessMsg(null), 4000);
 
         // Auto-upload to Google Drive Cloud Vault in background
         uploadFileToDrive({
@@ -1707,10 +2431,10 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
           description: `Counselling meeting audio for enquiry #${enquiryNo} (${studentName}), Counsellor: ${counsellorName}`
         }).then((driveItem) => {
           if (driveItem && (driveItem.id || driveItem.webViewLink)) {
-            const safeDriveUrl = (driveItem.webViewLink && !driveItem.webViewLink.startsWith("blob:")) ? driveItem.webViewLink : audioRecord.driveFileUrl;
+            const safeDriveUrl = (driveItem.webViewLink && !driveItem.webViewLink.startsWith("blob:")) ? driveItem.webViewLink : finalRecord.driveFileUrl;
             const updatedRec: CounsellingAudioRecord = {
-              ...audioRecord,
-              driveFileId: driveItem.id || audioRecord.driveFileId,
+              ...finalRecord,
+              driveFileId: driveItem.id || finalRecord.driveFileId,
               driveFileUrl: safeDriveUrl,
               driveSyncedAt: new Date().toISOString()
             };
@@ -1730,10 +2454,14 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
           }).catch(() => {});
         } catch (_) {}
 
-        // Run deep conversation audit with AI in background to extract real parent questions and counsellor coaching points
+        // Run deep conversation audit with AI in background
         runAiConversationAudit(finalActiveTurns);
-      };
-      reader.readAsDataURL(audioBlob);
+      } catch (stopErr) {
+        console.warn("Stop recording error:", stopErr);
+        setErrorMessage("Could not finalize recording completely. Please check attached audio or retry.");
+      } finally {
+        setIsProcessing(false);
+      }
     };
 
     try {
@@ -1749,136 +2477,191 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
     }
   };
 
-  // Upload external audio (e.g. phone voice memo) + Auto-Generate Text File
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Upload external audio (e.g. phone voice memo or downloaded .webm) + Auto-Generate Text File + Reliable Cloud Sync
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = "";
     if (!file) return;
 
     setIsProcessing(true);
     setErrorMessage(null);
-    const blobUrl = URL.createObjectURL(file);
-    setRecordedAudioUrl(blobUrl);
+    setSaveSuccessMsg(null);
 
-    const tempAudio = new Audio(blobUrl);
-    tempAudio.onloadedmetadata = () => {
-      const durationSec = Math.round(tempAudio.duration || 30);
+    try {
+      const blobUrl = URL.createObjectURL(file);
+      setRecordedBlob(file);
+      setRecordedAudioUrl(blobUrl);
 
-      const reader = new FileReader();
-      reader.onloadend = async () => {
-        const base64Data = reader.result as string;
-        const recordingId = `AUDIO-${enquiryNo || Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-        await saveAudioRecordingBlob(recordingId, file);
+      // Accurately resolve finite duration (never Infinity/NaN for WebM files without EBML header)
+      const durationSec = await resolveReliableAudioDuration(file, blobUrl, 30);
+      setRecordingSeconds(durationSec);
+      recordingSecondsRef.current = durationSec;
 
-        const now = new Date();
-        const recordedTimestamp = `${now.toLocaleDateString()} ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-        
-        const activeTurns = dialogueTurnsRef.current;
-        const formattedTranscript = activeTurns.length > 0
-          ? activeTurns.map(t => `[${t.timeStr}] • ${t.speaker}: "${t.text}"`).join("\n\n")
-          : "";
+      const base64Data = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve((reader.result as string) || "");
+        reader.readAsDataURL(file);
+      });
 
-        let textReport = buildMeetingTextSummary(
-          durationSec, 
-          file.name, 
-          "Phone Audio Upload", 
-          recordedTimestamp,
-          formattedTranscript
-        );
+      const recordingId = `AUDIO-${enquiryNo || Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+      const canonicalFileName = file.name || `${enquiryNo || "ENQ"}_Meeting_${new Date().toISOString().slice(0, 10)}.webm`;
+      await saveAudioRecordingBlob(recordingId, file);
+      await saveAudioRecordingBlob(canonicalFileName, file);
+      if (enquiryNo) await saveAudioRecordingBlob(enquiryNo.trim(), file);
 
-        // Enhance via server transcription
-        try {
-          const resp = await fetch("/api/transcribe-meeting-audio", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              audioBase64: base64Data,
-              mimeType: file.type || "audio/webm",
-              liveSpeechText: formattedTranscript,
-              counsellorName: counsellorName || "Admissions Counsellor",
-              counsellorId: counsellorId || "COUNSELLOR-01",
-              studentName: studentName || "Student Enquiry",
-              applyingForClass: applyingForClass || "N/A",
-              parentLanguage: selectedLanguage
-            })
-          });
+      const now = new Date();
+      const recordedTimestamp = `${now.toLocaleDateString()} ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+
+      const activeTurns = deduplicateDialogueTurns(dialogueTurnsRef.current);
+      const formattedTranscript = activeTurns.length > 0
+        ? activeTurns.map(t => `[${t.timeStr}] • ${t.speaker}: "${t.text}"`).join("\n\n")
+        : "";
+
+      let textReport = buildMeetingTextSummary(
+        durationSec,
+        canonicalFileName,
+        "Phone Audio Upload",
+        recordedTimestamp,
+        formattedTranscript
+      );
+
+      let latestNotes = conversationNotes;
+
+      // Enhance via server transcription (if backend API is available on this origin)
+      try {
+        const resp = await fetch("/api/transcribe-meeting-audio", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            audioBase64: base64Data,
+            mimeType: file.type || "audio/webm",
+            liveSpeechText: formattedTranscript,
+            counsellorName: counsellorName || "Admissions Counsellor",
+            counsellorId: counsellorId || "COUNSELLOR-01",
+            studentName: studentName || "Student Enquiry",
+            applyingForClass: applyingForClass || "N/A",
+            parentLanguage: selectedLanguage
+          })
+        });
+        const ct = (resp.headers.get("content-type") || "").toLowerCase();
+        if (ct.includes("application/json")) {
           const apiRes = await resp.json();
           if (apiRes && apiRes.success && apiRes.transcript) {
             textReport = apiRes.transcript;
-            const parsed = parseDialogueTurnsFromSummary(apiRes.transcript);
-            if (parsed && parsed.length > 0) {
-              setDialogueTurns(parsed);
-              dialogueTurnsRef.current = parsed;
+            if (apiRes.engine) setTranscriptionEngineUsed(apiRes.engine);
+            const serverTurns: DialogueTurn[] = Array.isArray(apiRes.turns) && apiRes.turns.length > 0
+              ? deduplicateDialogueTurns(apiRes.turns.map((t: any) => ({
+                  id: Math.random().toString(36).substring(2, 9),
+                  timeSec: sanitizeAudioDuration(t.timeSec, 0),
+                  timeStr: String(t.timeStr || "00:00"),
+                  speaker: String(t.speaker || "Counsellor"),
+                  speakerName: String(t.speakerName || t.speaker || "Counsellor"),
+                  text: String(t.text || "").trim()
+                })).filter((t: DialogueTurn) => Boolean(t.text)))
+              : parseDialogueTurnsFromSummary(apiRes.transcript);
+
+            if (serverTurns.length > 0) {
+              setDialogueTurns(serverTurns);
+              dialogueTurnsRef.current = serverTurns;
+              const genNotes = generateMeetingKeyPointsAndNotes(
+                serverTurns,
+                studentName,
+                applyingForClass,
+                counsellorName,
+                durationSec
+              );
+              setMeetingNotesReport(genNotes);
+              if (genNotes?.enquiryRecordNotes) {
+                latestNotes = genNotes.enquiryRecordNotes;
+                setConversationNotes(genNotes.enquiryRecordNotes);
+                if (onUpdateNotes) onUpdateNotes(genNotes.enquiryRecordNotes);
+              }
             }
+          } else if (apiRes && apiRes.error) {
+            setErrorMessage(`Transcription notice: ${apiRes.error}`);
           }
-        } catch (apiErr) {
-          console.warn("Upload transcribe notice:", apiErr);
         }
+      } catch (apiErr) {
+        console.warn("Upload transcribe notice:", apiErr);
+      }
 
-        const audioRecord: CounsellingAudioRecord = {
-          id: recordingId,
-          audioData: base64Data,
-          storageKey: recordingId,
-          fileName: file.name,
-          durationSeconds: durationSec,
-          fileSizeBytes: file.size,
-          mimeType: file.type || "audio/webm",
-          recordedAt: recordedTimestamp,
-          counsellorId: counsellorId || "COUNSELLOR-01",
-          counsellorName: counsellorName || "Admissions Counsellor",
-          enquiryNo: enquiryNo || "ENQ-PENDING",
-          studentName: studentName || "Student Enquiry",
-          parentLanguage: selectedLanguage,
-          conversationLanguageNotes: conversationNotes,
-          audioSource: "Phone Audio Upload",
-          meetingTextSummary: textReport,
-          reviewStatus: "Pending"
-        };
-
-        // Upload to server media vault
-        try {
-          fetch("/api/upload-audio", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              enquiryNo: enquiryNo || "ENQ-PENDING",
-              id: recordingId,
-              audioBase64: base64Data,
-              filename: file.name,
-              mimeType: file.type || "audio/webm",
-              meetingTextSummary: textReport
-            })
-          }).then(r => r.json()).then(res => {
-            if (res?.success && res?.audioUrl) {
-              audioRecord.driveFileUrl = res.audioUrl;
-              audioRecord.driveFileId = recordingId;
-              onSaveAudio({ ...audioRecord });
-            }
-          }).catch(() => {});
-        } catch (_) {}
-
-        // Auto-upload to Google Drive Cloud Vault in background
-        uploadFileToDrive({
-          name: file.name,
-          mimeType: file.type || "audio/webm",
-          dataBlob: file,
-          folderType: "Counselling Voice Vault",
-          description: `Counselling meeting audio upload for enquiry #${enquiryNo} (${studentName})`
-        }).then((driveItem) => {
-          if (driveItem && (driveItem.id || driveItem.webViewLink)) {
-            audioRecord.driveFileId = driveItem.id || audioRecord.driveFileId;
-            audioRecord.driveFileUrl = driveItem.webViewLink || driveItem.webContentLink || audioRecord.driveFileUrl;
-            audioRecord.driveSyncedAt = new Date().toISOString();
-            onSaveAudio({ ...audioRecord });
-          }
-        }).catch(() => {});
-
-        onSaveAudio(audioRecord);
-        setIsProcessing(false);
-        setSaveSuccessMsg("📱 Phone voice recording attached, transcribed & synced to Cloud Vault & Google Drive!");
-        setTimeout(() => setSaveSuccessMsg(null), 3500);
+      const audioRecord: CounsellingAudioRecord & { cloudUploadedThisSession?: boolean; cloudR2Synced?: boolean } = {
+        id: recordingId,
+        audioData: base64Data,
+        storageKey: recordingId,
+        fileName: canonicalFileName,
+        durationSeconds: durationSec,
+        fileSizeBytes: file.size,
+        mimeType: file.type || "audio/webm",
+        recordedAt: recordedTimestamp,
+        counsellorId: counsellorId || "COUNSELLOR-01",
+        counsellorName: counsellorName || "Admissions Counsellor",
+        enquiryNo: enquiryNo || "ENQ-PENDING",
+        studentName: studentName || "Student Enquiry",
+        parentLanguage: selectedLanguage,
+        conversationLanguageNotes: latestNotes,
+        audioSource: "Phone Audio Upload",
+        meetingTextSummary: textReport,
+        reviewStatus: "Pending"
       };
-      reader.readAsDataURL(file);
-    };
+
+      // Attach locally immediately
+      onSaveAudio(audioRecord);
+      clearMeetingRecovery().catch(() => {});
+      setRecoveredSession(null);
+
+      // Await Cloud R2 + Express server upload BEFORE clearing processing spinner so closing tab never aborts upload!
+      const { r2Synced, serverAudioUrl } = await syncAudioToCloudAndServer({
+        blob: file,
+        base64Data,
+        fileName: canonicalFileName,
+        recordingId,
+        mimeType: file.type || "audio/webm",
+        durationSeconds: durationSec,
+        textReport
+      });
+
+      const finalRecord: CounsellingAudioRecord & { cloudUploadedThisSession?: boolean; cloudR2Synced?: boolean } = {
+        ...audioRecord,
+        driveFileId: serverAudioUrl ? recordingId : audioRecord.driveFileId,
+        driveFileUrl: serverAudioUrl || audioRecord.driveFileUrl,
+        audioUrl: serverAudioUrl || audioRecord.audioUrl,
+        cloudR2Synced: r2Synced,
+        cloudUploadedThisSession: Boolean(r2Synced || serverAudioUrl)
+      };
+      onSaveAudio(finalRecord);
+
+      // Auto-upload to Google Drive Cloud Vault in background
+      uploadFileToDrive({
+        name: canonicalFileName,
+        mimeType: file.type || "audio/webm",
+        dataBlob: file,
+        folderType: "Counselling Voice Vault",
+        description: `Counselling meeting audio upload for enquiry #${enquiryNo} (${studentName})`
+      }).then((driveItem) => {
+        if (driveItem && (driveItem.id || driveItem.webViewLink)) {
+          const updatedDrive: CounsellingAudioRecord = {
+            ...finalRecord,
+            driveFileId: driveItem.id || finalRecord.driveFileId,
+            driveFileUrl: driveItem.webViewLink || driveItem.webContentLink || finalRecord.driveFileUrl,
+            driveSyncedAt: new Date().toISOString()
+          };
+          onSaveAudio(updatedDrive);
+        }
+      }).catch(() => {});
+
+      setSaveSuccessMsg(
+        r2Synced || serverAudioUrl
+          ? `📱 Voice file (${formatAudioDuration(durationSec)}) uploaded & synced to Cloud R2 & Server!`
+          : `📱 Voice file (${formatAudioDuration(durationSec)}) attached locally — Cloud R2 upload failed, check internet.`
+      );
+      setTimeout(() => setSaveSuccessMsg(null), 4000);
+    } catch (uploadErr) {
+      console.warn("Audio file upload error:", uploadErr);
+      setErrorMessage("Failed to process selected audio file. Please check file format and retry.");
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   // Re-transcribe audio with server AI
@@ -1886,26 +2669,42 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
     if (isProcessing) return;
     setIsProcessing(true);
     setSaveSuccessMsg(null);
+    setErrorMessage(null);
     try {
-      let base64Data = "";
-      if (recordedBlob) {
-        base64Data = await new Promise<string>((resolve) => {
+      const blobToBase64 = (b: Blob) =>
+        new Promise<string>((resolve) => {
           const reader = new FileReader();
           reader.onloadend = () => resolve(reader.result as string);
-          reader.readAsDataURL(recordedBlob);
+          reader.readAsDataURL(b);
         });
+
+      let base64Data = "";
+      if (recordedBlob) {
+        base64Data = await blobToBase64(recordedBlob);
       } else if (recordedAudioUrl && recordedAudioUrl.startsWith("data:")) {
         base64Data = recordedAudioUrl;
-      } else if (existingAudio?.id) {
-        const stored = await getAudioRecordingBlob(existingAudio.id);
+      } else if (existingAudio?.id || existingAudio?.storageKey) {
+        const stored = await getAudioRecordingBlob(existingAudio.storageKey || existingAudio.id!);
         if (stored instanceof Blob) {
-          base64Data = await new Promise<string>((resolve) => {
-            const reader = new FileReader();
-            reader.onloadend = () => resolve(reader.result as string);
-            reader.readAsDataURL(stored);
-          });
-        } else if (typeof stored === "string") {
+          base64Data = await blobToBase64(stored);
+        } else if (typeof stored === "string" && stored.startsWith("data:")) {
           base64Data = stored;
+        }
+      }
+
+      // Cross-device fallback: fetch audio directly from cloud/server URL if not cached locally
+      if (!base64Data) {
+        const remoteUrl = existingAudio?.audioUrl || existingAudio?.driveFileUrl;
+        if (remoteUrl && !remoteUrl.startsWith("blob:")) {
+          try {
+            const audioResp = await fetch(remoteUrl);
+            if (audioResp.ok) {
+              const fetchedBlob = await audioResp.blob();
+              if (fetchedBlob.size > 0) {
+                base64Data = await blobToBase64(fetchedBlob);
+              }
+            }
+          } catch {}
         }
       }
 
@@ -1913,6 +2712,12 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
       const liveTurnsText = activeTurns.length > 0
         ? activeTurns.map(t => `[${t.timeStr}] • ${t.speaker}: "${t.text}"`).join("\n\n")
         : "";
+
+      if (!base64Data && !liveTurnsText) {
+        setErrorMessage("No audio file found locally or on server to re-transcribe.");
+        setIsProcessing(false);
+        return;
+      }
 
       const resp = await fetch("/api/transcribe-meeting-audio", {
         method: "POST",
@@ -1929,12 +2734,40 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
         })
       });
 
+      if (!resp.ok) {
+        setErrorMessage(`Server transcription unavailable (HTTP ${resp.status}). Please try again on the connected server.`);
+        return;
+      }
+
       const resData = await resp.json();
       if (resData && resData.success && resData.transcript) {
-        const parsed = parseDialogueTurnsFromSummary(resData.transcript);
-        if (parsed.length > 0) {
-          setDialogueTurns(parsed);
-          dialogueTurnsRef.current = parsed;
+        if (resData.engine) setTranscriptionEngineUsed(resData.engine);
+        const serverTurns: DialogueTurn[] = Array.isArray(resData.turns) && resData.turns.length > 0
+          ? resData.turns.map((t: any) => ({
+              id: Math.random().toString(36).substring(2, 9),
+              timeSec: Number(t.timeSec || 0),
+              timeStr: String(t.timeStr || "00:00"),
+              speaker: String(t.speaker || "Counsellor"),
+              speakerName: String(t.speakerName || t.speaker || "Counsellor"),
+              text: String(t.text || "").trim()
+            })).filter((t: DialogueTurn) => Boolean(t.text))
+          : parseDialogueTurnsFromSummary(resData.transcript);
+
+        if (serverTurns.length > 0) {
+          setDialogueTurns(serverTurns);
+          dialogueTurnsRef.current = serverTurns;
+          const genNotes = generateMeetingKeyPointsAndNotes(
+            serverTurns,
+            studentName,
+            applyingForClass,
+            counsellorName,
+            existingAudio?.durationSeconds || recordingSeconds || 10
+          );
+          setMeetingNotesReport(genNotes);
+          if (genNotes?.enquiryRecordNotes) {
+            setConversationNotes(genNotes.enquiryRecordNotes);
+            if (onUpdateNotes) onUpdateNotes(genNotes.enquiryRecordNotes);
+          }
         }
         if (existingAudio) {
           const updatedRecord: CounsellingAudioRecord = { 
@@ -1945,9 +2778,12 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
         }
         setSaveSuccessMsg("✨ Audio transcript re-processed & updated!");
         setTimeout(() => setSaveSuccessMsg(null), 3500);
+      } else if (resData?.error) {
+        setErrorMessage(`Transcription error: ${resData.error}`);
       }
     } catch (err: any) {
       console.warn("Re-transcribe notice:", err);
+      setErrorMessage("Could not connect to AI transcription server. Check network or try again.");
     } finally {
       setIsProcessing(false);
     }
@@ -2350,27 +3186,129 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
     setTimeout(() => setSaveSuccessMsg(null), 3000);
   };
 
-  // Restore interrupted session preserved in IndexedDB
-  const handleRestoreRecoveredSession = (session: RecoveredMeetingSession) => {
+  // Restore interrupted session preserved in IndexedDB, immediately attach & sync to Cloud R2 + Server
+  const handleRestoreRecoveredSession = async (session: RecoveredMeetingSession) => {
+    setIsProcessing(true);
+    setErrorMessage(null);
     try {
       const url = URL.createObjectURL(session.audioBlob);
       setRecordedBlob(session.audioBlob);
       setRecordedAudioUrl(url);
       audioChunksRef.current = [session.audioBlob];
-      setRecordingSeconds(session.durationSeconds);
-      recordingSecondsRef.current = session.durationSeconds;
+
+      const resolvedDuration = await resolveReliableAudioDuration(
+        session.audioBlob,
+        url,
+        sanitizeAudioDuration(session.durationSeconds, 30)
+      );
+      setRecordingSeconds(resolvedDuration);
+      recordingSecondsRef.current = resolvedDuration;
+
+      let parsedTurns = dialogueTurnsRef.current;
       if (session.liveSpeechTranscript) {
         const parsed = parseDialogueTurnsFromSummary(session.liveSpeechTranscript);
         if (parsed.length > 0) {
+          parsedTurns = parsed;
           setDialogueTurns(parsed);
           dialogueTurnsRef.current = parsed;
         }
       }
+
+      const now = new Date();
+      const recordedTimestamp = `${now.toLocaleDateString()} ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+      const targetEnqNo = enquiryNo || session.enquiryNo || "ENQ-PENDING";
+      const fileName = `${targetEnqNo}_Meeting_${now.toISOString().slice(0, 10)}.webm`;
+      const recordingId = fileName;
+
+      await saveAudioRecordingBlob(recordingId, session.audioBlob);
+      if (targetEnqNo) await saveAudioRecordingBlob(targetEnqNo.trim(), session.audioBlob);
+
+      const base64Data = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve((reader.result as string) || "");
+        reader.readAsDataURL(session.audioBlob);
+      });
+
+      const liveTurnsText = parsedTurns.length > 0
+        ? parsedTurns.map(t => `[${t.timeStr}] • ${t.speaker}: "${t.text}"`).join("\n\n")
+        : "";
+
+      const textReport = buildMeetingTextSummary(
+        resolvedDuration,
+        fileName,
+        "Recovered Live Session",
+        recordedTimestamp,
+        liveTurnsText
+      );
+
+      const genNotes = generateMeetingKeyPointsAndNotes(
+        parsedTurns,
+        studentName || session.studentName,
+        applyingForClass,
+        counsellorName || session.counsellorName,
+        resolvedDuration
+      );
+      setMeetingNotesReport(genNotes);
+      if (genNotes?.enquiryRecordNotes && onUpdateNotes) {
+        onUpdateNotes(genNotes.enquiryRecordNotes);
+      }
+
+      const restoredRecord: CounsellingAudioRecord & { cloudUploadedThisSession?: boolean; cloudR2Synced?: boolean } = {
+        id: recordingId,
+        audioData: base64Data,
+        storageKey: recordingId,
+        fileName,
+        durationSeconds: resolvedDuration,
+        fileSizeBytes: session.audioBlob.size,
+        mimeType: session.mimeType || "audio/webm",
+        recordedAt: recordedTimestamp,
+        counsellorId: counsellorId || "COUNSELLOR-01",
+        counsellorName: counsellorName || session.counsellorName || "Admissions Counsellor",
+        enquiryNo: targetEnqNo,
+        studentName: studentName || session.studentName || "Student Enquiry",
+        parentLanguage: selectedLanguage,
+        conversationLanguageNotes: genNotes?.enquiryRecordNotes || conversationNotes,
+        audioSource: "Hardware Microphone",
+        meetingTextSummary: textReport,
+        reviewStatus: "Pending"
+      };
+
+      // Attach immediately and clear recovery snapshot
+      onSaveAudio(restoredRecord);
+      await clearMeetingRecovery(session.recoveryKey);
       setRecoveredSession(null);
-      setSaveSuccessMsg("🎙️ Previous interrupted session successfully restored! You can now review, translate, or save it.");
+
+      // Upload restored recording to Cloud R2 & Server Vault
+      const { r2Synced, serverAudioUrl } = await syncAudioToCloudAndServer({
+        blob: session.audioBlob,
+        base64Data,
+        fileName,
+        recordingId,
+        mimeType: session.mimeType || "audio/webm",
+        durationSeconds: resolvedDuration,
+        textReport
+      });
+
+      onSaveAudio({
+        ...restoredRecord,
+        driveFileId: serverAudioUrl ? recordingId : restoredRecord.driveFileId,
+        driveFileUrl: serverAudioUrl || restoredRecord.driveFileUrl,
+        audioUrl: serverAudioUrl || restoredRecord.audioUrl,
+        cloudR2Synced: r2Synced,
+        cloudUploadedThisSession: Boolean(r2Synced || serverAudioUrl)
+      } as any);
+
+      setSaveSuccessMsg(
+        r2Synced || serverAudioUrl
+          ? `🎙️ Interrupted meeting (${formatAudioDuration(resolvedDuration)}) restored & synced to Cloud R2!`
+          : `🎙️ Interrupted meeting (${formatAudioDuration(resolvedDuration)}) restored & attached to form!`
+      );
       setTimeout(() => setSaveSuccessMsg(null), 4000);
     } catch (e) {
       console.warn("Failed to restore session:", e);
+      setErrorMessage("Could not restore interrupted session. Please retry or download it.");
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -2691,10 +3629,11 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
               )}
 
               <button
+                id="audio-recorder-stop-btn"
                 type="button"
                 onClick={stopRecording}
                 disabled={isProcessing}
-                className="px-5 py-2.5 bg-gradient-to-r from-red-600 to-indigo-700 hover:from-red-700 hover:to-indigo-800 text-white rounded-xl text-xs font-black transition-all shadow-lg flex items-center gap-2 cursor-pointer active:scale-95"
+                className="px-5 py-2.5 bg-gradient-to-r from-red-600 to-indigo-700 hover:from-red-700 hover:to-indigo-800 text-white rounded-xl text-xs font-black transition-all shadow-lg flex items-center gap-2 cursor-pointer active:scale-95 ring-2 ring-red-400/60"
               >
                 <Square size={14} className="fill-current" />
                 <span>{isProcessing ? "Processing..." : "Stop Recording"}</span>
@@ -2710,15 +3649,29 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
               <div>
                 <div className="flex items-center gap-2">
                   <span className="w-3 h-3 rounded-full bg-red-600 animate-ping"></span>
-                  <h4 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-1.5">
+                  <h4 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-1.5 flex-wrap">
                     <span>🔴 REAL-TIME SPEECH-TO-TEXT CONVERSION</span>
-                    <span className="px-2 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 text-[10px] font-bold">
-                      Live Teleprompter
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                      liveEngineStatus === "gemini_live" || liveEngineStatus === "gemini_chunked_live"
+                        ? "bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300"
+                        : liveEngineStatus === "connecting"
+                          ? "bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300"
+                          : "bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300"
+                    }`}>
+                      {liveEngineStatus === "gemini_live" || liveEngineStatus === "gemini_chunked_live"
+                        ? "✨ Gemini Live AI (Telugu / Hindi / English)"
+                        : liveEngineStatus === "connecting"
+                          ? "🔄 Connecting Live AI..."
+                          : "🎙️ Live Browser + AI Sync"}
                     </span>
                   </h4>
                 </div>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                  Speaking voice converts to text continuously at the bottom. 100% free with unlimited duration up to 1 Hour 50 Minutes.
+                  {liveEngineStatus === "gemini_live"
+                    ? "Streaming 16kHz PCM audio to Gemini Live AI with automatic Telugu, Hindi & English recognition."
+                    : liveEngineStatus === "gemini_chunked_live"
+                      ? "Streaming 16kHz audio to Gemini AI every ~7s with Telugu, Hindi & English recognition (refined upon stop)."
+                      : "Speaking voice converts to text continuously and is refined by Gemini AI upon stopping."}
                 </p>
               </div>
 
@@ -2802,7 +3755,9 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
                     </span>
                   ) : (
                     <span className="text-slate-400 dark:text-slate-500 text-xs italic font-normal">
-                      Listening to microphone... Speak clearly. Spoken words will convert to text here automatically.
+                      {liveEngineStatus === "gemini_chunked_live"
+                        ? "Listening via Gemini AI (16kHz)... Spoken Telugu, Hindi & English converts to text automatically every ~7s."
+                        : "Listening to microphone... Speak clearly. Spoken words will convert to text here automatically."}
                     </span>
                   )}
                 </div>
@@ -2943,13 +3898,19 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
                 <button
                   type="button"
                   onClick={() => {
-                    startLiveSpeechRecognition();
+                    if (liveEngineStatusRef.current === "gemini_chunked_live") {
+                      flushPcmChunkToServer();
+                    } else if (liveEngineStatusRef.current === "browser_fallback") {
+                      startLiveSpeechRecognition();
+                    } else if (streamRef.current) {
+                      startGeminiLiveStream(streamRef.current);
+                    }
                   }}
                   className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs active:scale-95"
-                  title="Reconnect speech recognition engine"
+                  title={liveEngineStatus === "gemini_chunked_live" ? "Convert buffered speech chunk now" : "Reconnect speech recognition engine"}
                 >
                   <RefreshCw size={13} />
-                  <span>Restart Engine</span>
+                  <span>{liveEngineStatus === "gemini_chunked_live" ? "Convert Chunk Now" : "Restart Engine"}</span>
                 </button>
               </div>
 
@@ -3100,6 +4061,21 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
                 <span className="px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 text-[9px] font-bold">
                   {dialogueTurns.length} Spoken Turns • {totalWordsCaptured} Words
                 </span>
+                {transcriptionEngineUsed && (
+                  <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${
+                    transcriptionEngineUsed.includes("gemini")
+                      ? "bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300"
+                      : "bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300"
+                  }`}>
+                    {transcriptionEngineUsed === "gemini-3.5-transcribe"
+                      ? "✨ Gemini 3.5 AI Audio"
+                      : transcriptionEngineUsed === "gemini-4-hydrogen-polish"
+                        ? "✨ Gemini AI Polished"
+                        : transcriptionEngineUsed.includes("gemini")
+                          ? "✨ Gemini AI Audio"
+                          : "🎙️ Live Capture"}
+                  </span>
+                )}
               </div>
 
               {/* View Switcher: Full Continuous Text (Default) vs Speaker Turns */}

@@ -5,7 +5,8 @@ import net from "net";
 import { exec } from "child_process";
 import { MongoClient, Db } from "mongodb";
 import dotenv from "dotenv";
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Modality, Type } from "@google/genai";
+import { WebSocketServer, WebSocket } from "ws";
 import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
@@ -101,7 +102,13 @@ async function callGeminiWithRetry(options: any, maxRetries = 3): Promise<any> {
     };
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        return await ai.models.generateContent(currentOptions);
+        const res = await ai.models.generateContent(currentOptions);
+        try {
+          if (res && typeof res === "object") {
+            (res as any).__modelUsed = targetModel;
+          }
+        } catch {}
+        return res;
       } catch (err: any) {
         lastError = err;
         const msg = err instanceof Error ? err.message : String(err);
@@ -465,6 +472,67 @@ const app = express();
     }
   });
 
+  const parseServerTranscriptTurns = (
+    rawText: string,
+    defaultCounsellorName = "Counsellor"
+  ): Array<{ timeSec: number; timeStr: string; speaker: string; speakerName: string; text: string }> => {
+    if (!rawText || !rawText.trim()) return [];
+    const lines = rawText.split(/\r?\n/);
+    const turns: Array<{ timeSec: number; timeStr: string; speaker: string; speakerName: string; text: string }> = [];
+
+    const pad2 = (n: number) => String(Math.max(0, Math.floor(n))).padStart(2, "0");
+    const parseSec = (ts: string) => {
+      const parts = ts.split(":").map((p) => parseInt(p, 10) || 0);
+      if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+      if (parts.length === 2) return parts[0] * 60 + parts[1];
+      return 0;
+    };
+
+    const isPlaceholder = (txt: string) =>
+      /audio recording captured\.?\s*please speak clearly|microphone voice audio recording captured/i.test(txt);
+
+    // Format 1: [00:02] • Counsellor: "..." or 0:02 **Parent**: text
+    const tsSpeakerRegex = /^[-•*]?\s*\[?(\d{1,2}:\d{2}(?::\d{2})?)\]?\s*(?:•|-|\||—)?\s*\*{0,2}([^:\n]{1,45}?)\*{0,2}:\s*(.+)$/;
+    // Format 2: **Counsellor**: "..." or Parent: "..."
+    const speakerOnlyRegex = /^[-•*]?\s*\*{0,2}(Counsellor|Counselor|Parent|Father|Mother|Guardian|Staff|Speaker\s*\d|[^:\n]{2,30})\*{0,2}:\s*(.+)$/i;
+
+    for (const rawLine of lines) {
+      const trimmed = rawLine.trim();
+      if (!trimmed || /^[=\-]{4,}$/.test(trimmed)) continue;
+      if (/^(VERBATIM SPOKEN DIALOGUE TRANSCRIPT|BIRLA OPEN MINDS|GEMINI AI VOICE)/i.test(trimmed)) continue;
+
+      const m1 = trimmed.match(tsSpeakerRegex);
+      if (m1) {
+        const rawTs = m1[1];
+        const speaker = m1[2].replace(/\*/g, "").trim() || defaultCounsellorName;
+        const text = m1[3].replace(/^["“]+|["”]+$/g, "").trim();
+        if (text && !isPlaceholder(text)) {
+          const sec = parseSec(rawTs);
+          const normTs = `${pad2(Math.floor(sec / 60))}:${pad2(sec % 60)}`;
+          turns.push({ timeSec: sec, timeStr: normTs, speaker, speakerName: speaker, text });
+        }
+        continue;
+      }
+
+      const m2 = trimmed.match(speakerOnlyRegex);
+      if (m2) {
+        const speaker = m2[1].replace(/\*/g, "").trim();
+        // Skip report metadata headers
+        if (/^(Generated Date|Enquiry Reference|Student Full|Applying For|Admissions Counsellor|Primary Spoken|Voice Transcribe|Father's Name|Mother's Name|Primary Contact|Admission Status|Scheduled Follow|Parent Primary|Key Discussion|Audio Recording|Meeting Duration|Audio Capture|Audio Format|Storage Engine|Executive Audit|Verification State|Transcribe Accuracy)/i.test(speaker)) {
+          continue;
+        }
+        const text = m2[2].replace(/^["“]+|["”]+$/g, "").trim();
+        if (text && !isPlaceholder(text)) {
+          const sec = turns.length * 5;
+          const normTs = `${pad2(Math.floor(sec / 60))}:${pad2(sec % 60)}`;
+          turns.push({ timeSec: sec, timeStr: normTs, speaker, speakerName: speaker, text });
+        }
+      }
+    }
+
+    return turns;
+  };
+
   // API Route: Multilingual Parent Meeting Speech-to-Text Transcription (Gemini API Integration)
   app.post(["/api/transcribe-audio", "/api/transcribe-meeting-audio"], async (req, res) => {
     try {
@@ -485,8 +553,9 @@ const app = express();
       }
 
       let generatedTranscript = "";
+      let structuredTurns: Array<{ timeSec: number; timeStr: string; speaker: string; speakerName: string; text: string }> = [];
+      let usedEngine = "live-fallback";
 
-      // If audio base64 is available, under 18MB (Gemini inlineData limit is 20MB), and GEMINI_API_KEY is configured, transcribe with Gemini multimodal audio
       // If audio base64 is available, under 18MB (Gemini inlineData limit is 20MB), and GEMINI_API_KEY is configured, transcribe with Gemini multimodal audio
       const hasValidGeminiKey = Boolean(getGeminiKey());
       let geminiServiceActive = hasValidGeminiKey;
@@ -494,36 +563,35 @@ const app = express();
 
       if (cleanBase64 && geminiServiceActive && isUnderGeminiInlineLimit) {
         try {
-          const ai = getGemini();
           console.log(`🎙️ Transcribing parent meeting audio with Gemini model (gemini-3.5-transcribe)... Languages: Telugu, Hindi, English`);
 
-          const promptText = `You are an expert bilingual/trilingual speech-to-text transcription engine and acoustic speaker diarization system for Birla Open Minds International School.
+          const promptText = `You are a highly accurate multilingual admissions speech-to-text transcription and speaker diarization engine for Birla Open Minds International School.
 Admissions Counsellor: ${counsellorName}
 Student Reference: ${studentName} (Class: ${applyingForClass})
 Parent Spoken Language Context: ${parentLanguage || "Telugu, Hindi & English Code-Mixing"}
-${liveSpeechText ? `Live Verbatim Spoken Turn Reference (captured during meeting):\n${liveSpeechText}\n` : ""}
+${liveSpeechText ? `Live Reference Notes (verify strictly against actual audio):\n${liveSpeechText}\n` : ""}
 
-CRITICAL RULES:
-1. Listen carefully to the attached original audio recording.
-2. TRILINGUAL CODE-MIXING SUPPORT (Telugu + Hindi + English):
-   - The speakers in this admissions meeting frequently code-mix Telugu, Hindi, and English (e.g. Tenglish, Hinglish).
-   - Accurately understand all Telugu words (e.g., "kavali", "fees entha", "syllabus enti", "bus route unda", "ma abbayi", "sare andi"), Hindi words, and English academic words.
-   - Accurately translate and express spoken dialogue into clean, fluent, standard professional English verbatim script so school administrators can read every point clearly.
-3. AUTOMATIC HANDS-FREE SPEAKER DIARIZATION:
-   - Identify the distinct voices in the recording based on pitch, tone, acoustic distance, and conversational roles.
-   - Automatically label each turn as either:
-     [Timestamp] • Counsellor: "<exact words spoken>"
-     [Timestamp] • Parent: "<exact words spoken>"
+CRITICAL INSTRUCTIONS:
+1. Listen carefully to EVERY second of the attached audio recording from start to finish.
+2. TRILINGUAL & TENGLISH ACCURACY (Telugu + Hindi + English):
+   - Speakers naturally mix Telugu, Hindi, and English (e.g., "fees entha padutundi", "bus route unda", "ma abbayi 5th class", "CBSE syllabus ah", "discount emaina untunda", "repu vachi matladatam").
+   - Understand every Telugu, Hindi, and English word accurately.
+   - Write each spoken turn in clean, natural, easy-to-read English so administrators understand every point (and preserve key Telugu/Hindi phrases or names accurately in parentheses where helpful).
+3. SPEAKER DIARIZATION & TIMESTAMPS:
+   - Distinguish the Counsellor and the Parent by voice/tone and role.
+   - Output EVERY spoken turn on its own line in this EXACT format:
+     [MM:SS] • Counsellor: "<exact words spoken>"
+     [MM:SS] • Parent: "<exact words spoken>"
 4. STRICT TRUTHFULNESS:
-   - Transcribe ONLY the actual spoken words in this audio. Do NOT invent, hallucinate, or insert placeholder text.
-   - If audio contains background noise without clear words, state:
+   - Transcribe ONLY what is actually spoken in the audio. NEVER invent or hallucinate dialogue.
+   - Only if the entire recording is pure silence or unintelligible static with zero spoken words, output:
      [Audio recording captured. Please speak clearly into the microphone.]
 
-Format your output as:
+Output format:
 ================================================================================
 VERBATIM SPOKEN DIALOGUE TRANSCRIPT:
 ================================================================================
-<Transcribe actual spoken turns here>`;
+[00:00] • Counsellor: "..."`;
 
           const response = await callGeminiWithRetry({
             model: "gemini-3.5-transcribe",
@@ -543,12 +611,68 @@ VERBATIM SPOKEN DIALOGUE TRANSCRIPT:
                 ],
               },
             ],
-            config: {
-              temperature: 0.1,
-            },
           });
 
-          generatedTranscript = response.text || "";
+          const rawText = (response?.text || "").trim();
+          if (rawText) {
+            const looksLikeEmptyPlaceholder = /audio recording captured\.?\s*please speak clearly/i.test(rawText);
+            if (looksLikeEmptyPlaceholder) {
+              generatedTranscript = "";
+              structuredTurns = [];
+            } else {
+              generatedTranscript = rawText;
+              usedEngine = (response as any)?.__modelUsed || "gemini-3.5-transcribe";
+              structuredTurns = parseServerTranscriptTurns(rawText, counsellorName);
+            }
+
+            // If Gemini returned valid speech prose without [MM:SS] • Speaker formatting, structure it cleanly via gemini-4-hydrogen
+            if (generatedTranscript && structuredTurns.length === 0 && !looksLikeEmptyPlaceholder) {
+              try {
+                const ai = getGemini();
+                const structResp = await ai.models.generateContent({
+                  model: "gemini-4-hydrogen",
+                  contents: `Convert this exact verbatim audio transcript into structured speaker turns without adding or inventing any words:\n\n${rawText}`,
+                  config: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          timeStr: { type: Type.STRING, description: "MM:SS timestamp like 00:05" },
+                          speaker: { type: Type.STRING, description: "Counsellor or Parent" },
+                          text: { type: Type.STRING, description: "Exact spoken sentence translated clearly into readable English/Tenglish" },
+                        },
+                        required: ["timeStr", "speaker", "text"],
+                      },
+                    },
+                  },
+                });
+                const jsonArr = JSON.parse((structResp.text || "[]").trim());
+                if (Array.isArray(jsonArr) && jsonArr.length > 0) {
+                  structuredTurns = jsonArr
+                    .filter((t: any) => t && t.text && String(t.text).trim())
+                    .map((t: any, idx: number) => {
+                      const ts = String(t.timeStr || "").trim() || `00:${String(idx * 5).padStart(2, "0")}`;
+                      const parts = ts.split(":").map((x) => parseInt(x, 10) || 0);
+                      const sec = parts.length === 2 ? parts[0] * 60 + parts[1] : idx * 5;
+                      const spk = String(t.speaker || "Counsellor").trim();
+                      return {
+                        timeSec: sec,
+                        timeStr: ts,
+                        speaker: spk,
+                        speakerName: spk,
+                        text: String(t.text).trim(),
+                      };
+                    });
+                  if (structuredTurns.length > 0) {
+                    generatedTranscript = `================================================================================\nVERBATIM SPOKEN DIALOGUE TRANSCRIPT:\n================================================================================\n` +
+                      structuredTurns.map(t => `[${t.timeStr}] • ${t.speaker}: "${t.text}"`).join("\n\n");
+                  }
+                }
+              } catch {}
+            }
+          }
         } catch (geminiErr: any) {
           const errMsg = geminiErr?.message || String(geminiErr || "");
           const isDenied =
@@ -563,11 +687,11 @@ VERBATIM SPOKEN DIALOGUE TRANSCRIPT:
           if (isDenied) {
             geminiServiceActive = false;
           }
-          console.info("Info: Multimodal audio transcription defaulting to real-time speech capture:", isDenied ? "Gemini API unavailable" : errMsg.slice(0, 100));
+          console.info("Info: Multimodal audio transcription defaulting to real-time speech capture:", isDenied ? "Gemini API unavailable" : errMsg.slice(0, 120));
         }
       }
 
-      // If audio was too large (>18MB / 1-2 hours) or multimodal wasn't used, but liveSpeechText exists and Gemini service is available:
+      // If audio was too large (>18MB) or multimodal wasn't used, but liveSpeechText exists and Gemini service is available:
       if (!generatedTranscript.trim() && liveSpeechText && liveSpeechText.trim() && geminiServiceActive) {
         try {
           console.log(`🎙️ Polishing live speech transcript with Gemini 4 Hydrogen...`);
@@ -588,25 +712,23 @@ Below is the verbatim spoken dialogue captured in real-time during this counsell
 ${liveSpeechText}
 ---
 
-Format the output strictly as:
+Clean up obvious speech-to-text typos while strictly preserving every spoken fact and meaning (convert Telugu/Hindi words into clear readable English while retaining exact intent). Format strictly as:
 ================================================================================
 VERBATIM SPOKEN DIALOGUE TRANSCRIPT:
 ================================================================================
-Preserve all original dialogue turns and timestamps. Accurately retain Telugu/Hindi phrases and English translations. Format each speaker turn clearly:
-[Timestamp] • Counsellor: "<spoken text>"
-[Timestamp] • Parent: "<spoken text>"`
+[MM:SS] • Counsellor: "<spoken text>"
+[MM:SS] • Parent: "<spoken text>"`
                   }
                 ]
               }
-            ],
-            config: {
-              temperature: 0.1
-            }
+            ]
           });
           if (polishResponse && polishResponse.text) {
             generatedTranscript = polishResponse.text;
+            usedEngine = "gemini-4-hydrogen-polish";
+            structuredTurns = parseServerTranscriptTurns(generatedTranscript, counsellorName);
           }
-        } catch (polishErr: any) {
+        } catch {
           console.info("Info: Live speech transcript preserved in verbatim format.");
         }
       }
@@ -618,6 +740,7 @@ Preserve all original dialogue turns and timestamps. Accurately retain Telugu/Hi
         const recordedTimestamp = `${now.toLocaleDateString()} ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
 
         if (liveLines) {
+          structuredTurns = parseServerTranscriptTurns(liveLines, counsellorName);
           generatedTranscript = `================================================================================
 BIRLA OPEN MINDS INTERNATIONAL SCHOOL
 GEMINI AI VOICE CONVERSATION TRANSCRIPT REPORT
@@ -676,10 +799,99 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
         }
       }
 
-      return res.json({ success: true, transcript: generatedTranscript });
+      return res.json({
+        success: true,
+        transcript: generatedTranscript,
+        turns: structuredTurns,
+        engine: usedEngine,
+      });
     } catch (err: any) {
       console.error("Transcribe API error:", err);
       return res.status(500).json({ success: false, error: err?.message });
+    }
+  });
+
+  // API Route: Low-latency Chunked Live Audio Transcription (16kHz WAV chunks from active recording)
+  app.post("/api/transcribe-live-chunk", async (req, res) => {
+    try {
+      const {
+        audioBase64,
+        mimeType = "audio/wav",
+        parentLanguage = "Telugu + English Mix",
+        speechMode = "english_indian",
+        studentName = "Student Candidate",
+        counsellorName = "Admissions Counsellor",
+      } = req.body || {};
+
+      let cleanBase64 = typeof audioBase64 === "string" ? audioBase64.trim() : "";
+      if (cleanBase64.includes(";base64,")) {
+        cleanBase64 = cleanBase64.split(";base64,")[1];
+      }
+      if (!cleanBase64) {
+        return res.status(400).json({ success: false, error: "Audio chunk is required." });
+      }
+      if (!getGeminiKey()) {
+        return res.status(503).json({ success: false, isMissingKey: true, error: "Gemini API key is not configured." });
+      }
+
+      const modeHintMap: Record<string, string> = {
+        telugu_native: "Primary spoken language is Telugu mixed with English admissions words (Tenglish).",
+        hindi_native: "Primary spoken language is Hindi mixed with English admissions words (Hinglish).",
+        bilingual_admissions: "Speakers code-mix Telugu, Hindi, and English naturally.",
+        english_indian: "Speakers use Indian English mixed with occasional Telugu/Hindi words.",
+        english_global: "Primary spoken language is standard English.",
+      };
+      const languageHint = modeHintMap[speechMode] || `Language context: ${parentLanguage}`;
+
+      const promptText = `Listen carefully to this short live audio clip from an admissions counselling meeting at Birla Open Minds International School.
+Counsellor: ${counsellorName} | Student: ${studentName}
+${languageHint}
+
+STRICT RULES:
+1. Transcribe ONLY the exact words clearly spoken in this audio clip. NEVER invent or guess words.
+2. Convert any Telugu, Tenglish, Hindi, or Hinglish phrases accurately into clean, natural, easy-to-read English (preserving school terms, fees, class names, or numbers accurately).
+3. Output ONLY the plain spoken sentence(s) on a single clean line. Do NOT include timestamps, speaker names, markdown, quotes, or explanations.
+4. If the clip contains only silence, background noise, breathing, or no intelligible speech, output literally: SILENCE`;
+
+      const response = await callGeminiWithRetry({
+        model: "gemini-3.5-transcribe",
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                inlineData: {
+                  mimeType: (mimeType || "audio/wav").split(";")[0],
+                  data: cleanBase64,
+                },
+              },
+              { text: promptText },
+            ],
+          },
+        ],
+      }, 2);
+
+      let text = (response?.text || "").trim();
+      text = text.replace(/^["“]+|["”]+$/g, "").replace(/^\[?\d{1,2}:\d{2}\]?\s*(?:•|-)?\s*(?:Counsellor|Parent|Speaker)\s*:\s*/i, "").trim();
+
+      if (
+        !text ||
+        /^SILENCE\.?$/i.test(text) ||
+        /^\[?(?:silence|no speech|inaudible|background noise|unintelligible)\]?\.?$/i.test(text) ||
+        /audio recording captured\.?\s*please speak clearly/i.test(text)
+      ) {
+        text = "";
+      }
+
+      return res.json({
+        success: true,
+        text,
+        model: (response as any)?.__modelUsed || "gemini-3.5-transcribe",
+      });
+    } catch (err: any) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn("Chunk live transcription notice:", msg.slice(0, 140));
+      return res.status(500).json({ success: false, error: msg });
     }
   });
 
@@ -2342,12 +2554,24 @@ Return pure JSON matching this exact structure:
       if (!s3 || !cfg.cloudflareBucketName || !cfg.cloudflareR2Configured) {
         return res.json({ success: true, files: [] });
       }
-      const command = new ListObjectsV2Command({
-        Bucket: cfg.cloudflareBucketName,
-        MaxKeys: 100
-      });
-      const result = await s3.send(command);
-      const files = (result.Contents || []).map(c => ({
+      const allContents: any[] = [];
+      let continuationToken: string | undefined = undefined;
+      let pages = 0;
+      do {
+        const command: ListObjectsV2Command = new ListObjectsV2Command({
+          Bucket: cfg.cloudflareBucketName,
+          MaxKeys: 1000,
+          ...(continuationToken ? { ContinuationToken: continuationToken } : {})
+        });
+        const result = await s3.send(command);
+        if (result.Contents) {
+          allContents.push(...result.Contents);
+        }
+        continuationToken = result.IsTruncated ? result.NextContinuationToken : undefined;
+        pages++;
+      } while (continuationToken && pages < 10);
+
+      const files = allContents.map(c => ({
         key: c.Key,
         name: c.Key,
         size: c.Size,
@@ -3164,7 +3388,7 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
   });
 
   // POST /api/upload-audio (Upload large audio files up to 150MB+ / 2-3 hours + text transcript)
-  app.post("/api/upload-audio", express.json({ limit: "200mb" }), (req, res) => {
+  app.post("/api/upload-audio", express.json({ limit: "200mb" }), async (req, res) => {
     try {
       const { 
         enquiryNo, 
@@ -3187,16 +3411,21 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
       const buffer = Buffer.from(cleanBase64, "base64");
 
       const fileExt = mimeType.includes("mp3") ? "mp3" : mimeType.includes("wav") ? "wav" : "webm";
-      const name = filename || `AUDIO-${enquiryNo || id || Date.now()}.${fileExt}`;
+      const rawName = filename || `AUDIO-${enquiryNo || id || Date.now()}.${fileExt}`;
+      const name = path.basename(String(rawName));
       const safePath = path.join(AUDIOS_DIR, name);
 
+      if (!fs.existsSync(AUDIOS_DIR)) fs.mkdirSync(AUDIOS_DIR, { recursive: true });
       fs.writeFileSync(safePath, buffer);
       const audioUrl = `/api/audios/${name}`;
 
-      // Upload to Cloudflare R2 bucket if configured
-      uploadToR2(name, buffer, mimeType || "audio/webm").catch(err => {
-        console.warn("Async R2 upload notice in /api/upload-audio:", err);
-      });
+      // Upload to Cloudflare R2 bucket synchronously (with graceful fallback) so caller gets true sync state
+      let r2Synced = false;
+      try {
+        r2Synced = await uploadToR2(name, buffer, mimeType || "audio/webm");
+      } catch (err) {
+        console.warn("R2 upload notice in /api/upload-audio:", err);
+      }
 
       let textUrl = "";
       if (meetingTextSummary && typeof meetingTextSummary === "string") {
@@ -3205,6 +3434,12 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
         fs.writeFileSync(textPath, meetingTextSummary, "utf-8");
         textUrl = `/api/audios/${textFileName}`;
       }
+
+      const numericDur = Number(durationSeconds);
+      const safeDurationSeconds =
+        typeof numericDur === "number" && isFinite(numericDur) && !isNaN(numericDur) && numericDur > 0
+          ? Math.round(numericDur)
+          : Math.max(10, Math.round(buffer.length / 3000));
 
       // Automatically attach this recording to matching enquiry in counselling.json
       let current = readCounsellingData();
@@ -3221,7 +3456,7 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
           driveFileUrl: audioUrl,
           driveFileId: id || enquiryNo,
           meetingTextSummary: meetingTextSummary || current[targetIdx].audioRecording?.meetingTextSummary || "",
-          durationSeconds: durationSeconds || 30,
+          durationSeconds: safeDurationSeconds,
           fileSizeBytes: buffer.length,
           mimeType: mimeType || "audio/webm",
           recordedAt: new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -3249,7 +3484,7 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
             driveFileUrl: audioUrl,
             driveFileId: id || enquiryNo,
             meetingTextSummary: meetingTextSummary || "",
-            durationSeconds: durationSeconds || 30,
+            durationSeconds: safeDurationSeconds,
             fileSizeBytes: buffer.length,
             mimeType: mimeType || "audio/webm",
             recordedAt: new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -3277,6 +3512,8 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
         textUrl,
         filename: name,
         bytes: buffer.length,
+        r2Synced,
+        durationSeconds: safeDurationSeconds,
         nvrPrunedCount: nvrRotationResult.prunedCount,
         nvrFreedBytes: nvrRotationResult.freedBytes
       });
@@ -4371,12 +4608,108 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
   const hasDist = fs.existsSync(path.join(distPath, "index.html"));
 
   let isListening = false;
+  let liveTranscribeWss: WebSocketServer | null = null;
   const startListening = () => {
     if (isListening || process.env.VERCEL) return;
     isListening = true;
     const server = app.listen(PORT, "0.0.0.0", () => {
       console.log(`🚀 Birla IT Helpdesk full-stack server running on port ${PORT}`);
     });
+
+    if (!liveTranscribeWss) {
+      liveTranscribeWss = new WebSocketServer({ noServer: true });
+      liveTranscribeWss.on("connection", async (clientWs: WebSocket) => {
+        let session: any = null;
+        let isClosed = false;
+        let lastSentFinal = "";
+
+        const safeSend = (payload: any) => {
+          if (!isClosed && clientWs.readyState === WebSocket.OPEN) {
+            try {
+              clientWs.send(JSON.stringify(payload));
+            } catch {}
+          }
+        };
+
+        try {
+          if (!getGeminiKey()) {
+            safeSend({ type: "fallback", error: "GEMINI_API_KEY not configured" });
+            clientWs.close();
+            return;
+          }
+
+          const ai = getGemini();
+          session = await ai.live.connect({
+            model: "gemini-3.5-transcribe-live",
+            config: {
+              responseModalities: [Modality.TEXT],
+              inputAudioTranscription: {
+                languageCodes: [],
+              },
+            },
+            callbacks: {
+              onopen: () => {
+                safeSend({ type: "ready", model: "gemini-3.5-transcribe-live" });
+              },
+              onmessage: (message: any) => {
+                const content = message?.serverContent;
+                if (content?.interimInputTranscription?.text) {
+                  safeSend({ type: "interim", text: content.interimInputTranscription.text });
+                }
+                if (content?.inputTranscription?.text) {
+                  const txt = String(content.inputTranscription.text).trim();
+                  if (txt && txt !== lastSentFinal) {
+                    lastSentFinal = txt;
+                    safeSend({ type: "final", text: txt });
+                  }
+                }
+              },
+              onerror: (err: any) => {
+                safeSend({ type: "fallback", error: err?.message || "Live stream error" });
+              },
+              onclose: () => {
+                if (!isClosed) {
+                  safeSend({ type: "closed" });
+                }
+              },
+            },
+          });
+        } catch (err: any) {
+          safeSend({ type: "fallback", error: err?.message || "Could not open Gemini Live transcription" });
+          try { clientWs.close(); } catch {}
+          return;
+        }
+
+        clientWs.on("message", (raw: any) => {
+          if (isClosed || !session) return;
+          try {
+            const parsed = JSON.parse(raw.toString());
+            if (parsed?.audio) {
+              session.sendRealtimeInput({
+                audio: { data: parsed.audio, mimeType: "audio/pcm;rate=16000" },
+              });
+            }
+          } catch {}
+        });
+
+        clientWs.on("close", () => {
+          isClosed = true;
+          if (session) {
+            try { session.close(); } catch {}
+            session = null;
+          }
+        });
+      });
+    }
+
+    server.on("upgrade", (request, socket, head) => {
+      if (request.url?.startsWith("/ws/live-transcribe") && liveTranscribeWss) {
+        liveTranscribeWss.handleUpgrade(request, socket, head, (ws) => {
+          liveTranscribeWss!.emit("connection", ws, request);
+        });
+      }
+    });
+
     server.on("error", (err: any) => {
       isListening = false;
       if (err.code === "EADDRINUSE") {

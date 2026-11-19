@@ -31,6 +31,7 @@ import {
 import firebaseConfig from "../../firebase-applet-config.json";
 import { Ticket, InventoryItem, Room, EmployeeAllocation, WarrantyContract, CounsellingEnquiry } from "../types";
 import { getDeletedEnquiryIds } from "./storage";
+import { sanitizeAudioDuration, formatAudioDuration } from "./audioStorage";
 import { app, db, auth } from "../lib/firebase";
 import { extractEnquirySerialNum, formatCanonicalEnquiryNo } from "./enquirySynthesis";
 
@@ -650,6 +651,15 @@ export function cleanForFirestore<T>(data: T): T {
 export function prepareEnquiryForFirestore(targetEnquiry: CounsellingEnquiry): any {
   const firestoreEnquiry: any = JSON.parse(JSON.stringify(targetEnquiry));
   if (firestoreEnquiry.audioRecording) {
+    // Sanitize durationSeconds before JSON/Firestore persistence (JSON.stringify turns Infinity -> null)
+    const origDur = (targetEnquiry as any)?.audioRecording?.durationSeconds;
+    const safeDur = sanitizeAudioDuration(origDur ?? firestoreEnquiry.audioRecording.durationSeconds, 0);
+    firestoreEnquiry.audioRecording.durationSeconds = safeDur;
+    if (safeDur > 0 && (!firestoreEnquiry.audioRecording.durationFormatted || firestoreEnquiry.audioRecording.durationFormatted === "00:00")) {
+      firestoreEnquiry.audioRecording.durationFormatted = formatAudioDuration(safeDur);
+    }
+    delete firestoreEnquiry.audioRecording.cloudUploadedThisSession;
+
     // Strip large translated TTS base64 audio
     if (
       typeof firestoreEnquiry.audioRecording.translatedAudioData === "string" &&
