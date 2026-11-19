@@ -53,7 +53,7 @@ import {
   sanitizeAudioDuration
 } from "../utils/audioStorage";
 import { uploadFileToDrive, isDriveConnected, connectGoogleDrive } from "../utils/googleDrive";
-import { loadR2Credentials, uploadToR2Direct, getR2AudioBlobDirect, findR2AudioUrl } from "../utils/cloudflareR2Client";
+import { loadR2Credentials, getR2AudioBlobDirect, findR2AudioUrl } from "../utils/cloudflareR2Client";
 import MeetingMomGeneratorModal from "./MeetingMomGeneratorModal";
 import CctvNvrStorageModal from "./CctvNvrStorageModal";
 import AudioTranslationModal, { AudioTranslationData } from "./AudioTranslationModal";
@@ -63,6 +63,12 @@ import {
   clearMeetingRecovery,
   RecoveredMeetingSession
 } from "../utils/audioRecoveryVault";
+import {
+  enqueueBackgroundAudioUpload,
+  subscribeBackgroundAudioQueue,
+  onBackgroundAudioComplete,
+  BackgroundAudioQueueSnapshot
+} from "../utils/backgroundAudioQueue";
 
 export interface DialogueTurn {
   id: string;
@@ -1014,6 +1020,52 @@ export default function AudioMeetingRecorder({
   const chunkUploadIntervalRef = useRef<any>(null);
   const chunkFailureCountRef = useRef<number>(0);
   const isUploadingChunkRef = useRef<boolean>(false);
+
+  const isMountedRef = useRef<boolean>(true);
+  const [bgQueueSnapshot, setBgQueueSnapshot] = useState<BackgroundAudioQueueSnapshot | null>(null);
+  const latestAudioRecordRef = useRef<CounsellingAudioRecord | null>(null);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    const unsubSnap = subscribeBackgroundAudioQueue((snap) => {
+      if (isMountedRef.current) setBgQueueSnapshot(snap);
+    });
+    const unsubDone = onBackgroundAudioComplete((res) => {
+      if (!isMountedRef.current) return;
+      const cur = latestAudioRecordRef.current || existingAudio;
+      if (!cur) return;
+      const sameFile = (cur.fileName || "").toLowerCase() === (res.fileName || "").toLowerCase();
+      const sameRec = (cur.id || "").toLowerCase() === (res.recordingId || "").toLowerCase();
+      const sameEnq = enquiryNo && cur.enquiryNo && cur.enquiryNo.toLowerCase() === (res.enquiryNo || "").toLowerCase();
+      if (!sameFile && !sameRec && !sameEnq) return;
+
+      const updated: any = {
+        ...cur,
+        ...(res.enhancedTranscript ? { meetingTextSummary: res.enhancedTranscript } : {}),
+        ...(res.serverAudioUrl ? { driveFileId: cur.driveFileId || res.recordingId, driveFileUrl: res.serverAudioUrl, audioUrl: res.serverAudioUrl } : {}),
+        ...(res.driveFileId ? { driveFileId: res.driveFileId } : {}),
+        ...(res.driveFileUrl ? { driveFileUrl: res.driveFileUrl } : {}),
+        ...(res.driveSyncedAt ? { driveSyncedAt: res.driveSyncedAt } : {}),
+        cloudR2Synced: Boolean(res.r2Synced || (cur as any).cloudR2Synced),
+        queuedBackgroundUpload: false
+      };
+      latestAudioRecordRef.current = updated;
+      onSaveAudio(updated);
+
+      if (res.enhancedTranscript) {
+        const parsed = parseDialogueTurnsFromSummary(res.enhancedTranscript);
+        if (parsed.length > 0) {
+          setDialogueTurns(parsed);
+          dialogueTurnsRef.current = parsed;
+        }
+      }
+    });
+    return () => {
+      isMountedRef.current = false;
+      unsubSnap();
+      unsubDone();
+    };
+  }, [enquiryNo]);
 
   useEffect(() => {
     isRecordingRef.current = isRecording;
@@ -2141,73 +2193,9 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
     }
   };
 
-  // Unified resilient Cloud R2 + Express Server upload helper (works both on Vercel & AI Studio Express)
-  const syncAudioToCloudAndServer = async (params: {
-    blob: Blob;
-    base64Data: string;
-    fileName: string;
-    recordingId: string;
-    mimeType: string;
-    durationSeconds: number;
-    textReport: string;
-  }): Promise<{ r2Synced: boolean; serverAudioUrl?: string }> => {
-    const { blob, base64Data, fileName, recordingId, mimeType, durationSeconds, textReport } = params;
-    let r2Synced = false;
-    let serverAudioUrl: string | undefined = undefined;
+  const MAX_INLINE_AUDIO_DATA_BYTES = 400 * 1024;
 
-    // 1. Direct Cloudflare R2 binary upload (works across Vercel, Cloud Run & localhost)
-    try {
-      const creds = loadR2Credentials();
-      const uint8 = new Uint8Array(await blob.arrayBuffer());
-      r2Synced = await uploadToR2Direct(creds, fileName, uint8, mimeType || "audio/webm");
-    } catch (r2Err) {
-      console.warn("[AudioUpload] Direct R2 upload warning:", r2Err);
-    }
-
-    // 2. Express server media vault upload (only if backend is present on this origin)
-    try {
-      for (let attempt = 1; attempt <= 2; attempt++) {
-        try {
-          const resp = await fetch("/api/upload-audio", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              enquiryNo: enquiryNo || "ENQ-PENDING",
-              id: recordingId,
-              audioBase64: base64Data,
-              filename: fileName,
-              mimeType: mimeType || "audio/webm",
-              durationSeconds: sanitizeAudioDuration(durationSeconds, 10),
-              meetingTextSummary: textReport,
-              counsellorId: counsellorId || "COUNSELLOR-01",
-              counsellorName: counsellorName || "Admissions Counsellor",
-              studentName: studentName || "Student Enquiry"
-            })
-          });
-          const ct = (resp.headers.get("content-type") || "").toLowerCase();
-          if (!ct.includes("application/json")) {
-            // Static host (e.g. Vercel SPA) returns HTML/404 — skip retries cleanly
-            break;
-          }
-          const res = await resp.json();
-          if (res?.success && res?.audioUrl) {
-            serverAudioUrl = res.audioUrl;
-            if (res.r2Synced) r2Synced = true;
-            break;
-          }
-        } catch (netErr) {
-          console.warn(`[AudioUpload] Server retry ${attempt}/2:`, netErr);
-          if (attempt < 2) await new Promise(r => setTimeout(r, 800));
-        }
-      }
-    } catch (e) {
-      console.warn("Server audio upload notice:", e);
-    }
-
-    return { r2Synced, serverAudioUrl };
-  };
-
-  // STOP RECORDING & SAVE AUDIO + TRANSCRIPT
+  // STOP RECORDING & SAVE AUDIO + TRANSCRIPT IMMEDIATELY (CLOUD SYNC RUNS IN BACKGROUND)
   const stopRecording = () => {
     if (!mediaRecorderRef.current || !isRecording) return;
 
@@ -2263,18 +2251,22 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
         setRecordingSeconds(safeDuration);
         recordingSecondsRef.current = safeDuration;
 
-        const base64Data = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onloadend = () => resolve((reader.result as string) || "");
-          reader.readAsDataURL(audioBlob);
-        });
+        // Only inline small recordings (<=400KB) as data URL; large 30-40 min recordings stay purely in IndexedDB & binary Blob upload
+        let inlineBase64Data: string | undefined = undefined;
+        if (audioBlob.size <= MAX_INLINE_AUDIO_DATA_BYTES) {
+          inlineBase64Data = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve((reader.result as string) || "");
+            reader.readAsDataURL(audioBlob);
+          });
+        }
 
         const now = new Date();
         const recordedTimestamp = `${now.toLocaleDateString()} ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
         const fileName = `${enquiryNo || "ENQ"}_Meeting_${now.toISOString().slice(0, 10)}.webm`;
         const recordingId = fileName;
 
-        // 1. Save immediately into IndexedDB before any network calls
+        // 1. Save binary Blob immediately into IndexedDB (~50-200ms even for 40-min audio)
         await saveAudioRecordingBlob(recordingId, audioBlob);
         if (enquiryNo) await saveAudioRecordingBlob(enquiryNo.trim(), audioBlob);
         if (enquiryNo) await saveAudioRecordingBlob(`audio-${enquiryNo.trim()}`, audioBlob);
@@ -2288,7 +2280,7 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
           ? initialTurns.map(t => `[${t.timeStr}] • ${t.speaker}: "${t.text}"`).join("\n\n")
           : "";
 
-        let textReport = buildMeetingTextSummary(
+        const textReport = buildMeetingTextSummary(
           safeDuration,
           fileName,
           "Hardware Microphone",
@@ -2304,11 +2296,17 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
           safeDuration
         );
         setMeetingNotesReport(initialNotes);
+        if (initialNotes?.enquiryRecordNotes) {
+          setConversationNotes(initialNotes.enquiryRecordNotes);
+          if (onUpdateNotes) {
+            onUpdateNotes(initialNotes.enquiryRecordNotes);
+          }
+        }
 
-        // 2. Immediately attach to enquiry form & clear recovery vault so closing/saving never loses audio!
-        const audioRecord: CounsellingAudioRecord = {
+        // 2. Immediately attach to enquiry form, clear recovery vault, & UNLOCK SAVE BUTTON (< 1 second!)
+        const audioRecord: CounsellingAudioRecord & { queuedBackgroundUpload?: boolean } = {
           id: recordingId,
-          audioData: base64Data,
+          ...(inlineBase64Data ? { audioData: inlineBase64Data } : {}),
           storageKey: recordingId,
           fileName: fileName,
           durationSeconds: safeDuration,
@@ -2323,139 +2321,44 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
           conversationLanguageNotes: initialNotes?.enquiryRecordNotes || conversationNotes,
           audioSource: "Hardware Microphone",
           meetingTextSummary: textReport,
-          reviewStatus: "Pending"
+          reviewStatus: "Pending",
+          queuedBackgroundUpload: true
         };
-        if (initialNotes?.enquiryRecordNotes && onUpdateNotes) {
-          onUpdateNotes(initialNotes.enquiryRecordNotes);
-        }
+        latestAudioRecordRef.current = audioRecord;
         onSaveAudio(audioRecord);
         clearMeetingRecovery().catch(() => {});
         setRecoveredSession(null);
 
-        // 3. Attempt server-side Gemini audio transcription enhancement
-        try {
-          const resp = await fetch("/api/transcribe-meeting-audio", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              audioBase64: base64Data,
-              mimeType: actualMime,
-              liveSpeechText: liveTurnsText,
-              counsellorName: counsellorName || "Admissions Counsellor",
-              counsellorId: counsellorId || "COUNSELLOR-01",
-              studentName: studentName || "Student Enquiry",
-              applyingForClass: applyingForClass || "N/A",
-              parentLanguage: selectedLanguage
-            })
-          });
-          const ct = (resp.headers.get("content-type") || "").toLowerCase();
-          if (ct.includes("application/json")) {
-            const apiRes = await resp.json();
-            if (apiRes && apiRes.success && apiRes.transcript) {
-              textReport = apiRes.transcript;
-              if (apiRes.engine) setTranscriptionEngineUsed(apiRes.engine);
-              const serverTurns: DialogueTurn[] = Array.isArray(apiRes.turns) && apiRes.turns.length > 0
-                ? deduplicateDialogueTurns(apiRes.turns.map((t: any) => ({
-                    id: Math.random().toString(36).substring(2, 9),
-                    timeSec: sanitizeAudioDuration(t.timeSec, 0),
-                    timeStr: String(t.timeStr || "00:00"),
-                    speaker: String(t.speaker || "Counsellor"),
-                    speakerName: String(t.speakerName || t.speaker || "Counsellor"),
-                    text: String(t.text || "").trim()
-                  })).filter((t: DialogueTurn) => Boolean(t.text)))
-                : parseDialogueTurnsFromSummary(apiRes.transcript);
-
-              if (serverTurns.length > 0) {
-                setDialogueTurns(serverTurns);
-                dialogueTurnsRef.current = serverTurns;
-              }
-            }
-          }
-        } catch (apiErr) {
-          console.warn("Server audio transcription fallback:", apiErr);
-        }
-
-        const finalActiveTurns = deduplicateDialogueTurns(dialogueTurnsRef.current);
-        dialogueTurnsRef.current = finalActiveTurns;
-        const genNotes = generateMeetingKeyPointsAndNotes(
-          finalActiveTurns,
-          studentName,
-          applyingForClass,
-          counsellorName,
-          safeDuration
-        );
-        setMeetingNotesReport(genNotes);
-        if (genNotes?.enquiryRecordNotes) {
-          setConversationNotes(genNotes.enquiryRecordNotes);
-          if (onUpdateNotes) {
-            onUpdateNotes(genNotes.enquiryRecordNotes);
-          }
-        }
-
-        // 4. Upload to Cloudflare R2 + Express Server Vault
-        const { r2Synced, serverAudioUrl } = await syncAudioToCloudAndServer({
-          blob: audioBlob,
-          base64Data,
-          fileName,
+        // 3. Dispatch non-blocking background Cloud R2 + Server + Drive upload queue (survives form save/close!)
+        enqueueBackgroundAudioUpload({
+          enquiryNo: enquiryNo || "ENQ-PENDING",
           recordingId,
+          storageKey: recordingId,
+          fileName,
           mimeType: actualMime,
           durationSeconds: safeDuration,
-          textReport
+          fileSizeBytes: audioBlob.size,
+          studentName: studentName || "Student Enquiry",
+          counsellorId: counsellorId || "COUNSELLOR-01",
+          counsellorName: counsellorName || "Admissions Counsellor",
+          applyingForClass: applyingForClass || "N/A",
+          parentLanguage: selectedLanguage,
+          liveTurnsText,
+          meetingTextSummary: textReport,
+          audioSource: "Hardware Microphone",
+          runServerTranscribe: true,
+          blob: audioBlob
         });
 
-        const finalRecord: CounsellingAudioRecord & { cloudUploadedThisSession?: boolean; cloudR2Synced?: boolean } = {
-          ...audioRecord,
-          conversationLanguageNotes: genNotes?.enquiryRecordNotes || audioRecord.conversationLanguageNotes,
-          meetingTextSummary: textReport,
-          driveFileId: serverAudioUrl ? recordingId : audioRecord.driveFileId,
-          driveFileUrl: serverAudioUrl || audioRecord.driveFileUrl,
-          audioUrl: serverAudioUrl || audioRecord.audioUrl,
-          cloudR2Synced: r2Synced,
-          cloudUploadedThisSession: Boolean(r2Synced || serverAudioUrl)
-        };
-        onSaveAudio(finalRecord);
-
         setSaveSuccessMsg(
-          r2Synced || serverAudioUrl
-            ? "🎙️ Meeting voice recorded, text converted & synced to Cloud R2 & Server!"
-            : "🎙️ Meeting voice recorded & saved locally (Cloud upload pending network)."
+          `✅ Audio secured (${formatAudioDuration(safeDuration)}) & Save unlocked! Uploading to Cloud Vault in background — click Save & move to next parent now.`
         );
-        setTimeout(() => setSaveSuccessMsg(null), 4000);
+        setTimeout(() => {
+          if (isMountedRef.current) setSaveSuccessMsg(null);
+        }, 6000);
 
-        // Auto-upload to Google Drive Cloud Vault in background
-        uploadFileToDrive({
-          name: fileName,
-          mimeType: actualMime,
-          dataBlob: audioBlob,
-          folderType: "Counselling Voice Vault",
-          description: `Counselling meeting audio for enquiry #${enquiryNo} (${studentName}), Counsellor: ${counsellorName}`
-        }).then((driveItem) => {
-          if (driveItem && (driveItem.id || driveItem.webViewLink)) {
-            const safeDriveUrl = (driveItem.webViewLink && !driveItem.webViewLink.startsWith("blob:")) ? driveItem.webViewLink : finalRecord.driveFileUrl;
-            const updatedRec: CounsellingAudioRecord = {
-              ...finalRecord,
-              driveFileId: driveItem.id || finalRecord.driveFileId,
-              driveFileUrl: safeDriveUrl,
-              driveSyncedAt: new Date().toISOString()
-            };
-            onSaveAudio(updatedRec);
-          }
-        }).catch(err => console.warn("Auto drive upload notice:", err));
-
-        // Also upload text transcript file (.txt) to Google Drive
-        try {
-          const textBlob = new Blob([textReport], { type: "text/plain;charset=utf-8" });
-          uploadFileToDrive({
-            name: `${fileName}.txt`,
-            mimeType: "text/plain",
-            dataBlob: textBlob,
-            folderType: "Counselling Voice Vault",
-            description: `Counselling meeting transcript text report for enquiry #${enquiryNo} (${studentName})`
-          }).catch(() => {});
-        } catch (_) {}
-
-        // Run deep conversation audit with AI in background
-        runAiConversationAudit(finalActiveTurns);
+        // Run deep conversation audit with AI asynchronously without blocking Save
+        void runAiConversationAudit(initialTurns);
       } catch (stopErr) {
         console.warn("Stop recording error:", stopErr);
         setErrorMessage("Could not finalize recording completely. Please check attached audio or retry.");
@@ -2477,7 +2380,7 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
     }
   };
 
-  // Upload external audio (e.g. phone voice memo or downloaded .webm) + Auto-Generate Text File + Reliable Cloud Sync
+  // Upload external audio (e.g. phone voice memo or downloaded .webm) — Local IndexedDB Attach (<1s) + Non-Blocking Background Cloud Sync
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = "";
@@ -2492,16 +2395,19 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
       setRecordedBlob(file);
       setRecordedAudioUrl(blobUrl);
 
-      // Accurately resolve finite duration (never Infinity/NaN for WebM files without EBML header)
+      // Accurately resolve finite duration locally (never Infinity/NaN for WebM files without EBML header)
       const durationSec = await resolveReliableAudioDuration(file, blobUrl, 30);
       setRecordingSeconds(durationSec);
       recordingSecondsRef.current = durationSec;
 
-      const base64Data = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve((reader.result as string) || "");
-        reader.readAsDataURL(file);
-      });
+      let inlineBase64Data: string | undefined = undefined;
+      if (file.size <= MAX_INLINE_AUDIO_DATA_BYTES) {
+        inlineBase64Data = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve((reader.result as string) || "");
+          reader.readAsDataURL(file);
+        });
+      }
 
       const recordingId = `AUDIO-${enquiryNo || Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
       const canonicalFileName = file.name || `${enquiryNo || "ENQ"}_Meeting_${new Date().toISOString().slice(0, 10)}.webm`;
@@ -2517,7 +2423,7 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
         ? activeTurns.map(t => `[${t.timeStr}] • ${t.speaker}: "${t.text}"`).join("\n\n")
         : "";
 
-      let textReport = buildMeetingTextSummary(
+      const textReport = buildMeetingTextSummary(
         durationSec,
         canonicalFileName,
         "Phone Audio Upload",
@@ -2525,69 +2431,9 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
         formattedTranscript
       );
 
-      let latestNotes = conversationNotes;
-
-      // Enhance via server transcription (if backend API is available on this origin)
-      try {
-        const resp = await fetch("/api/transcribe-meeting-audio", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            audioBase64: base64Data,
-            mimeType: file.type || "audio/webm",
-            liveSpeechText: formattedTranscript,
-            counsellorName: counsellorName || "Admissions Counsellor",
-            counsellorId: counsellorId || "COUNSELLOR-01",
-            studentName: studentName || "Student Enquiry",
-            applyingForClass: applyingForClass || "N/A",
-            parentLanguage: selectedLanguage
-          })
-        });
-        const ct = (resp.headers.get("content-type") || "").toLowerCase();
-        if (ct.includes("application/json")) {
-          const apiRes = await resp.json();
-          if (apiRes && apiRes.success && apiRes.transcript) {
-            textReport = apiRes.transcript;
-            if (apiRes.engine) setTranscriptionEngineUsed(apiRes.engine);
-            const serverTurns: DialogueTurn[] = Array.isArray(apiRes.turns) && apiRes.turns.length > 0
-              ? deduplicateDialogueTurns(apiRes.turns.map((t: any) => ({
-                  id: Math.random().toString(36).substring(2, 9),
-                  timeSec: sanitizeAudioDuration(t.timeSec, 0),
-                  timeStr: String(t.timeStr || "00:00"),
-                  speaker: String(t.speaker || "Counsellor"),
-                  speakerName: String(t.speakerName || t.speaker || "Counsellor"),
-                  text: String(t.text || "").trim()
-                })).filter((t: DialogueTurn) => Boolean(t.text)))
-              : parseDialogueTurnsFromSummary(apiRes.transcript);
-
-            if (serverTurns.length > 0) {
-              setDialogueTurns(serverTurns);
-              dialogueTurnsRef.current = serverTurns;
-              const genNotes = generateMeetingKeyPointsAndNotes(
-                serverTurns,
-                studentName,
-                applyingForClass,
-                counsellorName,
-                durationSec
-              );
-              setMeetingNotesReport(genNotes);
-              if (genNotes?.enquiryRecordNotes) {
-                latestNotes = genNotes.enquiryRecordNotes;
-                setConversationNotes(genNotes.enquiryRecordNotes);
-                if (onUpdateNotes) onUpdateNotes(genNotes.enquiryRecordNotes);
-              }
-            }
-          } else if (apiRes && apiRes.error) {
-            setErrorMessage(`Transcription notice: ${apiRes.error}`);
-          }
-        }
-      } catch (apiErr) {
-        console.warn("Upload transcribe notice:", apiErr);
-      }
-
-      const audioRecord: CounsellingAudioRecord & { cloudUploadedThisSession?: boolean; cloudR2Synced?: boolean } = {
+      const audioRecord: CounsellingAudioRecord & { queuedBackgroundUpload?: boolean } = {
         id: recordingId,
-        audioData: base64Data,
+        ...(inlineBase64Data ? { audioData: inlineBase64Data } : {}),
         storageKey: recordingId,
         fileName: canonicalFileName,
         durationSeconds: durationSec,
@@ -2599,63 +2445,46 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
         enquiryNo: enquiryNo || "ENQ-PENDING",
         studentName: studentName || "Student Enquiry",
         parentLanguage: selectedLanguage,
-        conversationLanguageNotes: latestNotes,
+        conversationLanguageNotes: conversationNotes,
         audioSource: "Phone Audio Upload",
         meetingTextSummary: textReport,
-        reviewStatus: "Pending"
+        reviewStatus: "Pending",
+        queuedBackgroundUpload: true
       };
 
-      // Attach locally immediately
+      // Attach locally immediately & unlock Save button!
+      latestAudioRecordRef.current = audioRecord;
       onSaveAudio(audioRecord);
       clearMeetingRecovery().catch(() => {});
       setRecoveredSession(null);
 
-      // Await Cloud R2 + Express server upload BEFORE clearing processing spinner so closing tab never aborts upload!
-      const { r2Synced, serverAudioUrl } = await syncAudioToCloudAndServer({
-        blob: file,
-        base64Data,
-        fileName: canonicalFileName,
+      // Dispatch background Cloud R2 + Server + Drive upload + optional AI transcription
+      enqueueBackgroundAudioUpload({
+        enquiryNo: enquiryNo || "ENQ-PENDING",
         recordingId,
+        storageKey: recordingId,
+        fileName: canonicalFileName,
         mimeType: file.type || "audio/webm",
         durationSeconds: durationSec,
-        textReport
+        fileSizeBytes: file.size,
+        studentName: studentName || "Student Enquiry",
+        counsellorId: counsellorId || "COUNSELLOR-01",
+        counsellorName: counsellorName || "Admissions Counsellor",
+        applyingForClass: applyingForClass || "N/A",
+        parentLanguage: selectedLanguage,
+        liveTurnsText: formattedTranscript,
+        meetingTextSummary: textReport,
+        audioSource: "Phone Audio Upload",
+        runServerTranscribe: true,
+        blob: file
       });
 
-      const finalRecord: CounsellingAudioRecord & { cloudUploadedThisSession?: boolean; cloudR2Synced?: boolean } = {
-        ...audioRecord,
-        driveFileId: serverAudioUrl ? recordingId : audioRecord.driveFileId,
-        driveFileUrl: serverAudioUrl || audioRecord.driveFileUrl,
-        audioUrl: serverAudioUrl || audioRecord.audioUrl,
-        cloudR2Synced: r2Synced,
-        cloudUploadedThisSession: Boolean(r2Synced || serverAudioUrl)
-      };
-      onSaveAudio(finalRecord);
-
-      // Auto-upload to Google Drive Cloud Vault in background
-      uploadFileToDrive({
-        name: canonicalFileName,
-        mimeType: file.type || "audio/webm",
-        dataBlob: file,
-        folderType: "Counselling Voice Vault",
-        description: `Counselling meeting audio upload for enquiry #${enquiryNo} (${studentName})`
-      }).then((driveItem) => {
-        if (driveItem && (driveItem.id || driveItem.webViewLink)) {
-          const updatedDrive: CounsellingAudioRecord = {
-            ...finalRecord,
-            driveFileId: driveItem.id || finalRecord.driveFileId,
-            driveFileUrl: driveItem.webViewLink || driveItem.webContentLink || finalRecord.driveFileUrl,
-            driveSyncedAt: new Date().toISOString()
-          };
-          onSaveAudio(updatedDrive);
-        }
-      }).catch(() => {});
-
       setSaveSuccessMsg(
-        r2Synced || serverAudioUrl
-          ? `📱 Voice file (${formatAudioDuration(durationSec)}) uploaded & synced to Cloud R2 & Server!`
-          : `📱 Voice file (${formatAudioDuration(durationSec)}) attached locally — Cloud R2 upload failed, check internet.`
+        `✅ Voice file (${formatAudioDuration(durationSec)}) attached & Save unlocked! Uploading to Cloud R2 in background.`
       );
-      setTimeout(() => setSaveSuccessMsg(null), 4000);
+      setTimeout(() => {
+        if (isMountedRef.current) setSaveSuccessMsg(null);
+      }, 6000);
     } catch (uploadErr) {
       console.warn("Audio file upload error:", uploadErr);
       setErrorMessage("Failed to process selected audio file. Please check file format and retry.");
@@ -3186,7 +3015,7 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
     setTimeout(() => setSaveSuccessMsg(null), 3000);
   };
 
-  // Restore interrupted session preserved in IndexedDB, immediately attach & sync to Cloud R2 + Server
+  // Restore interrupted session preserved in IndexedDB, immediately attach (<1s) & sync to Cloud R2 in background
   const handleRestoreRecoveredSession = async (session: RecoveredMeetingSession) => {
     setIsProcessing(true);
     setErrorMessage(null);
@@ -3223,11 +3052,14 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
       await saveAudioRecordingBlob(recordingId, session.audioBlob);
       if (targetEnqNo) await saveAudioRecordingBlob(targetEnqNo.trim(), session.audioBlob);
 
-      const base64Data = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve((reader.result as string) || "");
-        reader.readAsDataURL(session.audioBlob);
-      });
+      let inlineBase64Data: string | undefined = undefined;
+      if (session.audioBlob.size <= MAX_INLINE_AUDIO_DATA_BYTES) {
+        inlineBase64Data = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve((reader.result as string) || "");
+          reader.readAsDataURL(session.audioBlob);
+        });
+      }
 
       const liveTurnsText = parsedTurns.length > 0
         ? parsedTurns.map(t => `[${t.timeStr}] • ${t.speaker}: "${t.text}"`).join("\n\n")
@@ -3253,9 +3085,9 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
         onUpdateNotes(genNotes.enquiryRecordNotes);
       }
 
-      const restoredRecord: CounsellingAudioRecord & { cloudUploadedThisSession?: boolean; cloudR2Synced?: boolean } = {
+      const restoredRecord: CounsellingAudioRecord & { queuedBackgroundUpload?: boolean } = {
         id: recordingId,
-        audioData: base64Data,
+        ...(inlineBase64Data ? { audioData: inlineBase64Data } : {}),
         storageKey: recordingId,
         fileName,
         durationSeconds: resolvedDuration,
@@ -3270,40 +3102,43 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
         conversationLanguageNotes: genNotes?.enquiryRecordNotes || conversationNotes,
         audioSource: "Hardware Microphone",
         meetingTextSummary: textReport,
-        reviewStatus: "Pending"
+        reviewStatus: "Pending",
+        queuedBackgroundUpload: true
       };
 
-      // Attach immediately and clear recovery snapshot
+      // Attach immediately, clear recovery snapshot, & UNLOCK SAVE BUTTON!
+      latestAudioRecordRef.current = restoredRecord;
       onSaveAudio(restoredRecord);
       await clearMeetingRecovery(session.recoveryKey);
       setRecoveredSession(null);
 
-      // Upload restored recording to Cloud R2 & Server Vault
-      const { r2Synced, serverAudioUrl } = await syncAudioToCloudAndServer({
-        blob: session.audioBlob,
-        base64Data,
-        fileName,
+      // Enqueue non-blocking background upload to Cloud R2 + Server
+      enqueueBackgroundAudioUpload({
+        enquiryNo: targetEnqNo,
         recordingId,
+        storageKey: recordingId,
+        fileName,
         mimeType: session.mimeType || "audio/webm",
         durationSeconds: resolvedDuration,
-        textReport
+        fileSizeBytes: session.audioBlob.size,
+        studentName: studentName || session.studentName || "Student Enquiry",
+        counsellorId: counsellorId || "COUNSELLOR-01",
+        counsellorName: counsellorName || session.counsellorName || "Admissions Counsellor",
+        applyingForClass: applyingForClass || "N/A",
+        parentLanguage: selectedLanguage,
+        liveTurnsText,
+        meetingTextSummary: textReport,
+        audioSource: "Recovered Live Session",
+        runServerTranscribe: false,
+        blob: session.audioBlob
       });
 
-      onSaveAudio({
-        ...restoredRecord,
-        driveFileId: serverAudioUrl ? recordingId : restoredRecord.driveFileId,
-        driveFileUrl: serverAudioUrl || restoredRecord.driveFileUrl,
-        audioUrl: serverAudioUrl || restoredRecord.audioUrl,
-        cloudR2Synced: r2Synced,
-        cloudUploadedThisSession: Boolean(r2Synced || serverAudioUrl)
-      } as any);
-
       setSaveSuccessMsg(
-        r2Synced || serverAudioUrl
-          ? `🎙️ Interrupted meeting (${formatAudioDuration(resolvedDuration)}) restored & synced to Cloud R2!`
-          : `🎙️ Interrupted meeting (${formatAudioDuration(resolvedDuration)}) restored & attached to form!`
+        `✅ Interrupted meeting (${formatAudioDuration(resolvedDuration)}) restored & Save unlocked! Uploading to Cloud R2 in background.`
       );
-      setTimeout(() => setSaveSuccessMsg(null), 4000);
+      setTimeout(() => {
+        if (isMountedRef.current) setSaveSuccessMsg(null);
+      }, 6000);
     } catch (e) {
       console.warn("Failed to restore session:", e);
       setErrorMessage("Could not restore interrupted session. Please retry or download it.");
@@ -3395,6 +3230,16 @@ CONFIDENTIAL - FOR INTERNAL ADMISSIONS AUDIT & MANAGEMENT QUALITY COACHING ONLY
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-300 text-xs font-bold border border-emerald-300 dark:border-emerald-800">
               <CheckCircle size={13} />
               <span>Voice &amp; Text Ready</span>
+            </span>
+          )}
+
+          {bgQueueSnapshot && (bgQueueSnapshot.activeJob || bgQueueSnapshot.queuedJobs.length > 0) && (
+            <span
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-sky-100 dark:bg-sky-900/40 text-sky-800 dark:text-sky-200 text-[11px] font-bold border border-sky-300 dark:border-sky-800"
+              title="Audio is safely stored locally and uploading to Cloudflare R2 in the background. You can click Save Enquiry right now."
+            >
+              <RefreshCw size={12} className="animate-spin text-sky-600 dark:text-sky-300" />
+              <span>Cloud Sync ({bgQueueSnapshot.pendingCount})</span>
             </span>
           )}
 

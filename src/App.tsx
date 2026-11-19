@@ -74,7 +74,7 @@ import PortalErrorBoundary from "./components/PortalErrorBoundary";
 import { loadData, saveData, calculateExpiryDate, resetToDefaults, clearAllData, loadCounselling, saveCounselling, deduplicateEnquiries, loadCounsellorAccounts, saveCounsellorAccounts, mergeWithDemoEnquiries, mergeWithDefaultCounsellorAccounts, recordDeletedCounsellorAccountId, unrecordDeletedCounsellorAccountId, recordDeletedCounsellorAccountIds, recordDeletedEnquiryId, recordDeletedEnquiryIds, replaceDeletedEnquiryIds, getDeletedEnquiryIds, unmarkDeletedEnquiryId, mergeWithDefaultITStaffAccounts, saveITStaffAccounts, loadITStaffAccounts, recordDeletedITStaffAccountId, getUnsyncedEnquiryIds, markEnquiryUnsynced, unmarkEnquiryUnsynced, loadParentSelfEntries, saveParentSelfEntries } from "./utils/storage";
 import { isObsoleteOrDuplicateCounsellorAccount, cleanAndNormalizeCounsellorAccounts, normalizeAllEnquiries, normalizeEnquiryCounsellor, normalizeCounsellorIdentity } from "./utils/counsellorNormalizer";
 import { synthesizeAndMergeEnquiries, isSameStudentRecord, extractEnquirySerialNum, formatCanonicalEnquiryNo } from "./utils/enquirySynthesis";
-import { AlertTriangle, X, Bell, ArrowRight, RefreshCw, Share2, Smartphone } from "lucide-react";
+import { AlertTriangle, X, Bell, ArrowRight, RefreshCw, Share2, Smartphone, Cloud, CheckCircle2 } from "lucide-react";
 import { Ticket, InventoryItem, Room, EmployeeAllocation, WarrantyContract, SchoolBranch, getNextTicketId, getNowFormatted, CounsellingEnquiry, CounsellorAccount, ManagementAccount, loadManagementAccounts, saveManagementAccounts, recordDeletedManagementAccountId, unrecordDeletedManagementAccountId, mergeWithDefaultManagementAccounts, ITStaffAccount, ParentSelfEntry, recordHighestEnquiryNumber } from "./types";
 import { motion, AnimatePresence } from "motion/react";
 import { 
@@ -91,7 +91,16 @@ import {
   prepareEnquiryForFirestore
 } from "./utils/firebase";
 import { checkBackupStatus, syncAllToMongoBackup, fetchFromMongoBackup, saveToMongoBackup, deleteFromMongoBackup } from "./utils/backupClient";
-import { sanitizeAudioDuration, formatAudioDuration } from "./utils/audioStorage";
+import { sanitizeAudioDuration, formatAudioDuration, findAudioRecordingBlob } from "./utils/audioStorage";
+import {
+  enqueueBackgroundAudioUpload,
+  subscribeBackgroundAudioQueue,
+  onBackgroundAudioComplete,
+  retryFailedBackgroundAudioUploads,
+  dismissFailedBackgroundAudioUploads,
+  isJobInBackgroundAudioQueue,
+  BackgroundAudioQueueSnapshot
+} from "./utils/backgroundAudioQueue";
 
 
 export default function App() {
@@ -936,6 +945,169 @@ export default function App() {
     }
   }, []);
 
+  // Root-level Background Audio Upload Queue listener (survives form save/close across back-to-back parents)
+  const [bgAudioQueueSnap, setBgAudioQueueSnap] = useState<BackgroundAudioQueueSnapshot | null>(null);
+  const [bgAudioCompletedBanner, setBgAudioCompletedBanner] = useState<{ enquiryNo: string; studentName?: string } | null>(null);
+  const bgAudioCompletedTimerRef = React.useRef<any>(null);
+  const bgAudioRecoverySweepDoneRef = React.useRef<boolean>(false);
+
+  useEffect(() => {
+    const unsubQueue = subscribeBackgroundAudioQueue((snap) => {
+      setBgAudioQueueSnap(snap);
+    });
+
+    const unsubComplete = onBackgroundAudioComplete((res) => {
+      setBgAudioCompletedBanner({
+        enquiryNo: res.enquiryNo || "Audio",
+        studentName: undefined
+      });
+      if (bgAudioCompletedTimerRef.current) clearTimeout(bgAudioCompletedTimerRef.current);
+      bgAudioCompletedTimerRef.current = setTimeout(() => {
+        setBgAudioCompletedBanner(null);
+      }, 4500);
+
+      setCounsellingEnquiries((current) => {
+        let changed = false;
+        const changedItems: CounsellingEnquiry[] = [];
+        const targetNoLower = (res.enquiryNo || "").trim().toLowerCase();
+        const targetFileLower = (res.fileName || "").trim().toLowerCase();
+        const targetRecLower = (res.recordingId || "").trim().toLowerCase();
+
+        const updatedList = current.map((item) => {
+          if (!item || !item.audioRecording) return item;
+          const rec = item.audioRecording as any;
+          const itemNoLower = (item.enquiryNo || "").trim().toLowerCase();
+          const itemRecNoLower = (rec.enquiryNo || "").trim().toLowerCase();
+          const itemFileLower = (rec.fileName || "").trim().toLowerCase();
+          const itemRecIdLower = (rec.id || "").trim().toLowerCase();
+
+          const matches =
+            (res.enquiryId && item.id === res.enquiryId) ||
+            (targetNoLower && targetNoLower !== "enq-pending" && (itemNoLower === targetNoLower || itemRecNoLower === targetNoLower)) ||
+            (targetFileLower && itemFileLower === targetFileLower) ||
+            (targetRecLower && (itemRecIdLower === targetRecLower || itemRecIdLower === `${targetRecLower}-sib`));
+
+          if (!matches) return item;
+
+          changed = true;
+          const safeDur = sanitizeAudioDuration(rec.durationSeconds ?? res.durationSeconds, 0);
+          const nextRec: any = {
+            ...rec,
+            durationSeconds: safeDur,
+            ...(safeDur > 0 && (!rec.durationFormatted || rec.durationFormatted === "00:00")
+              ? { durationFormatted: formatAudioDuration(safeDur) }
+              : {}),
+            fileName: rec.fileName || res.fileName,
+            storageKey: rec.storageKey || rec.id || res.recordingId,
+            ...(res.r2Synced ? { cloudR2Synced: true } : {}),
+            ...(res.serverAudioUrl ? { driveFileUrl: res.serverAudioUrl, audioUrl: res.serverAudioUrl, driveFileId: rec.driveFileId || res.recordingId } : {}),
+            ...(res.driveFileId ? { driveFileId: res.driveFileId } : {}),
+            ...(res.driveFileUrl ? { driveFileUrl: res.driveFileUrl } : {}),
+            ...(res.driveSyncedAt ? { driveSyncedAt: res.driveSyncedAt } : {}),
+            ...(res.enhancedTranscript ? { meetingTextSummary: res.enhancedTranscript } : {}),
+            queuedBackgroundUpload: false
+          };
+          delete nextRec.queuedBackgroundUpload;
+          delete nextRec.cloudUploadedThisSession;
+
+          const updatedItem: CounsellingEnquiry = {
+            ...item,
+            audioRecording: nextRec
+          };
+          changedItems.push(updatedItem);
+          return updatedItem;
+        });
+
+        if (changed) {
+          saveCounselling(updatedList);
+          changedItems.forEach((updatedItem) => {
+            if (isFirebaseConfigured()) {
+              const targetDocId = (updatedItem.enquiryNo || updatedItem.id || `ENQ-${Date.now()}`).trim();
+              saveDocument("counselling_forms", targetDocId, prepareEnquiryForFirestore(updatedItem)).catch(() => {});
+            }
+            const cleanServerItem: any = { ...updatedItem };
+            if (cleanServerItem.audioRecording) {
+              cleanServerItem.audioRecording = { ...cleanServerItem.audioRecording };
+              delete cleanServerItem.audioRecording.audioData;
+            }
+            fetch("/api/counselling", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(cleanServerItem)
+            }).catch(() => {});
+          });
+        }
+        return changed ? updatedList : current;
+      });
+    });
+
+    return () => {
+      unsubQueue();
+      unsubComplete();
+      if (bgAudioCompletedTimerRef.current) clearTimeout(bgAudioCompletedTimerRef.current);
+    };
+  }, []);
+
+  // Startup Recovery Sweep: Resume any local IndexedDB recordings that never finished syncing to Cloud R2 (e.g. closed laptop too early)
+  useEffect(() => {
+    if (!isLoggedIn || isParentKioskMode || bgAudioRecoverySweepDoneRef.current) return;
+    if (!counsellingEnquiries || counsellingEnquiries.length === 0) return;
+    bgAudioRecoverySweepDoneRef.current = true;
+
+    const timer = setTimeout(async () => {
+      try {
+        const candidates = counsellingEnquiries
+          .slice(0, 25)
+          .filter((item) => {
+            const rec: any = item?.audioRecording;
+            if (!rec) return false;
+            if (rec.isJointSiblingSession) return false;
+            const hasHttpUrl = typeof rec.driveFileUrl === "string" && rec.driveFileUrl.startsWith("http");
+            if (rec.cloudR2Synced || hasHttpUrl) return false;
+            const key = rec.fileName || item.enquiryNo || item.id || "";
+            if (!key || isJobInBackgroundAudioQueue(key)) return false;
+            return true;
+          });
+
+        for (const item of candidates) {
+          const rec: any = item.audioRecording!;
+          const localBlob = await findAudioRecordingBlob([
+            rec.storageKey,
+            rec.id,
+            rec.fileName,
+            item.enquiryNo,
+            item.id,
+            item.enquiryNo ? `audio-${item.enquiryNo.trim()}` : undefined
+          ]);
+          if (localBlob instanceof Blob && localBlob.size > 500) {
+            const fileName = rec.fileName || `${item.enquiryNo || item.id}_Meeting_${new Date().toISOString().slice(0, 10)}.webm`;
+            enqueueBackgroundAudioUpload({
+              enquiryId: item.id,
+              enquiryNo: item.enquiryNo || item.id,
+              recordingId: rec.id || fileName,
+              storageKey: rec.storageKey || rec.id || fileName,
+              fileName,
+              mimeType: rec.mimeType || localBlob.type || "audio/webm",
+              durationSeconds: sanitizeAudioDuration(rec.durationSeconds, 10),
+              fileSizeBytes: localBlob.size,
+              studentName: item.studentName,
+              counsellorId: item.counsellorId,
+              counsellorName: item.counsellorName,
+              applyingForClass: item.applyingForClass,
+              parentLanguage: rec.parentLanguage,
+              meetingTextSummary: rec.meetingTextSummary,
+              audioSource: rec.audioSource || "Hardware Microphone",
+              runServerTranscribe: false,
+              blob: localBlob
+            });
+          }
+        }
+      } catch {}
+    }, 3500);
+
+    return () => clearTimeout(timer);
+  }, [isLoggedIn, isParentKioskMode, counsellingEnquiries]);
+
   // Automatic daily JSON snapshot backup downloader (RESTRICTED: ONLY FOR MAIN SUPER ADMIN ACCOUNT ON MAIN DASHBOARD)
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1536,10 +1708,14 @@ export default function App() {
     const serial = extractEnquirySerialNum(resolvedNo);
     if (serial) recordHighestEnquiryNumber(serial);
 
-    const alreadyUploadedByRecorder = Boolean((enquiry.audioRecording as any)?.cloudUploadedThisSession);
+    const alreadyQueuedOrUploadedByRecorder = Boolean(
+      (enquiry.audioRecording as any)?.cloudUploadedThisSession ||
+      (enquiry.audioRecording as any)?.queuedBackgroundUpload
+    );
     const sanitizedAudioRec = enquiry.audioRecording ? (() => {
       const copy: any = { ...enquiry.audioRecording };
       delete copy.cloudUploadedThisSession;
+      delete copy.queuedBackgroundUpload;
       const safeDur = sanitizeAudioDuration(copy.durationSeconds, 0);
       copy.durationSeconds = safeDur;
       if (safeDur > 0 && (!copy.durationFormatted || copy.durationFormatted === "00:00")) {
@@ -1649,43 +1825,39 @@ export default function App() {
     // 2. Save to Firestore
     saveToFirestore(cleanEnquiry);
 
-    // 3. Direct Cloudflare R2 Background Upload (Only if AudioMeetingRecorder hasn't already uploaded this session)
-    if (!alreadyUploadedByRecorder && cleanEnquiry.audioRecording?.audioData && cleanEnquiry.audioRecording.audioData.length > 50) {
-      const audioPayload = cleanEnquiry.audioRecording.audioData;
-      const mimeType = cleanEnquiry.audioRecording.mimeType || "audio/webm";
-      const r2FileName = cleanEnquiry.audioRecording.fileName || `${cleanEnquiry.enquiryNo || 'ENQ'}_Meeting_${new Date().toISOString().slice(0, 10)}.webm`;
-      import("./utils/cloudflareR2Client")
-        .then(async ({ loadR2Credentials, uploadToR2Direct }) => {
-          const creds = loadR2Credentials();
-          const ok = await uploadToR2Direct(creds, r2FileName, audioPayload, mimeType);
-          if (ok) {
-            setCounsellingEnquiries(current => {
-              let changed = false;
-              const updatedList = current.map(item => {
-                if (item.id === cleanEnquiry.id && item.audioRecording) {
-                  changed = true;
-                  const nextItem: CounsellingEnquiry = {
-                    ...item,
-                    audioRecording: {
-                      ...item.audioRecording,
-                      fileName: item.audioRecording.fileName || r2FileName,
-                      cloudR2Synced: true as any
-                    } as any
-                  };
-                  saveToFirestore(nextItem);
-                  return nextItem;
-                }
-                return item;
-              });
-              if (changed) saveCounselling(updatedList);
-              return updatedList;
-            });
-          }
-        })
-        .catch((err) => console.warn("Background R2 audio auto-upload notice:", err));
+    // 3. Background Cloud R2 / Server Audio Upload (only if AudioMeetingRecorder hasn't already queued or uploaded it)
+    const recMeta: any = cleanEnquiry.audioRecording;
+    if (
+      !alreadyQueuedOrUploadedByRecorder &&
+      recMeta &&
+      !recMeta.isJointSiblingSession &&
+      !recMeta.cloudR2Synced &&
+      !isJobInBackgroundAudioQueue(recMeta.fileName || cleanEnquiry.enquiryNo || cleanEnquiry.id) &&
+      ((recMeta.audioData && recMeta.audioData.length > 50) || recMeta.storageKey || recMeta.fileName)
+    ) {
+      const r2FileName = recMeta.fileName || `${cleanEnquiry.enquiryNo || "ENQ"}_Meeting_${new Date().toISOString().slice(0, 10)}.webm`;
+      enqueueBackgroundAudioUpload({
+        enquiryId: cleanEnquiry.id,
+        enquiryNo: cleanEnquiry.enquiryNo || cleanEnquiry.id,
+        recordingId: recMeta.id || r2FileName,
+        storageKey: recMeta.storageKey || recMeta.id || r2FileName,
+        fileName: r2FileName,
+        mimeType: recMeta.mimeType || "audio/webm",
+        durationSeconds: sanitizeAudioDuration(recMeta.durationSeconds, 10),
+        fileSizeBytes: recMeta.fileSizeBytes,
+        studentName: cleanEnquiry.studentName,
+        counsellorId: cleanEnquiry.counsellorId,
+        counsellorName: cleanEnquiry.counsellorName,
+        applyingForClass: cleanEnquiry.applyingForClass,
+        parentLanguage: recMeta.parentLanguage,
+        meetingTextSummary: recMeta.meetingTextSummary,
+        audioSource: recMeta.audioSource || "Hardware Microphone",
+        runServerTranscribe: false,
+        fallbackBase64Data: typeof recMeta.audioData === "string" ? recMeta.audioData : undefined
+      });
     }
 
-    // 4. Express Server API sync + Audio File Storage Vault (for Node.js dev / Express environments)
+    // 4. Express Server API metadata sync (lightweight — strips inline audioData)
     try {
       const cleanServerEnquiry = { ...cleanEnquiry };
       if (cleanServerEnquiry.audioRecording) {
@@ -1697,64 +1869,6 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(cleanServerEnquiry)
       }).catch(() => {});
-
-      // If audio base64 is present and wasn't already uploaded by recorder, upload to server disk media vault
-      if (!alreadyUploadedByRecorder && cleanEnquiry.audioRecording?.audioData && cleanEnquiry.audioRecording.audioData.length > 100) {
-        fetch("/api/upload-audio", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            enquiryNo: cleanEnquiry.enquiryNo,
-            id: cleanEnquiry.id,
-            audioBase64: cleanEnquiry.audioRecording.audioData,
-            filename: cleanEnquiry.audioRecording.fileName || `${cleanEnquiry.enquiryNo || 'ENQ'}_Meeting_${new Date().toISOString().slice(0, 10)}.webm`,
-            mimeType: cleanEnquiry.audioRecording.mimeType || "audio/webm",
-            meetingTextSummary: cleanEnquiry.audioRecording.meetingTextSummary || "",
-            durationSeconds: cleanEnquiry.audioRecording.durationSeconds,
-            counsellorId: cleanEnquiry.counsellorId,
-            counsellorName: cleanEnquiry.counsellorName,
-            studentName: cleanEnquiry.studentName
-          })
-        }).then(async (r) => {
-          const ct = r.headers.get("content-type") || "";
-          if (!r.ok || !ct.includes("application/json")) return null;
-          return r.json();
-        }).then(res => {
-          if (res?.success && res?.audioUrl) {
-            const safeServerDur = sanitizeAudioDuration(res.durationSeconds ?? cleanEnquiry.audioRecording?.durationSeconds, 0);
-            const updatedEnquiry: CounsellingEnquiry = {
-              ...cleanEnquiry,
-              audioRecording: {
-                ...cleanEnquiry.audioRecording!,
-                durationSeconds: safeServerDur,
-                storageKey: cleanEnquiry.audioRecording?.storageKey || cleanEnquiry.audioRecording?.id || cleanEnquiry.id,
-                driveFileUrl: res.audioUrl,
-                driveFileId: cleanEnquiry.audioRecording?.driveFileId || cleanEnquiry.id,
-                ...(res.r2Synced ? { cloudR2Synced: true as any } : {})
-              }
-            };
-            // Update state & Firestore with real stream URL
-            setCounsellingEnquiries(current => {
-              const updatedList = current.map(item => item.id === cleanEnquiry.id ? updatedEnquiry : item);
-              saveCounselling(updatedList);
-              return updatedList;
-            });
-            saveToFirestore(updatedEnquiry);
-
-            // Also persist clean updatedEnquiry to server
-            const cleanUpdated = { ...updatedEnquiry };
-            if (cleanUpdated.audioRecording?.audioData) {
-              cleanUpdated.audioRecording = { ...cleanUpdated.audioRecording };
-              delete (cleanUpdated.audioRecording as any).audioData;
-            }
-            fetch("/api/counselling", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(cleanUpdated)
-            }).catch(() => {});
-          }
-        }).catch(() => {});
-      }
     } catch (_) {}
   };
 
@@ -2878,6 +2992,84 @@ export default function App() {
           />
         )}
       </React.Suspense>
+
+      {/* Floating Background Cloud Audio Upload Status Pill (Non-Blocking — appears only during active/failed/recent upload) */}
+      {!isParentKioskMode && isLoggedIn && (
+        (bgAudioQueueSnap && (bgAudioQueueSnap.pendingCount > 0 || bgAudioQueueSnap.failedJobs.length > 0)) || bgAudioCompletedBanner
+      ) && (
+        <div className="fixed bottom-4 right-4 z-[9990] flex flex-col gap-2 max-w-sm pointer-events-auto">
+          {bgAudioQueueSnap && bgAudioQueueSnap.pendingCount > 0 && (
+            <div className="bg-slate-900/95 text-white border border-sky-500/40 rounded-2xl px-4 py-3 shadow-2xl backdrop-blur-md flex items-start gap-3">
+              <div className="w-8 h-8 rounded-xl bg-sky-500/20 border border-sky-400/30 flex items-center justify-center shrink-0 mt-0.5">
+                <RefreshCw size={15} className="animate-spin text-sky-400" />
+              </div>
+              <div className="min-w-0 flex-1 space-y-0.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-black uppercase tracking-wider text-sky-300 flex items-center gap-1.5">
+                    <Cloud size={12} />
+                    Cloud Audio Sync ({bgAudioQueueSnap.pendingCount} left)
+                  </span>
+                </div>
+                <p className="text-xs font-bold text-white truncate">
+                  {bgAudioQueueSnap.activeJob?.enquiryNo || "Audio"}
+                  {bgAudioQueueSnap.activeJob?.studentName ? ` • ${bgAudioQueueSnap.activeJob.studentName}` : ""}
+                </p>
+                <p className="text-[11px] text-slate-300">
+                  {bgAudioQueueSnap.activeJob?.phase === "uploading_r2"
+                    ? "Uploading audio to Cloud R2..."
+                    : bgAudioQueueSnap.activeJob?.phase === "uploading_server"
+                    ? "Syncing audio & speech transcript..."
+                    : bgAudioQueueSnap.activeJob?.phase === "syncing_drive"
+                    ? "Backing up to Google Drive..."
+                    : "Preparing background upload..."}
+                </p>
+                <p className="text-[10px] font-bold text-emerald-300">
+                  Save &amp; Next Parent unlocked — keep working normally!
+                </p>
+              </div>
+            </div>
+          )}
+
+          {bgAudioQueueSnap && bgAudioQueueSnap.failedJobs.length > 0 && (
+            <div className="bg-amber-950/95 text-amber-50 border border-amber-500/50 rounded-2xl px-4 py-3 shadow-2xl backdrop-blur-md flex items-start gap-3">
+              <AlertTriangle size={16} className="text-amber-400 shrink-0 mt-0.5" />
+              <div className="min-w-0 flex-1 space-y-1.5">
+                <p className="text-xs font-black text-amber-200">
+                  {bgAudioQueueSnap.failedJobs.length} Cloud Audio Upload{bgAudioQueueSnap.failedJobs.length > 1 ? "s" : ""} Paused
+                </p>
+                <p className="text-[11px] text-amber-100/90 leading-snug">
+                  Audio is safely saved on this device ({bgAudioQueueSnap.failedJobs.map(f => f.enquiryNo).join(", ")}). Will auto-retry when internet reconnects.
+                </p>
+                <div className="flex items-center gap-2 pt-0.5">
+                  <button
+                    type="button"
+                    onClick={() => retryFailedBackgroundAudioUploads()}
+                    className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-[11px] font-black cursor-pointer transition-all"
+                  >
+                    Retry Upload Now
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => dismissFailedBackgroundAudioUploads()}
+                    className="px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-amber-100 text-[11px] font-bold cursor-pointer transition-all"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {bgAudioCompletedBanner && (!bgAudioQueueSnap || bgAudioQueueSnap.pendingCount === 0) && (
+            <div className="bg-emerald-950/95 text-emerald-50 border border-emerald-500/40 rounded-2xl px-4 py-2.5 shadow-xl backdrop-blur-md flex items-center gap-2.5">
+              <CheckCircle2 size={16} className="text-emerald-400 shrink-0" />
+              <div className="text-xs font-bold">
+                ✅ {bgAudioCompletedBanner.enquiryNo} audio synced to Cloud Vault!
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Real-Time In-App Live Auto-Update Notifier */}
       <AppUpdateNotifier />
