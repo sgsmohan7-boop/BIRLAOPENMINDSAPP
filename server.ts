@@ -4599,6 +4599,18 @@ Next Milestone: Proactive engagement with parent within 24-48 hours to complete 
     res.sendFile(swPath);
   });
 
+  app.get(["/presentation.html", "/presentation"], (_req, res) => {
+    const publicPres = path.join(process.cwd(), "public", "presentation.html");
+    const distPres = path.join(process.cwd(), "dist", "presentation.html");
+    const presPath = fs.existsSync(publicPres) ? publicPres : distPres;
+    if (!fs.existsSync(presPath)) {
+      return res.status(404).send("Presentation not found");
+    }
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    return res.sendFile(presPath);
+  });
+
   // Static Asset Serving (Production & Dist fallback) vs Vite Dev Middleware
   // Static Asset Serving (Production & Dist fallback) vs Vite Dev Middleware
   const resolvedDir = typeof import.meta.dirname === "string" ? import.meta.dirname : process.cwd();

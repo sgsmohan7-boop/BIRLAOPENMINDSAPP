@@ -118,11 +118,11 @@ export function normalizeCounsellorIdentity(inputName?: string, inputId?: string
     };
   }
 
-  // 5. Test (Strict match to prevent false-positive remapping of active counsellors)
+  // 5. Test (Strict match to prevent false-positive remapping when COUNSELLOR-05 is renamed by Admin)
   if (
-    idToken === "COUNSELLOR05" ||
     rawName.toLowerCase() === "test" ||
     rawName.toLowerCase() === "testing" ||
+    (!rawName && idToken === "COUNSELLOR05") ||
     rawName.toLowerCase() === "counsellor-05"
   ) {
     return {
@@ -254,8 +254,19 @@ export function cleanAndNormalizeCounsellorAccounts(accounts: CounsellorAccount[
       if (isObsoleteOrDuplicateCounsellorAccount(acc)) continue;
 
       const norm = normalizeCounsellorIdentity(acc.name, acc.id);
-      const usernameKey = norm.username.toLowerCase();
-      const idKey = norm.id.toLowerCase();
+      const rawUsername = (acc.username || "").trim().toLowerCase();
+      // Preserve Admin-configured username for custom accounts or renamed slots; only canonicalize Sowjanya/Kavya/Radhika/Sravan aliases
+      const isCanonicalAlias =
+        norm.username === "sowjanya" ||
+        norm.username === "kavya" ||
+        norm.username === "radhika" ||
+        norm.username === "sravan";
+      const resolvedUsername = isCanonicalAlias ? norm.username : (rawUsername || norm.username);
+      const resolvedId = (acc.id || norm.id || "").trim() || norm.id;
+      const resolvedName = isCanonicalAlias ? norm.name : ((acc.name || "").trim() || norm.name);
+
+      const usernameKey = resolvedUsername.toLowerCase();
+      const idKey = resolvedId.toLowerCase();
 
       if (seenUsernames.has(usernameKey) || seenIds.has(idKey)) {
         continue;
@@ -266,11 +277,11 @@ export function cleanAndNormalizeCounsellorAccounts(accounts: CounsellorAccount[
 
       cleaned.push({
         ...acc,
-        id: norm.id,
-        name: norm.name,
-        username: norm.username,
+        id: resolvedId,
+        name: resolvedName,
+        username: resolvedUsername,
         // Guarantee password for core accounts
-        password: norm.username === "sowjanya" ? (acc.password || "12345") : acc.password
+        password: resolvedUsername === "sowjanya" ? (acc.password || "12345") : acc.password
       });
     }
   }

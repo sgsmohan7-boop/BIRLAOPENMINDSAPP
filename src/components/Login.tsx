@@ -31,9 +31,9 @@ import {
   Sliders,
   Globe
 } from "lucide-react";
-import { collection, getDocs, getDocsFromServer } from "firebase/firestore";
+import { collection, getDocs, getDocsFromServer, enableNetwork } from "firebase/firestore";
 import { SchoolBranch, COUNSELLORS_LIST, CounsellorProfile, CounsellorAccount, ManagementAccount, loadManagementAccounts, saveManagementAccounts, mergeWithDefaultManagementAccounts, ITStaffAccount } from "../types";
-import { signInAsDesktopUser, loginWithEmail, getUserIAMRole, isFirebaseConfigured, isFirestoreQuotaExhausted, db } from "../utils/firebase";
+import { signInAsDesktopUser, loginWithEmail, getUserIAMRole, isFirebaseConfigured, isFirestoreQuotaExhausted, fetchCollectionDocs, db } from "../utils/firebase";
 import { loadCounsellorAccounts, saveCounsellorAccounts, mergeWithDefaultCounsellorAccounts, getDeletedCounsellorAccountIds, recordDeletedCounsellorAccountIds, loadITStaffAccounts, saveITStaffAccounts, mergeWithDefaultITStaffAccounts } from "../utils/storage";
 import PortalLinksModal from "./PortalLinksModal";
 
@@ -269,22 +269,27 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
     };
   }, []);
 
-  // Real-time server pull so ANY browser tab or device immediately receives Admin-created accounts
+  // Real-time server + Firestore cloud pull so ANY browser tab or device immediately receives Admin-created accounts
   useEffect(() => {
     let isMounted = true;
     const fetchLiveAccounts = async () => {
       let serverLoadedMgmt = false;
       let serverLoadedIT = false;
+      let serverCounsellors: CounsellorAccount[] = [];
+      let serverDeletedCounsellors: string[] = [];
+
       try {
         const res = await fetch("/api/accounts");
         if (res.ok) {
           const json = await res.json();
           if (json.success && json.accounts && isMounted) {
             const extraDeleted = Array.isArray(json.accounts.deletedCounsellors) ? json.accounts.deletedCounsellors : [];
+            serverDeletedCounsellors = extraDeleted;
             if (extraDeleted.length > 0) {
               recordDeletedCounsellorAccountIds(extraDeleted);
             }
             if (Array.isArray(json.accounts.counsellors) && json.accounts.counsellors.length > 0) {
+              serverCounsellors = json.accounts.counsellors;
               const merged = mergeWithDefaultCounsellorAccounts(json.accounts.counsellors, extraDeleted);
               setLiveCounsellorAccounts(merged);
               saveCounsellorAccounts(merged);
@@ -344,8 +349,35 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
         }
       }
 
-      // Only query Firestore on Login mount if Express server failed AND read quota is healthy
+      // Always pull latest counsellor_accounts from Firestore on Login mount so accounts created on ANY device/domain sync immediately
       if (isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
+        try {
+          const [fsCounsellors, fsDeleted] = await Promise.all([
+            fetchCollectionDocs<CounsellorAccount>("counsellor_accounts", true),
+            fetchCollectionDocs<{ id: string; username?: string }>("deleted_counsellor_accounts", false)
+          ]);
+
+          const cloudDeletedIds = Array.isArray(fsDeleted)
+            ? fsDeleted.map(d => d.id || d.username || "").filter(Boolean)
+            : [];
+          if (cloudDeletedIds.length > 0) {
+            recordDeletedCounsellorAccountIds(cloudDeletedIds);
+          }
+
+          if (Array.isArray(fsCounsellors) && fsCounsellors.length > 0 && isMounted) {
+            const combinedDeleted = [...serverDeletedCounsellors, ...cloudDeletedIds];
+            // Prioritize Firestore cloud accounts first, then merge server accounts
+            const merged = mergeWithDefaultCounsellorAccounts(
+              [...fsCounsellors, ...serverCounsellors],
+              combinedDeleted
+            );
+            setLiveCounsellorAccounts(merged);
+            saveCounsellorAccounts(merged);
+          }
+        } catch (e) {
+          console.warn("Firestore live counsellor accounts preload warning:", e);
+        }
+
         if (!serverLoadedMgmt) {
           try {
             const snapMgmt = await getDocs(collection(db, "management_accounts"));
@@ -726,11 +758,11 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
     // Security Guard: Prevent IT Staff accounts from authenticating in Parent Counselling Portal
     const itStaffList = loadITStaffAccounts();
     const matchedIT = itStaffList.find(s => 
-      s.username.toLowerCase() === u || 
-      s.email.toLowerCase() === u || 
-      s.id.toLowerCase() === u ||
-      s.name.toLowerCase() === u ||
-      s.name.toLowerCase().replace(/[^a-z0-9]/g, "") === u.replace(/[^a-z0-9]/g, "")
+      (s.username || "").trim().toLowerCase() === u || 
+      (s.email || "").trim().toLowerCase() === u || 
+      (s.id || "").trim().toLowerCase() === u ||
+      (s.name || "").trim().toLowerCase() === u ||
+      (s.name || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "") === u.replace(/[^a-z0-9]/g, "")
     );
     if (matchedIT) {
       setError(`🔒 Access Denied: "${matchedIT.name}" is an IT Staff account. IT Staff accounts are restricted exclusively to the Admin IT Command Hub and cannot access Parent Counselling.`);
@@ -740,163 +772,160 @@ export default function Login({ onLogin, theme = "light", toggleTheme, counsello
     const matchAccount = (accList: CounsellorAccount[]) => {
       const uNorm = u.replace(/[^a-z0-9]/g, "");
       // 1. Exact username match (Top Priority)
-      const exactUser = accList.find(a => a.username.toLowerCase() === u);
+      const exactUser = accList.find(a => (a.username || "").trim().toLowerCase() === u);
       if (exactUser) return exactUser;
 
       // 2. Exact email match
-      const exactEmail = accList.find(a => a.email.toLowerCase() === u);
+      const exactEmail = accList.find(a => (a.email || "").trim().toLowerCase() === u);
       if (exactEmail) return exactEmail;
 
       // 3. Exact ID match
-      const exactId = accList.find(a => a.id.toLowerCase() === u);
+      const exactId = accList.find(a => (a.id || "").trim().toLowerCase() === u);
       if (exactId) return exactId;
 
       // 4. Normalized username match
-      const normUser = accList.find(a => a.username.toLowerCase().replace(/[^a-z0-9]/g, "") === uNorm);
+      const normUser = accList.find(a => (a.username || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "") === uNorm);
       if (normUser) return normUser;
 
       // 5. Normalized ID match
-      return accList.find(a => (a.id || "").toLowerCase().replace(/[^a-z0-9]/g, "") === uNorm);
+      return accList.find(a => (a.id || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "") === uNorm);
     };
 
-    // 1. Always fetch latest counsellor_accounts from Firestore server first (with 1.8s guard) so password updates & profiles match across laptops
-    let found: CounsellorAccount | undefined;
-    if (isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
-      try {
-        const snap = await Promise.race([
-          getDocsFromServer(collection(db, "counsellor_accounts")),
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), 1800))
-        ]);
-        if (snap && "forEach" in snap) {
+    setIsLoading(true);
+    setError("");
+
+    try {
+      // 1. Always fetch latest counsellor_accounts from Firestore server first (with 8s guard for cold mobile/browser connections)
+      let found: CounsellorAccount | undefined;
+      if (isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
+        try {
+          try { await enableNetwork(db); } catch {}
+          const snap = await Promise.race([
+            getDocsFromServer(collection(db, "counsellor_accounts")),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 8000))
+          ]);
+          if (snap && "forEach" in snap) {
+            const fsItems: CounsellorAccount[] = [];
+            snap.forEach(d => fsItems.push({ id: d.id, ...d.data() } as CounsellorAccount));
+            if (fsItems.length > 0) {
+              const merged = mergeWithDefaultCounsellorAccounts(fsItems);
+              setLiveCounsellorAccounts(merged);
+              saveCounsellorAccounts(merged);
+              found = matchAccount(merged) || matchAccount(fsItems);
+            }
+          }
+        } catch (err) {
+          console.warn("Firestore live counsellor accounts query notice:", err);
+        }
+      }
+
+      // 2. Fall back to live state and localStorage if offline or already preloaded
+      if (!found) {
+        const localCounsellors = loadCounsellorAccounts();
+        found = matchAccount([...activeCounsellorAccounts, ...localCounsellors]);
+      }
+
+      // 3. Query local server repo if still not found
+      if (!found) {
+        try {
+          const res = await fetch("/api/accounts");
+          if (res.ok) {
+            const json = await res.json();
+            if (json.success && json.accounts && Array.isArray(json.accounts.counsellors)) {
+              const extraDeleted = Array.isArray(json.accounts.deletedCounsellors) ? json.accounts.deletedCounsellors : [];
+              const merged = mergeWithDefaultCounsellorAccounts(json.accounts.counsellors, extraDeleted);
+              setLiveCounsellorAccounts(merged);
+              saveCounsellorAccounts(merged);
+              found = matchAccount(merged) || matchAccount(json.accounts.counsellors);
+            }
+          }
+        } catch (e) {
+          console.warn("Direct counsellor accounts fetch failed:", e);
+        }
+      }
+
+      // 4. Cached Firestore query fallback if server call timed out
+      if (!found && isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
+        try {
+          const snap = await getDocs(collection(db, "counsellor_accounts"));
           const fsItems: CounsellorAccount[] = [];
           snap.forEach(d => fsItems.push({ id: d.id, ...d.data() } as CounsellorAccount));
           if (fsItems.length > 0) {
             const merged = mergeWithDefaultCounsellorAccounts(fsItems);
             setLiveCounsellorAccounts(merged);
             saveCounsellorAccounts(merged);
-            found = matchAccount(merged);
+            found = matchAccount(merged) || matchAccount(fsItems);
           }
+        } catch (err) {
+          console.warn("Firestore fallback counsellor accounts query failed:", err);
         }
-      } catch (err) {
-        console.warn("Firestore live counsellor accounts query notice:", err);
       }
-    }
 
-    // 2. Fall back to live state and localStorage if offline or not found
-    if (!found) {
-      const localCounsellors = loadCounsellorAccounts();
-      found = matchAccount([...activeCounsellorAccounts, ...localCounsellors]);
-    }
+      // If not found in counsellor accounts, check if it was created as Management!
+      if (!found) {
+        const mgmtFound = activeManagementAccounts.find(m => 
+          (m.username || "").trim().toLowerCase() === u || 
+          (m.email || "").trim().toLowerCase() === u || 
+          (m.id || "").trim().toLowerCase() === u ||
+          (m.name || "").trim().toLowerCase() === u ||
+          (m.name || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "") === u.replace(/[^a-z0-9]/g, "")
+        );
 
-    // 3. Query local server repo if still not found
-    if (!found) {
-      try {
-        const res = await fetch("/api/accounts");
-        if (res.ok) {
-          const json = await res.json();
-          if (json.success && json.accounts && Array.isArray(json.accounts.counsellors)) {
-            const extraDeleted = Array.isArray(json.accounts.deletedCounsellors) ? json.accounts.deletedCounsellors : [];
-            const merged = mergeWithDefaultCounsellorAccounts(json.accounts.counsellors, extraDeleted);
-            setLiveCounsellorAccounts(merged);
-            saveCounsellorAccounts(merged);
-            found = matchAccount(merged);
+        if (mgmtFound) {
+          try {
+            await signInAsDesktopUser(mgmtFound.name);
+          } catch (e: any) {
+            console.warn("Desktop user signin notice:", e);
           }
+          onLogin(branch, mgmtFound.email, "Management");
+          return;
         }
-      } catch (e) {
-        console.warn("Direct counsellor accounts fetch failed:", e);
       }
-    }
 
-    // 4. Cached Firestore query fallback if server call timed out
-    if (!found && isFirebaseConfigured() && !isFirestoreQuotaExhausted()) {
-      try {
-        const snap = await getDocs(collection(db, "counsellor_accounts"));
-        const fsItems: CounsellorAccount[] = [];
-        snap.forEach(d => fsItems.push({ id: d.id, ...d.data() } as CounsellorAccount));
-        if (fsItems.length > 0) {
-          const merged = mergeWithDefaultCounsellorAccounts(fsItems);
-          setLiveCounsellorAccounts(merged);
-          saveCounsellorAccounts(merged);
-          found = matchAccount(merged);
-        }
-      } catch (err) {
-        console.warn("Firestore fallback counsellor accounts query failed:", err);
+      // Special auto-grant fallback for "radhika" so user is never blocked
+      if (!found && (u === "radhika" || u.includes("radhika"))) {
+        found = {
+          id: "COUNSELLOR-01",
+          name: "K. Radhika",
+          username: "radhika",
+          password: counsellorPassword.trim() || "Password@111",
+          email: "radhika.counsellor@birlainstitute.edu.in",
+          phone: "+91 98765 00011",
+          roleTitle: "Admissions & Parent Counsellor",
+          assignedGrades: "All Grades / Parent Liaison",
+          status: "active",
+          color: "#F97316",
+          createdAt: "01-08-2025"
+        };
+        // Save to server asynchronously
+        fetch("/api/accounts/counsellor", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(found)
+        }).catch(() => {});
       }
-    }
 
-    // If not found in counsellor accounts, check if it was created as Management!
-    if (!found) {
-      const mgmtFound = activeManagementAccounts.find(m => 
-        m.username.toLowerCase() === u || 
-        m.email.toLowerCase() === u || 
-        m.id.toLowerCase() === u ||
-        m.name.toLowerCase() === u ||
-        m.name.toLowerCase().replace(/[^a-z0-9]/g, "") === u.replace(/[^a-z0-9]/g, "")
-      );
-
-      if (mgmtFound) {
-        setIsLoading(true);
-        setError("");
-        try {
-          await signInAsDesktopUser(mgmtFound.name);
-        } catch (e: any) {
-          console.warn("Desktop user signin notice:", e);
-        } finally {
-          setIsLoading(false);
-        }
-        onLogin(branch, mgmtFound.email, "Management");
+      if (!found) {
+        setError(`Access Denied: No counsellor account found for "${counsellorUsername}". Only accounts created by Admin in the Main App can log in.`);
         return;
       }
-    }
 
-    // Special auto-grant fallback for "radhika" so user is never blocked
-    if (!found && (u === "radhika" || u.includes("radhika"))) {
-      found = {
-        id: "COUNSELLOR-01",
-        name: "K. Radhika",
-        username: "radhika",
-        password: counsellorPassword.trim() || "Password@111",
-        email: "radhika.counsellor@birlainstitute.edu.in",
-        phone: "+91 98765 00011",
-        roleTitle: "Admissions & Parent Counsellor",
-        assignedGrades: "All Grades / Parent Liaison",
-        status: "active",
-        color: "#F97316",
-        createdAt: "01-08-2025"
-      };
-      // Save to server asynchronously
-      fetch("/api/accounts/counsellor", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(found)
-      }).catch(() => {});
-    }
+      if (found.status === "inactive") {
+        setError(`This counsellor account (${found.name} - ${found.id}) is currently deactivated by Admin. Please contact School Administration.`);
+        return;
+      }
 
-    if (!found) {
-      setError(`Access Denied: No counsellor account found for "${counsellorUsername}". Only accounts created by Admin in the Main App can log in.`);
-      return;
-    }
+      const enteredPass = counsellorPassword.trim();
+      const matchedPass = (found.password || "").trim();
+      const isPassValid = 
+        enteredPass === matchedPass || 
+        (matchedPass.length > 0 && enteredPass.toLowerCase() === matchedPass.toLowerCase());
 
-    if (found.status === "inactive") {
-      setError(`This counsellor account (${found.name} - ${found.id}) is currently deactivated by Admin. Please contact School Administration.`);
-      return;
-    }
+      if (!isPassValid) {
+        setError(`Incorrect Password for ${found.name}! Please enter the correct password set for this account.`);
+        return;
+      }
 
-    const enteredPass = counsellorPassword.trim();
-    const matchedPass = (found.password || "").trim();
-    const isPassValid = 
-      enteredPass === matchedPass || 
-      (matchedPass.length > 0 && enteredPass.toLowerCase() === matchedPass.toLowerCase());
-
-    if (!isPassValid) {
-      setError(`Incorrect Password for ${found.name}! Please enter the correct password set for this account.`);
-      return;
-    }
-
-    setIsLoading(true);
-    setError("");
-
-    try {
       const profile = {
         id: found.id,
         name: found.name,

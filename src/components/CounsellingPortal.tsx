@@ -723,8 +723,20 @@ export default function CounsellingPortal({
   });
 
   const activeCounsellor: CounsellorAccount | null = useMemo(() => {
-    // For logged-in Counsellors: Strictly lock to their own account matching userEmail or saved session profile
+    // For logged-in Counsellors: Strictly lock to their own account matching saved session profile ID/username or userEmail
     if (userRole === "Counsellor") {
+      try {
+        const savedSession = sessionStorage.getItem("sgs_active_counsellor");
+        if (savedSession) {
+          const parsed = JSON.parse(savedSession);
+          const match = localAccounts.find(a =>
+            (parsed.id && a.id === parsed.id) ||
+            (parsed.username && a.username?.toLowerCase() === parsed.username?.toLowerCase())
+          );
+          if (match) return match;
+          if (parsed && (parsed.id || parsed.username)) return parsed;
+        }
+      } catch {}
       if (userEmail) {
         const found = localAccounts.find(c => 
           c.email.toLowerCase() === userEmail.toLowerCase() || 
@@ -732,15 +744,6 @@ export default function CounsellingPortal({
         );
         if (found) return found;
       }
-      try {
-        const savedSession = sessionStorage.getItem("sgs_active_counsellor");
-        if (savedSession) {
-          const parsed = JSON.parse(savedSession);
-          const match = localAccounts.find(a => a.id === parsed.id || a.username?.toLowerCase() === parsed.username?.toLowerCase() || a.email?.toLowerCase() === parsed.email?.toLowerCase());
-          if (match) return match;
-          if (parsed && (parsed.id || parsed.username)) return parsed;
-        }
-      } catch {}
       return localAccounts[0] || null;
     }
 
